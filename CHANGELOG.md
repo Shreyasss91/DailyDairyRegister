@@ -1,0 +1,13 @@
+# Changelog
+
+All notable repository changes are recorded here, including small fixes, documentation-only edits, configuration changes, tests and repository-governance changes. Entries describe repository facts and do not imply that planned application capabilities have been implemented.
+
+The repository policy in `CLAUDE.md` requires every change, however small, to have a corresponding entry in this file **in the same commit**. This includes changes to `CLAUDE.md` and to this changelog.
+
+## [Unreleased]
+
+### Added
+- **2026-11-15 — Initial requirements baseline:** Added `documentation/PRODUCT_REQUIREMENTS_BASELINE.md` to capture the owner-confirmed product scope, calendar semantics, activity and field-visit scheduling requirements, source-data preservation, bilingual register output, review/finalisation lifecycle, backup boundaries and open validation items. This was a requirements-only change; no application code or runtime capability was added. Bootstrap commit: `42bfaaedc58f8cbfc709a11a4fbcaabaded8d49a`.
+- **2026-11-15 — Combined field-visit daily limit confirmed:** Updated the requirements baseline to record the owner's approval of an initial limit of **3 combined field visits per working day** across area, DTC and feeder visits. The limit remains configurable. Removed it from the open-decision list; no scheduling implementation was added. Commit: `b5749cb63a320bdbd69967a2fb73cf55be314753`.
+- **2026-11-15 — Repository execution contract:** Added `CLAUDE.md` with repository-wide instructions covering requirements authority, architecture, data integrity, scheduling invariants, bounded implementation acts, testing, Git discipline and reporting. It establishes the mandatory same-commit changelog rule for every change, regardless of size or type. Commit: `d395615fa6d54ec2463710a5fb65a59d75cdb761`.
+- **2026-11-15 — Changelog established:** Added this `CHANGELOG.md` and recorded the initial requirements baseline, the confirmed three-visit limit and the repository instruction contract. This entry records the creation of the changelog itself. The first entries are necessarily retrospective because the changelog did not exist when the preceding bootstrap commits were created. From this commit onward, changelog coverage is required in the same commit as every repository change. This is repository-history and documentation capability only; no application runtime feature is claimed.
