@@ -245,6 +245,73 @@ Previously calculated feeder aggregates were provisional and used pre-correction
 - Any proposed lower bound that sums separate area, DTC and feeder day counts must prove that those category visits cannot be packed on the same date under the combined cap. The shared cap permits different visit types to occur on the same date, subject to the total of 3 and the area-specific maximum of 2; therefore, category-specific day counts cannot simply be added without a valid non-overlap proof.
 - The previously proposed analytical bound and sample table are not yet accepted as a verified feasibility theorem. Before the scheduler uses them, define each term and unit precisely, establish which per-asset minimums/coverage obligations are actually configured, account for date-level overlap among categories, and validate the result against deterministic calendar-based test cases.
 
+### 10.6 Corrected necessary feasibility conditions and deterministic test vectors
+
+Notation for the selected period (a full month or a partial month):
+
+- `W` = number of eligible working dates in the selected period.
+- `C` = combined daily field-visit capacity per working day (initial default 3).
+- `A` = actual required area visits in the selected period.
+- `D` = actual required DTC visits in the selected period.
+- `F` = actual required feeder visits in the selected period.
+
+Necessary aggregate conditions. Both of the following are necessary conditions for any feasible schedule. Neither is sufficient:
+
+```
+A           <= 2 * W
+A + D + F   <= C * W
+```
+
+The two constraints are independent, and both must hold:
+
+- The area-specific daily maximum of 2 limits area visits on any single working day, so at most two area visits can be placed per day across the period: `A <= 2 * W`.
+- The combined daily cap of `C` limits all field visits together on any single working day, so all required visits cannot exceed `C * W`: `A + D + F <= C * W`.
+
+Category overlap. Area, DTC and feeder visits may share the same working date, subject to the combined cap and the area-specific maximum. Separately computed category day counts must therefore not be added unless a valid non-overlap proof exists for that configuration. The combined inequality above already accounts for sharing and must not be replaced by a sum of per-category day counts.
+
+Per-asset conditions. For every individual asset the schedule must additionally satisfy:
+
+- every visit date is an eligible working date;
+- consecutive visit dates to the same asset differ by at least 7 calendar days: `next_visit_date - previous_visit_date >= 7`, with weekends and holidays counting toward the elapsed days;
+- monthly visits to the asset do not exceed its effective per-asset monthly maximum (initial default 3);
+- any configured per-asset minimum or coverage-cycle obligation is satisfied;
+- prior visit history is respected, including visits made in the preceding month and across a coverage-cycle boundary; neither a month boundary nor a cycle boundary resets the revisit interval.
+
+Minimum calendar span. For an asset assigned `v` visits within a month, the minimum calendar span between its first and last visits is `(v - 1) * 7 calendar days`. For the default monthly maximum of 3, that span is 14 calendar days for three visits. The span is a lower bound on elapsed time only; it does not by itself prove feasibility in a particular month. Actual eligible working dates, holidays, leave, date overrides, previous visit history and other restrictions must still be checked at date level.
+
+The per-asset monthly maximum is an upper bound, not an obligation. A monthly maximum of 3 caps how many visits one asset may receive; it does not require any asset to receive 3 visits. A roster of 16 canonical areas does not imply 48 area visits, and 113 canonical DTCs do not imply 113 DTC visits per month. Required visit counts arise only from configured per-asset minimums or an owner-declared coverage-cycle obligation.
+
+Conditional area-cap example. Suppose, for illustration only, the owner required 3 visits to each of the 16 canonical areas in one month. Then `A = 16 * 3 = 48` required area visits. Under the area-specific daily maximum of 2, the minimum number of distinct area-visit dates is `ceil(48 / 2) = 24`. In a month with `W = 23` eligible working days the maximum possible area visits is `23 * 2 = 46`, so 48 required area visits are infeasible before any DTC or feeder visit is considered. This example is conditional and is not an approved monthly target; the default per-asset maximum of 3 does not create a requirement of 3 visits per area.
+
+Deterministic test vectors. The table below states expected outcomes under the definitions above. Rows marked "necessary only" validate necessary conditions and do not establish full date-level feasibility. Remaining rows are single-date or single-asset checks and are individually decisive.
+
+| Test | Inputs | Expected result |
+|---|---|---|
+| Calendar gap exact boundary | Same asset on day 1 and day 8 | Allowed (difference is 7 calendar days) |
+| Calendar gap violation | Same asset on day 1 and day 7 | Rejected (difference is 6 calendar days) |
+| Weekend elapsed gap | Friday and following Friday | Allowed if both dates are eligible working dates (7 calendar days) |
+| Six-day weekend gap | Friday and following Thursday | Rejected (6 calendar days) |
+| Asset monthly cap | Same asset visited 3 times in month, all gaps valid | Allowed (3 <= default maximum 3) |
+| Asset monthly cap exceeded | Same asset visited 4 times in month | Rejected (4 > default maximum 3) |
+| Cross-month gap | Last visit in prior month; next visit fewer than 7 calendar days later | Rejected (gap is not reset at a month boundary) |
+| Cross-cycle gap | Last visit in prior cycle; next visit fewer than 7 calendar days later | Rejected (gap is not reset at a cycle boundary) |
+| Area daily limit | 2 area visits on one day | Allowed (2 <= area maximum 2) |
+| Area daily limit exceeded | 3 area visits on one day | Rejected (3 > area maximum 2) |
+| Mixed-category packing | 2 areas + 1 DTC on one day | Allowed (total 3 <= combined cap 3; areas 2 <= 2) |
+| Mixed-category packing | 2 areas + 1 feeder on one day | Allowed (total 3 <= combined cap 3; areas 2 <= 2) |
+| Combined cap exceeded | 2 areas + 1 DTC + 1 feeder on one day | Rejected (total 4 > combined cap 3) |
+| Aggregate capacity (necessary only) | `W = 23`, `C = 3`, total required visits = 69 | `A + D + F <= C * W` passes (69 <= 69); date-level validation still required |
+| Area-cap infeasibility | `W = 23`, `A = 48` | Rejected (48 > 2 * 23 = 46) |
+| Area-cap boundary (necessary only) | `W = 23`, `A = 46` | `A <= 2 * W` passes (46 = 46); date-level validation still required |
+| Area visits are optional | 16 areas, per-asset maximum 3, no configured minimum | 48 required visits are not inferred; no required visit count exists |
+| DTC cycle obligation | 113 active DTCs, one visit per DTC per three-month cycle | Exactly 113 required visits per cycle |
+| DTC monthly allocation | 113 obligations distributed across three months | 38 + 38 + 37 = 113, capacity-aware across the months |
+| DTC capacity excess | `W = 25`, `C = 3`, `D = 76`, `A = 0`, `F = 0` | Rejected (76 > 3 * 25 = 75) |
+| Deterministic generation | Same seed, roster, prior history and configuration | Same output |
+| Alternative generation | Different seed, same hard constraints | Different valid output is permitted |
+
+The "necessary only" rows (aggregate capacity and area-cap boundary) pass necessary conditions and nothing more. Full date-level feasibility of any target is established by the per-asset and per-date rules above, evaluated against the actual calendar of the selected period, not by these inequalities alone.
+
 ## 11. Language and text storage
 
 - Support English, Kannada and bilingual modes.
@@ -305,7 +372,7 @@ Workflow states:
 
 The following points remain open and must not be silently converted into approved defaults:
 
-1. **Target allocator proof and validation:** The policy choices in §10 are recorded, but the exact joint allocation algorithm and its mathematical feasibility proof still require deterministic validation. Define every term and unit in any lower-bound equation; use the actual eligible dates and 7-calendar-day revisit interval; account for category overlap under the combined daily cap; validate per-asset caps and cross-cycle boundaries. The candidate bound and table supplied during analysis must not be treated as proven or hardcoded until these conditions are satisfied.
+1. **Target allocator proof and validation:** The policy choices in §10 are recorded, but the exact joint allocation algorithm and its mathematical feasibility proof still require deterministic validation. Define every term and unit in any lower-bound equation; use the actual eligible dates and 7-calendar-day revisit interval; account for category overlap under the combined daily cap; validate per-asset caps and cross-cycle boundaries. The candidate bound and table supplied during analysis must not be treated as proven or hardcoded until these conditions are satisfied. The necessary conditions and per-asset rules recorded in §10.6, together with its deterministic test vectors, define the validation basis for that allocator; the joint date-level allocator itself has not yet been implemented or validated.
 3. **Initial data validation:** during implementation, re-import/validate the supplied DTC source against the 113-SCD inclusion rule, class counts, preserved source fields and explicit feeder overrides. Do not infer missing source rows from this requirements document.
 4. **Holiday data validation:** load and verify the Karnataka General Holiday baseline for 2025 and 2026 only. Restricted Holidays must remain excluded.
 5. **Activity catalogue content:** prepare the initial 40–60 activity records with English/Kannada text for owner review before treating the catalogue as operationally approved.
