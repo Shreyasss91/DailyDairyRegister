@@ -61,6 +61,21 @@ C_AGG_AREA_CAPACITY = "aggregate_area_capacity_exceeded"
 C_AGG_COMBINED_CAPACITY = "aggregate_combined_capacity_exceeded"
 C_SEARCH_LIMIT = "search_node_limit_reached"
 
+# Input-contract errors. A malformed obligation set is not a mathematical
+# infeasibility; it is a caller error. These identifiers appear in
+# :class:`InputError` and, where an obligation is representable but impossible,
+# in :class:`Violation` as well.
+C_DUPLICATE_ASSET_ID = "duplicate_asset_id"
+C_UNKNOWN_OBLIGATION_ASSET = "unknown_obligation_asset"
+C_UNKNOWN_LIMIT_OVERRIDE = "unknown_limit_override_asset"
+C_NEGATIVE_OBLIGATION = "negative_obligation"
+C_OBLIGATION_ON_INACTIVE_ASSET = "obligation_on_inactive_asset"
+C_MINIMUM_ON_INACTIVE_ASSET = "minimum_on_inactive_asset"
+C_PERIOD_NOT_SINGLE_MONTH = "period_not_single_calendar_month"
+C_FIXED_VISIT_OUTSIDE_PERIOD = "fixed_visit_outside_period"
+C_FIXED_VISIT_NON_WORKING = "fixed_visit_not_on_working_date"
+C_CYCLE_EXCEEDS_MONTHLY = "cycle_obligation_exceeds_monthly_portion"
+
 
 class AssetType(str, Enum):
     """Visit categories that share the combined daily capacity."""
@@ -209,7 +224,20 @@ class Visit:
 
 @dataclass(frozen=True)
 class DatePeriod:
-    """Inclusive date range under validation."""
+    """Inclusive date range under validation.
+
+    Assessment is defined for one calendar month. Field-visit limits in the
+    approved policy are per-calendar-month limits (with proration for partial
+    months), and a coverage-cycle obligation is resolved by the caller into the
+    portion owed in the month being assessed. A period that spans two calendar
+    months would silently treat two months as one, which would apply a single
+    month's per-asset maximum to both and hide genuine capacity overruns, so it
+    is rejected rather than accepted with a different meaning.
+
+    A partial month is permitted: the period may start after the first day or
+    end before the last day of its month, provided both endpoints fall in the
+    same calendar month.
+    """
 
     start: date
     end: date
@@ -217,14 +245,226 @@ class DatePeriod:
     def __post_init__(self) -> None:
         if self.end < self.start:
             raise ValueError("period end must not precede period start")
+        if (self.start.year, self.start.month) != (self.end.year, self.end.month):
+            raise ValueError(
+                "period must fall within a single calendar month; a cycle or "
+                "multi-month obligation must be resolved into its monthly portion "
+                "before assessment (got %s to %s)"
+                % (self.start.isoformat(), self.end.isoformat())
+            )
 
     def contains(self, day: date) -> bool:
         return self.start <= day <= self.end
 
+    @property
+    def month_key(self) -> tuple[int, int]:
+        """The ``(year, month)`` this period belongs to."""
+
+        return (self.start.year, self.start.month)
+
+    @property
+    def is_full_month(self) -> bool:
+        """Whether the period covers its entire calendar month."""
+
+        import calendar as _calendar
+
+        last_day = _calendar.monthrange(self.start.year, self.start.month)[1]
+        return self.start.day == 1 and self.end.day == last_day
+
+
+@dataclass(frozen=True)
+class ObligationSpec:
+    """The authoritative obligation set for one calendar month of assessment.
+
+    Both assessment paths consume this one specification, so proposed-schedule
+    validation and feasibility assessment can never disagree about what is owed.
+    It is built once by :func:`resolve_obligations`, which validates the caller's
+    raw inputs and raises :class:`InputError` on anything malformed.
+
+    ``per_asset`` holds the number of visits this month owes each asset. It is
+    derived from the larger of the configured monthly minimum, an explicit
+    required count and a resolved cycle portion. A monthly *maximum* never
+    contributes to it, because a maximum is an upper bound and not a demand.
+    """
+
+    #: Asset id to the number of visits owed in this month.
+    per_asset: Mapping[str, int]
+    #: Assets whose cycle obligation exceeds this month's available portion.
+    cycle_exceeds_monthly: Mapping[str, int] = field(default_factory=dict)
+
+    def owed_for(self, asset_id: str) -> int:
+        """Visits owed for ``asset_id`` this month, zero when none are owed."""
+
+        return self.per_asset.get(asset_id, 0)
+
+    @property
+    def total_owed(self) -> int:
+        return sum(self.per_asset.values())
+
+    def assets_with_obligations(self) -> tuple[str, ...]:
+        """Asset ids with a positive obligation, in deterministic order."""
+
+        return tuple(
+            sorted(a for a, count in self.per_asset.items() if count > 0)
+        )
+
+
+class InputError(ValueError):
+    """Raised when an obligation input set is malformed.
+
+    This distinguishes a caller error from a mathematically infeasible but
+    otherwise valid obligation set. A malformed set is never reported as
+    ``FEASIBLE`` and is never reported as ``INFEASIBLE``, because neither verdict
+    would be meaningful: the input does not describe a schedule problem at all.
+
+    Attributes:
+        constraint: A stable identifier from the ``C_*`` constants.
+        detail: A readable explanation naming what is wrong.
+        asset_id: The offending asset, when the error is asset-specific.
+    """
+
+    def __init__(self, constraint: str, detail: str, asset_id: str | None = None):
+        self.constraint = constraint
+        self.detail = detail
+        self.asset_id = asset_id
+        super().__init__(f"{constraint}: {detail}")
+
+
+def _index_roster(roster: Sequence[Asset]) -> dict[str, Asset]:
+    """Build the asset index, rejecting duplicate asset ids.
+
+    A duplicate id makes every later lookup ambiguous, so it is an input error
+    rather than something resolved by taking the last entry.
+    """
+
+    index: dict[str, Asset] = {}
+    for asset in roster:
+        if asset.asset_id in index:
+            raise InputError(
+                C_DUPLICATE_ASSET_ID,
+                f"asset id {asset.asset_id!r} appears more than once in the roster",
+                asset.asset_id,
+            )
+        index[asset.asset_id] = asset
+    return index
+
+
+def resolve_obligations(
+    roster: Sequence[Asset],
+    config: FeasibilityConfig,
+    required_visits: Mapping[str, int] | None = None,
+    cycle_obligations: Mapping[str, int] | None = None,
+) -> ObligationSpec:
+    """Validate caller obligations and resolve them into one specification.
+
+    Every malformed input is rejected explicitly. Nothing is silently dropped or
+    silently clamped, because a dropped obligation turns an unsatisfiable month
+    into an apparently feasible one.
+
+    Args:
+        roster: The full roster, including inactive assets.
+        config: Effective configuration, including per-asset limit overrides.
+        required_visits: Explicit required visit counts for this month.
+        cycle_obligations: Cycle obligations already resolved by the caller into
+            the portion owed in this month.
+
+    Returns:
+        An :class:`ObligationSpec` describing what this month owes.
+
+    Raises:
+        InputError: If the roster is ambiguous, a mapping names an unknown asset,
+            a count is negative, or a positive obligation or minimum targets an
+            inactive asset.
+    """
+
+    index = _index_roster(roster)
+    required_visits = dict(required_visits or {})
+    cycle_obligations = dict(cycle_obligations or {})
+
+    # Asset-specific limit overrides must name known assets, otherwise the
+    # caller believes a limit applies that the engine never sees.
+    for asset_id in sorted(config.asset_limits):
+        if asset_id not in index:
+            raise InputError(
+                C_UNKNOWN_LIMIT_OVERRIDE,
+                f"limit override names unknown asset {asset_id!r}",
+                asset_id,
+            )
+
+    for label, mapping in (
+        ("required_visits", required_visits),
+        ("cycle_obligations", cycle_obligations),
+    ):
+        for asset_id in sorted(mapping):
+            count = mapping[asset_id]
+            if asset_id not in index:
+                raise InputError(
+                    C_UNKNOWN_OBLIGATION_ASSET,
+                    f"{label} names unknown asset {asset_id!r}",
+                    asset_id,
+                )
+            if not isinstance(count, int) or count < 0:
+                raise InputError(
+                    C_NEGATIVE_OBLIGATION,
+                    f"{label} for {asset_id!r} must be a non-negative integer, "
+                    f"got {count!r}",
+                    asset_id,
+                )
+
+    per_asset: dict[str, int] = {}
+    cycle_exceeds: dict[str, int] = {}
+    for asset_id in sorted(index):
+        asset = index[asset_id]
+        limits = config.limits_for(asset_id)
+        required = required_visits.get(asset_id, 0)
+        cycle = cycle_obligations.get(asset_id, 0)
+
+        # A positive obligation against an inactive asset cannot be discharged.
+        # It is rejected explicitly rather than skipped, because skipping it
+        # would report a month as feasible while omitting owed work.
+        if not asset.active:
+            if required > 0 or cycle > 0:
+                raise InputError(
+                    C_OBLIGATION_ON_INACTIVE_ASSET,
+                    f"asset {asset_id!r} is inactive but carries a positive "
+                    f"obligation (required={required}, cycle={cycle})",
+                    asset_id,
+                )
+            if limits.monthly_min > 0:
+                raise InputError(
+                    C_MINIMUM_ON_INACTIVE_ASSET,
+                    f"asset {asset_id!r} is inactive but has a configured "
+                    f"monthly minimum of {limits.monthly_min}",
+                    asset_id,
+                )
+            continue
+
+        owed = max(limits.monthly_min, required, cycle)
+        if owed > 0:
+            per_asset[asset_id] = owed
+
+        # A cycle obligation larger than this month's monthly maximum cannot be
+        # delivered in this month alone. Record it so the caller can see that the
+        # cycle portion must be spread, rather than having it silently capped.
+        if cycle > limits.monthly_max:
+            cycle_exceeds[asset_id] = cycle
+
+    return ObligationSpec(
+        per_asset=per_asset, cycle_exceeds_monthly=cycle_exceeds
+    )
+
 
 @dataclass(frozen=True)
 class ProposalContext:
-    """Everything needed to validate a proposed schedule."""
+    """Everything needed to validate a proposed schedule.
+
+    ``history`` holds visits before the period, used only for revisit-gap
+    continuity. ``fixed`` holds visits already committed *inside* the period, for
+    example locked dates during regeneration. Fixed visits consume daily
+    capacity, count toward per-asset monthly limits and discharge part of the
+    declared obligations, and they constrain new placements through the revisit
+    gap. They are not history and must not be supplied as such.
+    """
 
     period: DatePeriod
     calendar: Calendar
@@ -232,43 +472,70 @@ class ProposalContext:
     config: FeasibilityConfig
     proposed: Sequence[Visit]
     history: Sequence[Visit] = ()
+    fixed: Sequence[Visit] = ()
+    required_visits: Mapping[str, int] = field(default_factory=dict)
+    cycle_obligations: Mapping[str, int] = field(default_factory=dict)
 
     def asset_index(self) -> dict[str, Asset]:
-        return {asset.asset_id: asset for asset in self.roster}
+        return _index_roster(self.roster)
+
+    def obligations(self) -> ObligationSpec:
+        """Resolve the obligation specification, validating the inputs."""
+
+        return resolve_obligations(
+            self.roster,
+            self.config,
+            self.required_visits,
+            self.cycle_obligations,
+        )
 
 
 @dataclass(frozen=True)
 class ObligationContext:
-    """Everything needed to assess whether obligations can be scheduled."""
+    """Everything needed to assess whether obligations can be scheduled.
+
+    ``fixed`` carries visits already committed inside the period. They are
+    honoured by the assessment: they consume capacity, discharge obligations, and
+    constrain new placements. They are returned alongside newly allocated visits
+    so the witness covers the whole month.
+    """
 
     period: DatePeriod
     calendar: Calendar
     roster: Sequence[Asset]
     config: FeasibilityConfig
     history: Sequence[Visit] = ()
-    #: Declared per-asset visit obligation for this period. Only minima and
+    fixed: Sequence[Visit] = ()
+    #: Declared per-asset visit obligation for this month. Only minima and
     #: cycle obligations belong here; a monthly maximum is never an obligation.
     required_visits: Mapping[str, int] = field(default_factory=dict)
-    #: Optional declared coverage-cycle obligations, already resolved to a
-    #: required visit count for the current cycle window by the caller.
+    #: Coverage-cycle obligations, already resolved by the caller into the
+    #: portion owed in the month being assessed. A cycle total spanning several
+    #: months is never supplied here whole.
     cycle_obligations: Mapping[str, int] = field(default_factory=dict)
 
     def asset_index(self) -> dict[str, Asset]:
-        return {asset.asset_id: asset for asset in self.roster}
+        return _index_roster(self.roster)
+
+    def obligations(self) -> ObligationSpec:
+        """Resolve the obligation specification, validating the inputs."""
+
+        return resolve_obligations(
+            self.roster,
+            self.config,
+            self.required_visits,
+            self.cycle_obligations,
+        )
 
     def obligation_for(self, asset_id: str) -> int:
         """Return the required visit count for ``asset_id``.
 
-        The larger of the configured minimum and an explicit required count
-        applies; a monthly maximum is never treated as a requirement.
+        The larger of the configured minimum, an explicit required count and a
+        resolved cycle portion applies; a monthly maximum is never treated as a
+        requirement.
         """
 
-        limits = self.config.limits_for(asset_id)
-        return max(
-            limits.monthly_min,
-            self.required_visits.get(asset_id, 0),
-            self.cycle_obligations.get(asset_id, 0),
-        )
+        return self.obligations().owed_for(asset_id)
 
 
 # --- result model -----------------------------------------------------------
@@ -276,16 +543,44 @@ class ObligationContext:
 
 @dataclass(frozen=True)
 class Violation:
-    """One detected constraint violation, suitable for display without parsing."""
+    """One detected constraint violation.
+
+    The structured fields are the source of truth; ``message`` is a readable
+    rendering for display. A caller must never need to parse ``message`` to learn
+    which assets or dates are involved.
+
+    Attributes:
+        constraint: Stable identifier from the ``C_*`` constants.
+        message: Readable explanation.
+        asset_id: The asset the violation is about, when it is about one asset.
+        asset_type: That asset's type, when known.
+        visit_date: The date the violation is anchored to, when applicable.
+        offending_dates: Every date participating in the violation, ordered.
+            For a revisit-gap violation this is both conflicting visits; for a
+            monthly-maximum violation it is all visits counted in the month.
+            For a daily-cap violation it is the single affected date.
+        contributing_assets: For a daily-cap violation, the assets that share the
+            date, ordered by asset id, each paired with its type. Empty when not
+            applicable.
+        limit: The limit that was exceeded, when numeric.
+        actual: The observed value, when numeric.
+    """
 
     constraint: str
     message: str
     asset_id: str | None = None
     asset_type: AssetType | None = None
     visit_date: date | None = None
-    conflicting_dates: tuple[date, ...] = ()
+    offending_dates: tuple[date, ...] = ()
+    contributing_assets: tuple[tuple[str, AssetType], ...] = ()
     limit: int | None = None
     actual: int | None = None
+
+    @property
+    def conflicting_dates(self) -> tuple[date, ...]:
+        """Alias for :attr:`offending_dates`, retained for readability."""
+
+        return self.offending_dates
 
     def sort_key(self) -> tuple:
         return (
@@ -387,9 +682,18 @@ def _daily_cap_violations(
 
     violations: list[Violation] = []
     for day, bucket in sorted(visits_by_date(visits).items()):
-        area_ids = [v.asset_id for v in bucket
-                    if roster.get(v.asset_id) is not None
-                    and roster[v.asset_id].asset_type is AssetType.AREA]
+        contributing = tuple(
+            sorted(
+                (
+                    (visit.asset_id, roster[visit.asset_id].asset_type)
+                    for visit in bucket
+                    if visit.asset_id in roster
+                ),
+                key=lambda pair: pair[0],
+            )
+        )
+        area_ids = [asset_id for asset_id, kind in contributing
+                    if kind is AssetType.AREA]
         combined = len(bucket)
         if len(area_ids) > config.area_daily_cap:
             violations.append(
@@ -400,6 +704,10 @@ def _daily_cap_violations(
                         f"the area limit is {config.area_daily_cap} per working day"
                     ),
                     visit_date=day,
+                    offending_dates=(day,),
+                    contributing_assets=tuple(
+                        pair for pair in contributing if pair[1] is AssetType.AREA
+                    ),
                     limit=config.area_daily_cap,
                     actual=len(area_ids),
                 )
@@ -413,6 +721,8 @@ def _daily_cap_violations(
                         f"the combined limit is {config.combined_daily_cap} per working day"
                     ),
                     visit_date=day,
+                    offending_dates=(day,),
+                    contributing_assets=contributing,
                     limit=config.combined_daily_cap,
                     actual=combined,
                 )
@@ -450,7 +760,7 @@ def _revisit_violations(
                         asset_id=asset_id,
                         asset_type=asset.asset_type if asset else None,
                         visit_date=later.visit_date,
-                        conflicting_dates=(earlier.visit_date, later.visit_date),
+                        offending_dates=(earlier.visit_date, later.visit_date),
                         limit=limits.revisit_gap_days,
                         actual=gap,
                     )
@@ -464,11 +774,15 @@ def _monthly_count_violations(
     roster: Mapping[str, Asset],
     config: FeasibilityConfig,
 ) -> list[Violation]:
-    """Check the per-asset monthly maximum inside the selected period.
+    """Check the per-asset monthly maximum for the single month in ``period``.
 
     Only visits whose date falls inside the period count toward the monthly
-    total, so a gap that spans a month boundary does not reset or inflate the
+    total, so a gap that spans the month boundary neither resets nor inflates the
     count. The maximum caps visits; it never creates an obligation.
+
+    The period is constrained to one calendar month by :class:`DatePeriod`, so
+    the count below is genuinely a monthly count and not a sum over several
+    months.
     """
 
     violations: list[Violation] = []
@@ -477,16 +791,19 @@ def _monthly_count_violations(
         in_period = [v for v in bucket if period.contains(v.visit_date)]
         if len(in_period) > limits.monthly_max:
             asset = roster.get(asset_id)
+            dates = tuple(v.visit_date for v in in_period)
             violations.append(
                 Violation(
                     constraint=C_ASSET_MONTHLY_MAX,
                     message=(
-                        f"{asset_id} has {len(in_period)} visits in the period; "
+                        f"{asset_id} has {len(in_period)} visits in "
+                        f"{period.start.year}-{period.start.month:02d}; "
                         f"the monthly maximum is {limits.monthly_max}"
                     ),
                     asset_id=asset_id,
                     asset_type=asset.asset_type if asset else None,
-                    visit_date=in_period[-1].visit_date,
+                    visit_date=dates[-1],
+                    offending_dates=dates,
                     limit=limits.monthly_max,
                     actual=len(in_period),
                 )
@@ -494,24 +811,31 @@ def _monthly_count_violations(
     return violations
 
 
-def _asset_minimum_violations(
+def _obligation_violations(
     grouped: Mapping[str, Sequence[Visit]],
     period: DatePeriod,
     roster: Mapping[str, Asset],
     config: FeasibilityConfig,
+    obligations: ObligationSpec,
 ) -> list[Violation]:
-    """Check configured per-asset monthly minimums.
+    """Check every declared obligation against the visits actually recorded.
 
-    A minimum of zero is the default and is never reported. A configured
-    minimum above the effective maximum is reported as an impossible
-    configuration rather than as a missing visit.
+    One authoritative specification drives this check, so proposed-schedule
+    validation in obligation mode and feasibility assessment can never disagree
+    about what is owed. Visits counted here are those inside the period, which
+    includes fixed and newly proposed visits alike.
+
+    A minimum above the effective maximum, and a cycle portion above the
+    effective maximum, are configuration contradictions and are reported as such
+    rather than as missing visits.
     """
 
     violations: list[Violation] = []
-    for asset_id, asset in sorted(roster.items()):
+    for asset_id in sorted(roster):
+        asset = roster[asset_id]
         limits = config.limits_for(asset_id)
-        if limits.monthly_min <= 0:
-            continue
+        owed = obligations.owed_for(asset_id)
+
         if limits.monthly_min > limits.monthly_max:
             violations.append(
                 Violation(
@@ -527,19 +851,103 @@ def _asset_minimum_violations(
                 )
             )
             continue
-        count = sum(1 for v in grouped.get(asset_id, ()) if period.contains(v.visit_date))
-        if count < limits.monthly_min:
+
+        cycle = obligations.cycle_exceeds_monthly.get(asset_id)
+        if cycle is not None:
+            violations.append(
+                Violation(
+                    constraint=C_CYCLE_EXCEEDS_MONTHLY,
+                    message=(
+                        f"{asset_id} carries a cycle obligation of {cycle} but the "
+                        f"monthly maximum is {limits.monthly_max}; the cycle portion "
+                        f"must be spread across months"
+                    ),
+                    asset_id=asset_id,
+                    asset_type=asset.asset_type,
+                    limit=limits.monthly_max,
+                    actual=cycle,
+                )
+            )
+
+        if owed <= 0:
+            continue
+
+        in_period = [
+            v.visit_date
+            for v in grouped.get(asset_id, ())
+            if period.contains(v.visit_date)
+        ]
+        if len(in_period) < owed:
             violations.append(
                 Violation(
                     constraint=C_ASSET_MINIMUM,
                     message=(
-                        f"{asset_id} has {count} visits in the period; "
-                        f"the configured minimum is {limits.monthly_min}"
+                        f"{asset_id} has {len(in_period)} visits in the month; "
+                        f"{owed} are owed"
                     ),
                     asset_id=asset_id,
                     asset_type=asset.asset_type,
-                    limit=limits.monthly_min,
-                    actual=count,
+                    offending_dates=tuple(sorted(in_period)),
+                    limit=owed,
+                    actual=len(in_period),
+                )
+            )
+    return violations
+
+
+def _fixed_visit_violations(
+    fixed: Sequence[Visit],
+    period: DatePeriod,
+    calendar: Calendar,
+    roster: Mapping[str, Asset],
+) -> list[Violation]:
+    """Check that committed in-period visits are themselves well formed.
+
+    A fixed visit is already committed, so it is never dropped. If it falls
+    outside the period or off an eligible working date it is reported, because a
+    schedule built on top of an invalid commitment cannot be correct.
+    """
+
+    violations: list[Violation] = []
+    for visit in fixed:
+        asset = roster.get(visit.asset_id)
+        if not period.contains(visit.visit_date):
+            violations.append(
+                Violation(
+                    constraint=C_FIXED_VISIT_OUTSIDE_PERIOD,
+                    message=(
+                        f"committed visit to {visit.asset_id} on "
+                        f"{visit.visit_date.isoformat()} falls outside the period"
+                    ),
+                    asset_id=visit.asset_id,
+                    asset_type=asset.asset_type if asset else None,
+                    visit_date=visit.visit_date,
+                    offending_dates=(visit.visit_date,),
+                )
+            )
+        if asset is None:
+            violations.append(
+                Violation(
+                    constraint=C_UNKNOWN_ASSET,
+                    message=f"committed visit refers to unknown asset {visit.asset_id}",
+                    asset_id=visit.asset_id,
+                    visit_date=visit.visit_date,
+                    offending_dates=(visit.visit_date,),
+                )
+            )
+            continue
+        if not calendar.is_working(visit.visit_date):
+            violations.append(
+                Violation(
+                    constraint=C_FIXED_VISIT_NON_WORKING,
+                    message=(
+                        f"committed visit to {visit.asset_id} on "
+                        f"{visit.visit_date.isoformat()} is not on an eligible working date"
+                    ),
+                    asset_id=visit.asset_id,
+                    asset_type=asset.asset_type,
+                    visit_date=visit.visit_date,
+                    offending_dates=(visit.visit_date,),
                 )
             )
     return violations
@@ -559,19 +967,34 @@ def validate_schedule(
     schedule, and it does not infer missing obligations from maximums.
 
     Args:
-        context: Period, calendar, roster, configuration, proposed visits and
-            prior history.
+        context: Period, calendar, roster, configuration, proposed visits,
+            prior history and committed in-period visits.
         mode: ``SCHEDULE_ONLY`` checks the hard limits of the proposal.
-            ``OBLIGATIONS`` additionally requires every configured minimum and
-            cycle obligation to be met.
+            ``OBLIGATIONS`` additionally requires every resolved obligation to
+            be met. Obligations are resolved from the same specification that
+            feasibility assessment consumes.
 
     Returns:
         A :class:`ValidationResult` whose violations are ordered
         deterministically by date, asset id and constraint identifier.
+
+    Raises:
+        InputError: If the roster or obligation inputs are malformed. A malformed
+            input is neither a valid nor an invalid schedule; it is a caller
+            error and is reported as such.
     """
 
     roster = context.asset_index()
+    obligations = context.obligations()
     violations: list[Violation] = []
+
+    # 1. Committed in-period visits must themselves be well formed. They are
+    #    never dropped: a schedule built on an invalid commitment is not valid.
+    violations.extend(
+        _fixed_visit_violations(
+            context.fixed, context.period, context.calendar, roster
+        )
+    )
 
     # 1. Period membership, asset identity, asset activity and working-date
     #    eligibility. Every proposed visit is examined individually.
@@ -627,24 +1050,32 @@ def validate_schedule(
 
     # 2. Daily capacity. Different categories share one date within the
     #    combined cap, so both caps are evaluated over the actual date buckets.
-    violations.extend(_daily_cap_violations(context.proposed, roster, context.config))
+    #    Committed visits consume the same capacity as proposed ones.
+    all_in_period = tuple(context.fixed) + tuple(context.proposed)
+    violations.extend(_daily_cap_violations(all_in_period, roster, context.config))
 
     # 3. Per-asset checks. History is merged so that the revisit interval is
-    #    enforced across month and cycle boundaries without a reset.
-    merged = visits_by_asset(tuple(context.history) + tuple(context.proposed))
+    #    enforced across month and cycle boundaries without a reset, and fixed
+    #    visits constrain proposed ones through the same gap.
+    merged = visits_by_asset(
+        tuple(context.history) + tuple(context.fixed) + tuple(context.proposed)
+    )
     violations.extend(_revisit_violations(merged, roster, context.config))
     violations.extend(
         _monthly_count_violations(merged, context.period, roster, context.config)
     )
 
-    # 4. Obligations, when the caller requires them.
+    # 4. Obligations, when the caller requires them. The same resolved
+    #    specification drives this check as drives feasibility assessment.
     if mode is ValidationMode.OBLIGATIONS:
         violations.extend(
-            _asset_minimum_violations(merged, context.period, roster, context.config)
+            _obligation_violations(
+                merged, context.period, roster, context.config, obligations
+            )
         )
 
     days_used: dict[date, int] = {}
-    for day, bucket in visits_by_date(context.proposed).items():
+    for day, bucket in visits_by_date(all_in_period).items():
         days_used[day] = len(bucket)
 
     ordered = tuple(sorted(violations, key=lambda v: v.sort_key()))
@@ -715,6 +1146,7 @@ def _pack_into_days(
     config: FeasibilityConfig,
     roster: Mapping[str, Asset],
     node_budget: list[int],
+    fixed: Sequence[Visit] = (),
 ) -> dict[str, tuple[date, ...]] | None:
     """Search for a joint assignment that satisfies both daily caps.
 
@@ -724,6 +1156,10 @@ def _pack_into_days(
     witness that can be validated independently. The node budget makes a
     pathological input stop with ``None`` instead of running unbounded; the
     caller distinguishes that case from a proven infeasibility.
+
+    Committed in-period visits seed the per-date usage counters, so they consume
+    capacity before any new placement is attempted. Without that seeding a newly
+    allocated visit could be placed on a date already full.
 
     Assets are visited most-constrained-first (fewest available placements) so
     that contradictions surface early and the witness is found quickly when one
@@ -735,6 +1171,7 @@ def _pack_into_days(
         config: Effective caps.
         roster: Asset index used to identify area visits.
         node_budget: Single-element list holding the remaining node allowance.
+        fixed: Committed in-period visits that consume capacity first.
     """
 
     asset_ids = sorted(
@@ -742,6 +1179,14 @@ def _pack_into_days(
     )
     usage_total: dict[date, int] = {d: 0 for d in eligible}
     usage_area: dict[date, int] = {d: 0 for d in eligible}
+    for visit in fixed:
+        day = visit.visit_date
+        if day not in usage_total:
+            continue
+        usage_total[day] += 1
+        asset = roster.get(visit.asset_id)
+        if asset is not None and asset.asset_type is AssetType.AREA:
+            usage_area[day] += 1
     chosen: dict[str, tuple[date, ...]] = {}
 
     def recurse(index: int) -> dict[str, tuple[date, ...]] | None:
@@ -824,24 +1269,40 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
         heuristic is never reported as infeasible.
 
     Args:
-        context: Period, calendar, roster, configuration, history and the
-            declared obligations.
+        context: Period, calendar, roster, configuration, history, committed
+            in-period visits and the declared obligations.
 
     Returns:
-        A :class:`FeasibilityResult`.
+        A :class:`FeasibilityResult`. A ``FEASIBLE`` result carries a witness
+        covering both committed and newly allocated visits.
+
+    Raises:
+        InputError: If the roster or obligation inputs are malformed. A malformed
+            input is never reported as ``FEASIBLE`` or ``INFEASIBLE``, because
+            neither verdict would describe the actual situation.
     """
 
     roster = context.asset_index()
+    obligations = context.obligations()
     eligible = _eligible_dates(context.period, context.calendar)
     working_days = len(eligible)
 
+    # Committed in-period visits discharge part of each obligation and consume
+    # capacity. They are subtracted from what remains to be placed rather than
+    # being treated as ordinary prior history.
+    fixed_by_asset = visits_by_asset(context.fixed)
+
     required: dict[str, int] = {}
-    for asset_id in sorted(roster):
-        if not roster[asset_id].active:
-            continue
-        count = context.obligation_for(asset_id)
-        if count > 0:
-            required[asset_id] = count
+    for asset_id in obligations.assets_with_obligations():
+        owed = obligations.owed_for(asset_id)
+        already = sum(
+            1
+            for visit in fixed_by_asset.get(asset_id, ())
+            if context.period.contains(visit.visit_date)
+        )
+        remaining = max(0, owed - already)
+        if remaining > 0:
+            required[asset_id] = remaining
 
     total_required = sum(required.values())
     area_required = sum(
@@ -851,15 +1312,30 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
     )
 
     if not required:
-        return FeasibilityResult(status=FeasibilityStatus.FEASIBLE, evidence=())
+        # Nothing remains to place. The committed visits alone must still be a
+        # valid schedule, and the witness covers them so the caller can check.
+        return FeasibilityResult(
+            status=FeasibilityStatus.FEASIBLE,
+            evidence=(),
+            witness=tuple(
+                sorted(
+                    context.fixed,
+                    key=lambda v: (v.visit_date, v.asset_id),
+                )
+            ),
+        )
+
 
     evidence: list[Evidence] = []
 
     # An obligation above the effective per-asset maximum cannot be met. The
     # maximum is an upper bound, so this is a configuration contradiction, not
-    # a demand that the maximum be reached.
+    # a demand that the maximum be reached. The comparison uses the total the
+    # month would carry, which includes committed visits, because the maximum
+    # applies to the month as a whole and not only to what remains to be placed.
     for asset_id in sorted(required):
         limits = context.config.limits_for(asset_id)
+        total_for_asset = obligations.owed_for(asset_id)
         if limits.monthly_min > limits.monthly_max:
             evidence.append(
                 Evidence(
@@ -875,16 +1351,16 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
             return FeasibilityResult(
                 status=FeasibilityStatus.INFEASIBLE, evidence=tuple(evidence)
             )
-        if required[asset_id] > limits.monthly_max:
+        if total_for_asset > limits.monthly_max:
             evidence.append(
                 Evidence(
                     constraint=C_ASSET_MONTHLY_MAX,
                     detail=(
-                        f"{asset_id} requires {required[asset_id]} visits but the "
+                        f"{asset_id} owes {total_for_asset} visits but the "
                         f"monthly maximum is {limits.monthly_max}"
                     ),
                     limit=limits.monthly_max,
-                    actual=required[asset_id],
+                    actual=total_for_asset,
                 )
             )
             return FeasibilityResult(
@@ -892,34 +1368,52 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
             )
 
     # Aggregate necessary conditions. These are necessary only; a failure is a
-    # proof, while passing proves nothing about date-level feasibility.
-    if area_required > context.config.area_daily_cap * working_days:
+    # proof, while passing proves nothing about date-level feasibility. Committed
+    # visits already occupy slots, so both checks use the month total.
+    fixed_area = sum(
+        1
+        for visit in context.fixed
+        if context.period.contains(visit.visit_date)
+        and visit.asset_id in roster
+        and roster[visit.asset_id].asset_type is AssetType.AREA
+    )
+    fixed_total = sum(
+        1 for visit in context.fixed if context.period.contains(visit.visit_date)
+    )
+    area_demand = area_required + fixed_area
+    total_demand = total_required + fixed_total
+
+    if area_demand > context.config.area_daily_cap * working_days:
         evidence.append(
             Evidence(
                 constraint=C_AGG_AREA_CAPACITY,
                 detail=(
-                    f"{area_required} required area visits exceed the area limit of "
+                    f"{area_demand} area visits are required in the month "
+                    f"({area_required} to place plus {fixed_area} committed), "
+                    f"exceeding the area limit of "
                     f"{context.config.area_daily_cap} per working day across "
                     f"{working_days} eligible dates"
                 ),
                 limit=context.config.area_daily_cap * working_days,
-                actual=area_required,
+                actual=area_demand,
             )
         )
         return FeasibilityResult(
             status=FeasibilityStatus.INFEASIBLE, evidence=tuple(evidence)
         )
-    if total_required > context.config.combined_daily_cap * working_days:
+    if total_demand > context.config.combined_daily_cap * working_days:
         evidence.append(
             Evidence(
                 constraint=C_AGG_COMBINED_CAPACITY,
                 detail=(
-                    f"{total_required} required visits exceed the combined limit of "
+                    f"{total_demand} visits are required in the month "
+                    f"({total_required} to place plus {fixed_total} committed), "
+                    f"exceeding the combined limit of "
                     f"{context.config.combined_daily_cap} per working day across "
                     f"{working_days} eligible dates"
                 ),
                 limit=context.config.combined_daily_cap * working_days,
-                actual=total_required,
+                actual=total_demand,
             )
         )
         return FeasibilityResult(
@@ -929,13 +1423,22 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
     node_budget = [context.config.search_node_limit]
     history_by_asset = visits_by_asset(context.history)
 
-    # Per-asset placements, honouring history and the calendar-day gap.
+    # Per-asset placements, honouring history, committed in-period visits and the
+    # calendar-day gap. Committed visits already occupy their dates, so a
+    # candidate date must also respect the gap to them.
     placements: dict[str, Sequence[tuple[date, ...]]] = {}
     for asset_id in sorted(required):
         limits = context.config.limits_for(asset_id)
-        history_dates = [v.visit_date for v in history_by_asset.get(asset_id, ())]
+        blocker_dates = [
+            v.visit_date
+            for v in history_by_asset.get(asset_id, ())
+        ] + [
+            v.visit_date
+            for v in fixed_by_asset.get(asset_id, ())
+            if context.period.contains(v.visit_date)
+        ]
         candidates = _candidate_dates(
-            eligible, history_dates, limits.revisit_gap_days
+            eligible, blocker_dates, limits.revisit_gap_days
         )
         asset_placements = _placements_for_asset(
             candidates, required[asset_id], limits.revisit_gap_days, node_budget
@@ -975,7 +1478,7 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
         placements[asset_id] = asset_placements
 
     packed = _pack_into_days(
-        placements, eligible, context.config, roster, node_budget
+        placements, eligible, context.config, roster, node_budget, context.fixed
     )
     if packed is None:
         if node_budget[0] <= 0:
@@ -1013,9 +1516,10 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
     witness = tuple(
         sorted(
             (
-                Visit(asset_id=asset_id, visit_date=day)
-                for asset_id, days in packed.items()
-                for day in days
+                [Visit(asset_id=asset_id, visit_date=day)
+                 for asset_id, days in packed.items()
+                 for day in days]
+                + [v for v in context.fixed if context.period.contains(v.visit_date)]
             ),
             key=lambda visit: (visit.visit_date, visit.asset_id),
         )

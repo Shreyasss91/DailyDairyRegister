@@ -324,6 +324,20 @@ The joint packing problem (placing per-asset visit counts onto working dates und
 
 Cost note: the exact search is tractable for small rosters and becomes expensive as the number of assets with multi-visit obligations grows. A large roster with obligations at the aggregate boundary is expected to return INDETERMINATE within a default budget. Recording a target as feasible at scale therefore requires either a tighter obligation set or a stronger proof method, and neither is assumed here.
 
+### 10.8 Assessment period, obligation inputs and committed visits
+
+This subsection records the input contract the validator enforces. Each clause exists because the opposite behaviour would produce a verdict that is wrong in a way a user cannot see.
+
+**Assessment period.** Assessment is defined for one calendar month. Per-asset minimums and maximums are calendar-month limits, and a coverage-cycle obligation is resolved by the caller into the portion owed in the month under assessment. A period spanning two calendar months is rejected rather than silently judged as one month, because that would apply a single month's per-asset maximum to both months and conceal genuine per-asset overrun. A partial month within one calendar month is valid and uses its actual eligible dates. A multi-month cycle is assessed month by month: the recorded 113-DTC three-month example is 38, 38 and 37, and each portion is assessed against its own month's capacity and limits.
+
+**Malformed obligation inputs are rejected, never dropped.** The following are input errors, not verdicts: a duplicate asset id in the roster; an obligation, cycle obligation or limit override naming an unknown asset; a negative or non-integer count. A positive obligation or a configured positive minimum attached to an inactive asset is likewise an input error, because such a requirement cannot be discharged and omitting it would report a month as feasible while owed work was never scheduled. A malformed input is reported distinctly from a mathematically infeasible but well-formed obligation set; it is never reported as feasible and never as infeasible.
+
+**One obligation specification.** Proposed-schedule validation in its obligation-aware mode and target-obligation feasibility assessment consume a single resolved obligation specification. The resolved obligation for an asset is the largest of its configured monthly minimum, its explicit required count and its resolved cycle portion. A monthly maximum never contributes to it, because a maximum bounds and does not demand. Sharing one specification is what prevents the two paths from disagreeing about what is owed.
+
+**Committed visits are distinct from prior history.** Visits already committed inside the month, such as locked dates during regeneration, are supplied separately from visits made before the month. Committed visits occupy daily capacity including the area-specific capacity, count toward the per-asset monthly maximum, discharge the corresponding part of the declared obligation, and constrain new placements through the seven-calendar-day interval. They are returned alongside newly allocated visits, so a feasible witness describes the whole month rather than only what was added. A committed visit outside the month or off an eligible working date is reported rather than discarded, because a schedule resting on an invalid commitment cannot be correct.
+
+**Structured diagnostics.** A violation carries the constraint identifier, the affected asset and type, the dates involved, the limit and the observed value as structured fields. A daily-capacity violation additionally names every asset sharing the affected date with its type. A monthly-maximum violation lists every date counted, not merely the most recent. Message text is a readable rendering and is never the source of truth, so no caller needs to parse it.
+
 ## 11. Language and text storage
 
 - Support English, Kannada and bilingual modes.
