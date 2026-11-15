@@ -406,7 +406,7 @@ Workflow states:
 
 The following points remain open and must not be silently converted into approved defaults:
 
-1. **Target allocator proof and validation:** The policy choices in §10 are recorded, but the exact joint allocation algorithm and its mathematical feasibility proof still require deterministic validation. Define every term and unit in any lower-bound equation; use the actual eligible dates and 7-calendar-day revisit interval; account for category overlap under the combined daily cap; validate per-asset caps and cross-cycle boundaries. The candidate bound and table supplied during analysis must not be treated as proven or hardcoded until these conditions are satisfied. The necessary conditions and per-asset rules recorded in §10.6, together with its deterministic test vectors, define the validation basis for that allocator; the joint date-level allocator itself has not yet been implemented or validated.
+1. **Target allocator proof and validation:** The policy choices in §10 are recorded, but the exact joint allocation algorithm and its mathematical feasibility proof still require deterministic validation. Define every term and unit in any lower-bound equation; use the actual eligible dates and 7-calendar-day revisit interval; account for category overlap under the combined daily cap; validate per-asset caps and cross-cycle boundaries. The candidate bound and table supplied during analysis must not be treated as proven or hardcoded until these conditions are satisfied. **Status: partially satisfied.** A joint date-level allocator now exists (`dailyworkreg/domain/allocator.py`) and every result it reports as feasible has been validated against the full hard-constraint and obligation-aware checks. It is validated empirically, not proved: no mathematical proof of global optimality or of the completeness of the constructive search is claimed, and the allocator is explicitly not required to find a globally optimal weighted schedule. The necessary conditions in §10.6 remain necessary only. Unresolved cases return INDETERMINATE rather than being reported as impossible.
 3. **Initial data validation:** during implementation, re-import/validate the supplied DTC source against the 113-SCD inclusion rule, class counts, preserved source fields and explicit feeder overrides. Do not infer missing source rows from this requirements document.
 4. **Holiday data validation:** load and verify the Karnataka General Holiday baseline for 2025 and 2026 only. Restricted Holidays must remain excluded.
 5. **Activity catalogue content:** prepare the initial 40–60 activity records with English/Kannada text for owner review before treating the catalogue as operationally approved.
@@ -429,4 +429,28 @@ Any later change to a settled decision should identify the new evidence or requi
 
 ---
 
-**Current delivery state:** Requirements baseline recorded. No application code, database schema, UI, scheduler, PDF renderer or Excel exporter is implemented by this change.
+**Current delivery state:** Requirements baseline recorded, with a validator and a joint target allocator implemented in the domain layer. No database schema, UI, API route, PDF renderer or Excel exporter is implemented. No DTC source data or official holiday data is imported.
+
+---
+
+## 18. Implemented allocator contract (as built)
+
+This section records what the domain allocator actually does, so a reader does not have to infer the contract from source. It describes implementation, not new policy: every rule here derives from §10 and §16.
+
+**Module layout.** `dailyworkreg/domain/validator.py` holds the hard constraints and the three-outcome assessment. `dailyworkreg/domain/cycle.py` resolves a coverage cycle into monthly obligations. `dailyworkreg/domain/prorating.py` applies a partial month's effective limits. `dailyworkreg/domain/allocator.py` places one month's obligations onto dates. `dailyworkreg/domain/targeting.py` runs cycle mode, the fallback mode and multi-month execution.
+
+**Single source of truth.** The allocator owns no constraint rules. Obligations come from `resolve_obligations`, and every candidate schedule is accepted only when `validate_schedule(..., ValidationMode.OBLIGATIONS)` passes. There is no second implementation of daily capacities, monthly maxima, working-date eligibility, asset activity or revisit gaps.
+
+**Outcome contract.** `FEASIBLE` is returned only when a complete witness has already passed obligation-aware validation. `INFEASIBLE` requires the validator's own proof or an invalid commitment, with structured evidence. `INDETERMINATE` is returned when the attempt budget is exhausted without proof and is never converted into a claim of impossibility. Malformed obligations raise `InputError` and never become a verdict.
+
+**Ordering of the two proofs.** Construction runs before the exact feasibility assessment. Measured, the exact assessment spent about 40 seconds exhausting its node budget on a 54-asset month while construction found a valid month in 0.03 seconds. The assessment is therefore consulted afterwards, as an oracle of impossibility and as a source of a witness, so a real proof stays available without every successful allocation paying for an exhaustive search.
+
+**Placement strategy.** Constrained-first: at each step the asset with the fewest still-viable dates is placed next, so a flexible visit cannot consume the last date a tightly constrained asset needed. Among viable dates the least-loaded then earliest is chosen, spreading visits rather than clustering them. Ordering is determined by the inputs and the seed.
+
+**Cycle resolution.** A cycle's total obligation is distributed so monthly totals differ by at most one, and units are dealt round-robin across months so a small roster spreads through the cycle instead of stacking into its first months. The recorded 113-DTC three-month case yields 38, 38 and 37 with every DTC appearing exactly once. A cycle gives every active DTC an equal obligation; weights, history and rotation affect only the order in which scarce months are granted.
+
+**Fallback mode.** With no cycle declared, a month receives a capacity-bounded DTC target selected by least-recently-visited, then weight, then asset id, rotated deterministically between months. It is labelled a capacity-based monthly suggestion, because without a declared cycle there is no coverage commitment to satisfy.
+
+**Multi-month execution.** Each month is allocated against its own `DatePeriod`. Earlier months' visits are carried forward as history so the seven-day interval and fairness rotation survive the boundary. A month never consumes another month's per-asset maximum, and a failed month contributes nothing to history. Only months the caller asked to schedule are placed; every month of a cycle is still resolved.
+
+**Partial months.** A full month uses its configured limits. A partial month requires explicitly supplied effective limits and otherwise raises `InputError`, because the requirements fix no integer rounding rule for prorating. A supplied prorated maximum or minimum above the configured value is rejected.

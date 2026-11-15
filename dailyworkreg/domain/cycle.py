@@ -397,12 +397,25 @@ def resolve_cycle(
             )
         )
 
+    # Deal the queue out by taking one unit per month in rotation, so a small
+    # roster spreads across the cycle instead of stacking into its first months.
+    # Front-loading was a defect: one DTC over three months came out as 1/0/0,
+    # leaving it never revisited. Round-robin dealing keeps the monthly totals at
+    # differ-by-at-most-one while spreading assets through the whole cycle, so
+    # the seven-day gap and history continuity are exercised across boundaries.
     plans: list[CycleMonthPlan] = []
-    cursor = 0
+    assigned: list[list[str]] = [[] for _ in months]
+    remaining_units = list(queue)
+    # Each pass takes at most one unit per month, which is what makes the
+    # distribution even rather than grouped.
+    while remaining_units:
+        for index in range(len(months)):
+            if not remaining_units:
+                break
+            assigned[index].append(remaining_units.pop(0))
+
     for index, month in enumerate(months):
-        share = base + (1 if index < remainder else 0)
-        chosen = queue[cursor : cursor + share]
-        cursor += share
+        chosen = assigned[index]
         obligations = {asset_id: 1 for asset_id in chosen}
         plans.append(
             CycleMonthPlan(
