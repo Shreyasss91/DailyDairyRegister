@@ -495,8 +495,8 @@ left intact for when an owner declares it.
 
 **One row per calendar date, whatever the date is.** Every date in the selected
 months produces exactly one row, in chronological order, including Sundays,
-second and fourth Saturdays, general and restricted holidays, leave and any other
-non-working date. The classification and its English and Kannada reasons come
+second and fourth Saturdays, General Holidays, leave and any other non-working
+date. The classification and its English and Kannada reasons come
 from the caller: this layer has no calendar rules of its own, imports no holiday
 data and infers no weekly off. Missing date metadata for a date in range,
 duplicate metadata, and contradictory metadata are rejected. Metadata for dates
@@ -539,6 +539,14 @@ inventoried commitments, plus content fingerprints of the roster, configuration,
 calendar and display metadata. Fingerprints are canonical digests, not `hash()`,
 whose value is process-randomised. The same request and generator version produce
 an identical draft.
+
+**Restricted Holidays are not a calendar concept here.** Requirements §4.1 makes a
+Restricted Holiday an ordinary working day and requires its dates and names to be
+ignored entirely. The calendar classification enumerates no Restricted Holiday
+member, nothing imports or stores one, and a date that is only a Restricted
+Holiday is classified working. Where the same date independently falls on a Sunday
+or another approved non-working condition, that condition is classified and
+displayed on its own with no Restricted Holiday information attached.
 
 **This is a partial capability, and it says so.** A generated draft is an
 allocator-backed field-visit draft. It is not a complete operational diary, and

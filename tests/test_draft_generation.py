@@ -974,3 +974,49 @@ def test_a_draft_never_claims_to_be_a_complete_operational_diary():
     assert draft.missing_content
     assert draft.is_operational_diary is False
     assert any("activity catalogue" in item for item in draft.missing_content)
+
+# --- restricted holidays are not a calendar concept -----------------------
+
+
+def test_no_restricted_holiday_classification_exists():
+    """Requirements §4.1: Restricted Holiday dates and names are ignored entirely.
+
+    A classification for them would be an invitation to display one, so the
+    contract has no member to hold it.
+    """
+
+    assert "RESTRICTED_HOLIDAY" not in {k.name for k in CalendarDayKind}
+    assert "restricted_holiday" not in {k.value for k in CalendarDayKind}
+
+
+def test_a_date_that_is_only_a_restricted_holiday_stays_a_working_day():
+    start, end = november()
+    # A caller's source lists 2026-11-19 as a Restricted Holiday. Nothing about it
+    # reaches this layer, so the date is an ordinary working date.
+    draft = generate_draft(cycle_request())
+    row = draft.row_for(date(2026, 11, 19))
+    assert row is not None
+    assert row.kind is CalendarDayKind.WORKING
+    assert row.is_working_day is True
+    assert row.reasons_en == () and row.reasons_kn == ()
+    assert row.entries == ()
+
+
+def test_a_restricted_holiday_on_a_sunday_keeps_only_the_sunday_reason():
+    start, end = november()
+    sunday = date(2026, 11, 22)
+    draft = generate_draft(cycle_request())
+    row = draft.row_for(sunday)
+    assert row is not None
+    assert row.kind is CalendarDayKind.SUNDAY
+    assert row.is_working_day is False
+    # The independent weekly-off condition survives on its own, with nothing
+    # about a restricted holiday attached to it.
+    assert all("restricted" not in r.lower() for r in row.reasons_en)
+
+
+def test_generated_rows_carry_no_restricted_holiday_description():
+    draft = generate_draft(cycle_request())
+    for row in draft.rows:
+        for reason in row.reasons_en + row.reasons_kn:
+            assert "restricted" not in reason.lower()

@@ -118,6 +118,13 @@ class CalendarDayKind(str, Enum):
     The register displays this classification; it never infers it. The owner has
     not approved a Karnataka holiday baseline, so inventing a General Holiday or a
     weekly-off rule here would be fabricating master data.
+
+    There is deliberately no Restricted Holiday member. Requirements §4.1 makes a
+    Restricted Holiday an ordinary working day and says its dates and names are to
+    be ignored entirely, so a classification for it would invite exactly the
+    behaviour the requirement forbids. A date that is only a Restricted Holiday is
+    therefore classified by whatever independently applies to it, which for most
+    such dates means ``WORKING``.
     """
 
     WORKING = "working"
@@ -126,7 +133,6 @@ class CalendarDayKind(str, Enum):
     FOURTH_SATURDAY = "fourth_saturday"
     OTHER_WEEKLY_OFF = "other_weekly_off"
     GENERAL_HOLIDAY = "general_holiday"
-    RESTRICTED_HOLIDAY = "restricted_holiday"
     LEAVE = "leave"
     OTHER_NON_WORKING = "other_non_working"
 
@@ -231,7 +237,6 @@ class CalendarDay:
         }
         non_working = weekly_off | {
             CalendarDayKind.GENERAL_HOLIDAY,
-            CalendarDayKind.RESTRICTED_HOLIDAY,
             CalendarDayKind.LEAVE,
             CalendarDayKind.OTHER_NON_WORKING,
         }
@@ -1145,6 +1150,6 @@ def generate_draft(request: DraftRequest) -> DraftRegister:
 #: for a finished register if the result says what is still absent.
 MISSING_CONTENT: tuple[str, ...] = (
     "activity catalogue (regular work activities and Monday safety meetings)",
-    "official Karnataka general and restricted holiday baseline",
+    "official Karnataka General Holiday baseline for 2025 and 2026",
     "source 113-SCD roster and asset master data",
 )
