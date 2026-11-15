@@ -462,3 +462,91 @@ This section records what the domain allocator actually does, so a reader does n
 **Commitments are validated wherever they fall.** Every committed visit is held to the same hard constraints a schedule is, including when its month is not selected for placement, because omitting a month from placement is not permission to ignore what is committed there. A fixed-visit mapping for a month outside the cycle, a visit filed under a month that does not contain its date, and a commitment failing the hard constraints all raise `InputError` with stable identifiers. A commitment that could not have happened is never treated as a valid discharge.
 
 **Only DTC cycle members affect cycle accounting.** A cycle's obligation applies to active DTCs only. Committed area and feeder visits are preserved, consume combined and area daily capacity and constrain the gap, but are never compared with the cycle's per-visit obligation and never produce DTC over-coverage evidence.
+
+## 19. Implemented draft-register generation contract (as built)
+
+This section records what the draft-register generation layer does, so that the
+allocation contract in §18 and the presentation contract here are not confused
+and no reader mistakes "the draft says so" for "the allocator decided so".
+
+**The layer consumes and presents; it never schedules.** `generate_draft()` calls
+`run_cycle()` or `run_fallback()` and projects the result. It does not compute a
+DTC target, distribute a cycle, evaluate a revisit interval, count capacity,
+override a monthly maximum, move a visit, add a filler visit, relax an obligation
+or treat a weight as an obligation. A projected month's visits are the
+allocator's own visits, unaltered; the suite asserts that equality directly
+rather than inspecting a rendering.
+
+**Two modes, each with its own required inputs.** Coverage-cycle generation
+requires the declared cycle and rejects the capacity-suggestion inputs
+(`dtc_target`, `area_required`, `feeder_required`) instead of accepting them as
+silent no-ops, because `run_cycle()` would ignore them and a caller could
+reasonably believe they had been applied. Capacity-fallback generation rejects a
+declared cycle, because a declared cycle makes coverage the primary policy and
+the two cannot both be the target. A selection outside the declared cycle is
+rejected rather than extended.
+
+**Only complete calendar months are generated.** A partial first or last month
+is rejected under `partial_month_selection_unsupported`. The range is never
+expanded to a whole month, full-month limits are never applied to a shorter
+period, and no floor-or-ceiling rounding is chosen. §10 leaves the prorating
+rounding rule undeclared, and the domain's explicit effective-limit mechanism is
+left intact for when an owner declares it.
+
+**One row per calendar date, whatever the date is.** Every date in the selected
+months produces exactly one row, in chronological order, including Sundays,
+second and fourth Saturdays, general and restricted holidays, leave and any other
+non-working date. The classification and its English and Kannada reasons come
+from the caller: this layer has no calendar rules of its own, imports no holiday
+data and infers no weekly off. Missing date metadata for a date in range,
+duplicate metadata, and contradictory metadata are rejected. Metadata for dates
+outside the range is accepted and used only to classify a commitment that falls
+in a cycle month that is not being generated, since such a commitment is still
+checked against the real calendar; those dates are never projected as rows.
+
+**Asset identity is stable and display text is separate.** Visits carry the
+allocator's stable asset id. English and Kannada names come from the caller's
+display metadata, are attached at projection time and are never translated at
+runtime. Missing, unknown or duplicate display metadata is rejected rather than
+substituted.
+
+**Every outcome is preserved, and an unresolved month is never a success.** A
+month the allocator found feasible is reported as allocation-complete. A month it
+proved infeasible stays infeasible with its structured evidence. A month whose
+bounded search ended without a verdict is reported as unresolved, which is never
+presented as feasible, infeasible, a generic error or an empty completed month,
+and it keeps whatever committed visits it had. A multi-month result keeps each
+month's own status even when the overall status is the worst of them.
+
+**A commitment is never lost, including in a month that failed.** An
+unschedulable month reports no new visits and reports its commitments separately,
+so the projection reads both fields; reading only the new visits would erase every
+locked visit from precisely the month where losing them matters most.
+
+**Over-coverage is a resolved exception, not a reason to delete anything.** When
+commitments exceed a cycle obligation, every commitment is kept, the surplus is
+projected with the asset identity, the declared obligation and the actual
+committed count, and it is reported even when the overall allocation succeeded.
+
+**A rejected commitment is reported as data.** An invalid commitment reaches the
+caller as `InputError` carrying its stable constraint identifier, the asset
+identity and the underlying violations, so no caller parses message text.
+
+**Reproducibility is recorded, not assumed.** The result carries a snapshot of
+the allocator version, generator version, mode, seed, range, months, rotation
+offset, attempt budget, the declared cycle and its resolution, prior history and
+inventoried commitments, plus content fingerprints of the roster, configuration,
+calendar and display metadata. Fingerprints are canonical digests, not `hash()`,
+whose value is process-randomised. The same request and generator version produce
+an identical draft.
+
+**This is a partial capability, and it says so.** A generated draft is an
+allocator-backed field-visit draft. It is not a complete operational diary, and
+every result names the masters that are still absent: the activity catalogue, the
+official Karnataka holiday baseline, and the source DTC roster. Allocation
+succeeding is not evidence that the register is complete.
+
+**Lifecycle is out of scope here.** Only a draft is produced. There is no review,
+approval, finalisation, immutable revision, correction revision, edit or lock
+persistence, regeneration acceptance, backup or restore, and no draft is ever
+marked reviewed or finalised.
