@@ -196,17 +196,54 @@ Feeder weight is derived from the aggregate installed capacity of active DEPT DT
 
 Previously calculated feeder aggregates were provisional and used pre-correction assumptions. They must be recalculated from the validated canonical DTC data; do not treat old totals as authoritative.
 
-## 10. Combined field-visit constraints and target suggestions
+## 10. Combined field-visit constraints and target policy
+
+### 10.1 Shared field-visit constraints
 
 - Area, DTC and feeder visits share one configurable combined daily field-visit limit.
-- Initial default: **3 combined field visits per working day** across area visits, DTC visits and feeder visits. The limit remains configurable.
-- Area-specific maximum remains two visits per day initially, configurable.
+- Initial default: **3 combined field visits per working day** across area visits, DTC visits and feeder visits. This is a daily aggregate cap and remains configurable.
+- Area-specific maximum: 2 area visits per working day initially, configurable.
 - All three visit types occur only on working days.
-- Each visit type supports configurable monthly targets and per-asset minimum/maximum constraints where applicable.
-- The application should suggest initial monthly targets based on eligible working days, active areas/DTCs/feeders, weights and revisit constraints. The user can edit suggested values.
-- Before generation, validate the combined feasibility of monthly targets, per-asset min/max limits, revisit intervals, per-day limits and available working days. Explain any infeasibility.
-- Partial-month target/limit prorating applies to activities, areas, DTCs and feeders.
-- Exact target suggestion formulas and exact initial suggested target values are not yet owner-approved. Do not hardcode previously discussed example targets (16 areas, 20 DTCs, 8 feeders) as settled defaults.
+- The minimum revisit interval for an individual area, DTC or feeder remains **7 calendar days**, as established in §§7–9. The next visit to the same asset must be at least 7 calendar days after its preceding visit. Do not reinterpret this as 7 working days.
+- Unless an owner-configured value overrides it, the initial default monthly maximum is **3 visits per individual asset per calendar month** for areas, DTCs and feeders. This is a separate per-asset monthly cap, not another expression of the combined daily cap. Both constraints apply independently; a tighter constraint from the calendar-day revisit interval or an explicit owner setting takes precedence.
+- Per-asset monthly minimums and maximums remain configurable. A configured maximum may be lower or higher than the initial default. The generator must enforce the effective maximum together with the revisit interval and daily caps.
+- Monthly limits are prorated for partial months by eligible working days, with the prorated values shown before generation.
+- Before generation, validate combined feasibility across monthly targets, per-asset limits, calendar-day revisit intervals, per-day limits and actual eligible working dates. Explain infeasibility rather than silently relaxing a constraint.
+
+### 10.2 Primary DTC target mode — owner-declared coverage cycle
+
+- The primary DTC target mode is an **owner-declared coverage cycle**. The owner configures both the cycle duration and the required number of visits to each active DTC during that cycle. Example: visit every active DTC once in each three-month cycle.
+- The system derives the total cycle obligation from the active DTC roster and the configured per-DTC cycle requirement. It must not default to visiting all 113 canonical DTCs every month.
+- For 113 active DTCs, with each DTC required once per three-month cycle, the cycle contains 113 required visits. A balanced monthly allocation is 38, 38 and 37 visits. Where months have materially different eligible working-day capacity, distribute the monthly quotas in a capacity-aware manner while preserving the exact cycle total and every per-DTC obligation.
+- Coverage means that each active DTC in the applicable cycle roster receives its required number of visits by the end of the cycle. A monthly scalar target alone is insufficient: retain per-DTC cycle obligations and completion state so that one DTC is not repeatedly selected while another is omitted.
+- DTC weights continue to matter. In cycle mode, where every active DTC has the same per-cycle visit obligation, weights influence visit priority/order and placement within the cycle, not the total number of visits owed to each DTC. In fallback mode, weights influence relative visit allocation.
+- Cycle boundaries do not reset the 7-calendar-day revisit interval. The scheduler must carry the last-visit date across adjacent cycles and must not place a new-cycle visit inside the prohibited interval following a prior-cycle visit.
+- The cycle roster, coverage obligation, weight/configuration snapshot, actual visit history and cycle progress must be retained in the generated revision so the result can be explained and reproduced.
+- If the requested cycle cannot be satisfied under the combined daily cap, the per-asset monthly maximum, the 7-calendar-day revisit interval, the eligible working dates or other configured commitments, report the specific infeasibility. Do not automatically relax the cycle, revisit interval or daily cap.
+
+### 10.3 DTC fallback mode — no coverage cycle declared
+
+- If the owner has not declared a DTC coverage cycle, use a feasibility-bounded, weight-informed monthly target as a fallback.
+- Calculate the feasible range from the actual working dates in the month, combined daily capacity, configured area/feeder commitments, per-asset monthly maxima and the 7-calendar-day revisit interval. The monthly target recommendation must not exceed the date-level feasible capacity.
+- Allocate the fallback target through a deterministic weighted-fair rotation. Use prior visit history/least-recently-visited state as part of selection so that repeated generations do not systematically favour the same DTCs.
+- Label this recommendation as a **capacity-based monthly suggestion**, not as a coverage commitment. Without a declared cycle, the application must explicitly state that it does not guarantee that every active DTC will be visited within a specified period.
+- Display the feasible range, recommended target, active roster size, and the constraints that limit the recommendation. The user may edit the target, but the feasibility validator remains authoritative.
+- Do not silently convert the fallback into an assumed one-month, one-quarter or other full-roster coverage promise.
+
+### 10.4 Area and feeder target policy
+
+- Area and feeder monthly targets remain configurable and feasibility-checked.
+- No owner-approved default currently requires every one of the 16 canonical areas or all 4 feeders to be visited once every month. Do not infer those minimums from the asset roster size.
+- Where the owner has configured per-asset minimums, maximums or a coverage cadence, the target allocator must honour them. Where these have not been configured, show the feasible range and the basis of any suggested target; do not present an assumed full-roster monthly visit as an approved requirement.
+- Area, DTC and feeder target recommendations must be validated jointly against the shared daily cap. Do not allocate each visit category independently and then assume the resulting category schedules can be added without date-level packing.
+
+### 10.5 Feasibility and calendar semantics
+
+- Let `W` denote the number of eligible working dates in the selected month and `C` the combined daily field-visit cap (initially 3). `W × C` is a gross aggregate upper bound on field-visit slots, not a sufficient proof that a particular target is feasible.
+- Exact feasibility must be evaluated against actual dates. Each asset's visit dates must satisfy the 7-calendar-day interval, the effective per-asset monthly maximum, working-day eligibility and any asset-specific restrictions. All asset types also share the same daily cap.
+- A seven-working-day spacing grid must not be substituted for the settled seven-calendar-day minimum revisit interval. Working-day spacing may be used as a distribution/fairness heuristic only if the hard calendar-day rule is still enforced.
+- Any proposed lower bound that sums separate area, DTC and feeder day counts must prove that those category visits cannot be packed on the same date under the combined cap. The shared cap permits different visit types to occur on the same date, subject to the total of 3 and the area-specific maximum of 2; therefore, category-specific day counts cannot simply be added without a valid non-overlap proof.
+- The previously proposed analytical bound and sample table are not yet accepted as a verified feasibility theorem. Before the scheduler uses them, define each term and unit precisely, establish which per-asset minimums/coverage obligations are actually configured, account for date-level overlap among categories, and validate the result against deterministic calendar-based test cases.
 
 ## 11. Language and text storage
 
@@ -268,12 +305,13 @@ Workflow states:
 
 The following points remain open and must not be silently converted into approved defaults:
 
-1. **Target-suggestion policy:** define and test the algorithm that proposes monthly area, DTC and feeder targets. It must account for working days, active assets, weights, revisit gaps, per-asset bounds and the combined daily cap. The user-approved requirement is that targets are suggested, editable and feasibility-checked; exact formula and example target numbers are not yet approved.
+1. **Target allocator proof and validation:** The policy choices in §10 are recorded, but the exact joint allocation algorithm and its mathematical feasibility proof still require deterministic validation. Define every term and unit in any lower-bound equation; use the actual eligible dates and 7-calendar-day revisit interval; account for category overlap under the combined daily cap; validate per-asset caps and cross-cycle boundaries. The candidate bound and table supplied during analysis must not be treated as proven or hardcoded until these conditions are satisfied.
 3. **Initial data validation:** during implementation, re-import/validate the supplied DTC source against the 113-SCD inclusion rule, class counts, preserved source fields and explicit feeder overrides. Do not infer missing source rows from this requirements document.
 4. **Holiday data validation:** load and verify the Karnataka General Holiday baseline for 2025 and 2026 only. Restricted Holidays must remain excluded.
 5. **Activity catalogue content:** prepare the initial 40–60 activity records with English/Kannada text for owner review before treating the catalogue as operationally approved.
+6. **Area and feeder coverage defaults:** The owner has not selected a monthly minimum or explicit coverage cycle for all areas or all feeders. Do not assume one visit per canonical area or feeder per month. Obtain the owner’s choice before making full-roster monthly coverage a required target.
 
-These are requirements/data validation gates, not reasons to block unrelated scaffolding indefinitely. In particular, the target suggestion engine must not be implemented with invented fixed targets; its policy must be specified and tested before it controls generation.
+These are requirements/data validation gates, not reasons to block unrelated scaffolding indefinitely. The DTC cycle/fallback modes and the initial per-asset monthly maximum are now requirements decisions, but the exact joint target allocator must pass the date-level validation in item 1 before it controls generation. Keep the existing open-decision numbering as-is; the missing item number 2 is a pre-existing numbering gap and is intentionally not renumbered in this act.
 
 ## 17. Change-control interpretation
 
