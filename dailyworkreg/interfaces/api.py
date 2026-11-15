@@ -1,0 +1,843 @@
+"""The local HTTP surface.
+
+Every route is a thin translation: JSON in, an application call, JSON out. No route
+decides a schedule, reproduces a capacity rule or filters a violation, because a second
+copy of a domain rule in a request handler is a rule that will disagree with the domain
+within a release.
+
+The server binds to localhost only. It is a single-operator tool on a desk, not a
+service, and it carries no authentication because it has no network exposure to
+protect.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Iterator
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+from fastapi import Depends, FastAPI, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from ..application.calendar_projection import (
+    WeeklyOffRules,
+    load_weekly_off_rules,
+    project_calendar,
+    save_weekly_off_rules,
+)
+from ..application.draft_generation import DraftMode, generate_draft
+from ..application.draft_requests import GenerationInputError, GenerationSpec, prepare_generation
+from ..application.generation_runs import (
+    GenerationStorageError,
+    list_runs,
+    load_readiness,
+    load_register,
+    regenerate,
+    runs_by_outcome,
+    save_run,
+)
+from ..application.readiness import assess_readiness
+from ..application.snapshot import SnapshotError
+from ..domain.cycle import MonthKey
+from ..domain.validator import InputError, Visit
+from ..infrastructure.imports.datasets import JUDGES
+from ..infrastructure.imports.tabular import SourceFormatError, read_source_bytes
+from ..infrastructure.sqlite import calendar_records as cal
+from ..infrastructure.sqlite import imports as staged
+from ..infrastructure.sqlite import masters, seed
+from ..infrastructure.sqlite.database import open_database
+
+HERE = Path(__file__).parent
+STATIC = HERE / "static"
+
+C_LOCAL_ONLY = "server_is_local_only"
+
+
+class SurfaceError(ValueError):
+    """A refusal this surface makes itself, before any application call."""
+
+    def __init__(self, constraint: str, detail: str, status: int = 400):
+        self.constraint = constraint
+        self.detail = detail
+        self.status = status
+        super().__init__(detail)
+
+
+def _fail(constraint: str, error: Exception, status: int = 400) -> JSONResponse:
+    detail = getattr(error, "detail", None) or str(error)
+    return JSONResponse(
+        status_code=status, content={"error": {"constraint": constraint, "detail": detail}}
+    )
+
+
+def _error_payload(error: Exception) -> JSONResponse:
+    constraint = getattr(error, "constraint", "request_refused")
+    status = getattr(error, "status", 400)
+    return _fail(constraint, error, status)
+
+
+def _date(text: str | None, fallback: date) -> date:
+    if not text:
+        return fallback
+    return date.fromisoformat(text)
+
+
+def create_app(db_path: str | Path | None = None) -> FastAPI:
+    """Build the application. ``db_path`` exists for tests and for a chosen location."""
+
+    app = FastAPI(
+        title="DailyDairyRegister",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    app.state.db_path = db_path
+
+    def connection() -> sqlite3.Connection:
+        return open_database(db_path)
+
+    def prepare() -> None:
+        """Seed the approved identities once, at startup, idempotently.
+
+        They are confirmed policy rather than user data, so they must exist before any
+        screen is opened; the seed records that it ran, which is what makes a restart
+        leave an edited master alone.
+        """
+
+        existing = connection()
+        try:
+            seed.seed_approved_identities(existing)
+        finally:
+            existing.close()
+
+    prepare()
+
+    def get_db() -> Iterator[sqlite3.Connection]:
+        existing = connection()
+        try:
+            yield existing
+        finally:
+            existing.close()
+
+    @app.exception_handler(SurfaceError)
+    async def surface_error(_: Request, error: SurfaceError) -> JSONResponse:
+        return _error_payload(error)
+
+    @app.exception_handler(InputError)
+    async def domain_input_error(_: Request, error: InputError) -> JSONResponse:
+        return _error_payload(error)
+
+    @app.exception_handler(GenerationInputError)
+    async def generation_input_error(
+        _: Request, error: GenerationInputError
+    ) -> JSONResponse:
+        return _error_payload(error)
+
+    @app.exception_handler(masters.StorageError)
+    async def storage_error(_: Request, error: masters.StorageError) -> JSONResponse:
+        return _error_payload(error)
+
+    @app.exception_handler(GenerationStorageError)
+    async def generation_storage_error(
+        _: Request, error: GenerationStorageError
+    ) -> JSONResponse:
+        return _error_payload(error)
+
+    @app.exception_handler(SnapshotError)
+    async def snapshot_error(_: Request, error: SnapshotError) -> JSONResponse:
+        return _error_payload(error)
+
+    # --- pages ---------------------------------------------------------
+
+    @app.get("/")
+    def index() -> FileResponse:
+        return FileResponse(HERE / "templates" / "index.html")
+
+    @app.get("/api/health")
+    def health(db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "master_version": masters.current_version(db),
+            "schema_versions": list(_applied(db)),
+        }
+
+    # --- calendar rules -------------------------------------------------
+
+    @app.get("/api/settings/calendar")
+    def read_calendar_settings(
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        rules = load_weekly_off_rules(db)
+        return {
+            "sundays": rules.sundays,
+            "second_saturday": rules.second_saturday,
+            "fourth_saturday": rules.fourth_saturday,
+        }
+
+    @app.put("/api/settings/calendar")
+    def write_calendar_settings(
+        payload: dict[str, Any], db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        rules = WeeklyOffRules(
+            sundays=bool(payload.get("sundays", True)),
+            second_saturday=bool(payload.get("second_saturday", True)),
+            fourth_saturday=bool(payload.get("fourth_saturday", True)),
+        )
+        save_weekly_off_rules(db, rules)
+        return {"saved": True}
+
+    # --- readiness ------------------------------------------------------
+
+    @app.get("/api/readiness")
+    def readiness(
+        start: str | None = None,
+        end: str | None = None,
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        today = date.today()
+        first = _date(start, today.replace(day=1))
+        last = _date(end, first)
+        report = assess_readiness(db, first, last)
+        return {
+            "can_generate": report.can_generate,
+            "is_operational_diary": report.is_operational_diary,
+            "missing_content": list(report.missing_content),
+            "items": [
+                {
+                    "key": item.key,
+                    "label": item.label,
+                    "satisfied": item.satisfied,
+                    "detail": item.detail,
+                    "blocks_draft": item.blocks_draft,
+                }
+                for item in report.items
+            ],
+        }
+
+    # --- masters --------------------------------------------------------
+
+    @app.get("/api/masters/summary")
+    def master_summary(db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+        return {
+            "version": masters.current_version(db),
+            "dtc": len(masters.list_dtcs(db)),
+            "area": len(masters.list_areas(db)),
+            "feeder": len(masters.list_feeders(db)),
+            "activity": len(masters.list_activities(db)),
+            "holiday": len(cal.list_holidays(db)),
+            "leave_record": len(cal.list_leave_records(db)),
+            "event": len(cal.list_events(db)),
+        }
+
+    @app.get("/api/masters/dtc")
+    def read_dtcs(db: sqlite3.Connection = Depends(get_db)) -> list[dict[str, Any]]:
+        return [_dtc(dtc) for dtc in masters.list_dtcs(db)]
+
+    @app.put("/api/masters/dtc")
+    def write_dtc(
+        payload: dict[str, Any], db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        row = masters.upsert_dtc(
+            db,
+            dtc_id=payload["dtc_id"],
+            name=payload["name"],
+            dtc_class=payload["dtc_class"],
+            canonical_feeder_id=payload.get("canonical_feeder_id"),
+            kva=payload.get("kva"),
+            station=payload.get("station"),
+            individual_adjustment=payload.get("individual_adjustment", 1.0),
+            monthly_min=payload.get("monthly_min", 0),
+            monthly_max=payload.get("monthly_max", 3),
+            revisit_gap_days=payload.get("revisit_gap_days", 7),
+            active=payload.get("active", True),
+        )
+        return _dtc(row)
+
+    @app.get("/api/masters/area")
+    def read_areas(db: sqlite3.Connection = Depends(get_db)) -> list[dict[str, Any]]:
+        return [_area(area) for area in masters.list_areas(db)]
+
+    @app.put("/api/masters/area")
+    def write_area(
+        payload: dict[str, Any], db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        row = masters.upsert_area(
+            db,
+            area_id=payload["area_id"],
+            name_kn=payload["name_kn"],
+            name_en=payload.get("name_en"),
+            weight=payload.get("weight", 1.0),
+            monthly_min=payload.get("monthly_min", 0),
+            monthly_max=payload.get("monthly_max", 3),
+            revisit_gap_days=payload.get("revisit_gap_days", 7),
+            active=payload.get("active", True),
+            aliases=tuple(payload.get("aliases", ())),
+        )
+        return _area(row)
+
+    @app.get("/api/masters/feeder")
+    def read_feeders(db: sqlite3.Connection = Depends(get_db)) -> list[dict[str, Any]]:
+        return [_feeder(feeder) for feeder in masters.list_feeders(db)]
+
+    @app.put("/api/masters/feeder")
+    def write_feeder(
+        payload: dict[str, Any], db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        row = masters.upsert_feeder(
+            db,
+            feeder_id=payload["feeder_id"],
+            name=payload["name"],
+            manual_multiplier=payload.get("manual_multiplier", 1.0),
+            monthly_min=payload.get("monthly_min", 0),
+            monthly_max=payload.get("monthly_max", 3),
+            revisit_gap_days=payload.get("revisit_gap_days", 7),
+            active=payload.get("active", True),
+        )
+        return _feeder(row)
+
+    @app.get("/api/masters/activity")
+    def read_activities(db: sqlite3.Connection = Depends(get_db)) -> list[dict[str, Any]]:
+        return [_activity(item) for item in masters.list_activities(db)]
+
+    @app.put("/api/masters/activity")
+    def write_activity(
+        payload: dict[str, Any], db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        row = masters.upsert_activity(
+            db,
+            activity_id=payload["activity_id"],
+            category=payload["category"],
+            description_en=payload["description_en"],
+            description_kn=payload.get("description_kn"),
+            weight=payload.get("weight", 1.0),
+            monthly_min=payload.get("monthly_min", 0),
+            monthly_max=payload.get("monthly_max", 10),
+            repeat_gap_days=payload.get("repeat_gap_days", 2),
+            weekday_mask=payload.get("weekday_mask"),
+            active=payload.get("active", True),
+        )
+        return _activity(row)
+
+    @app.get("/api/calendar/holidays")
+    def read_holidays(
+        year: int | None = None, db: sqlite3.Connection = Depends(get_db)
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "holiday_id": item.holiday_id,
+                "holiday_date": item.holiday_date.isoformat(),
+                "name": item.name,
+                "description": item.description,
+                "source": item.source,
+            }
+            for item in cal.list_holidays(db, year=year)
+        ]
+
+    @app.put("/api/calendar/holidays")
+    def write_holiday(
+        payload: dict[str, Any], db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        day = date.fromisoformat(payload["holiday_date"])
+        row = cal.upsert_holiday(
+            db,
+            holiday_id=payload.get("holiday_id") or f"H-{day.isoformat()}",
+            holiday_date=day,
+            name=payload["name"],
+            description=payload.get("description"),
+            source=payload.get("source", "operator"),
+        )
+        return {
+            "holiday_id": row.holiday_id,
+            "holiday_date": row.holiday_date.isoformat(),
+            "name": row.name,
+        }
+
+    @app.delete("/api/calendar/holidays/{holiday_id}")
+    def remove_holiday(
+        holiday_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        cal.delete_holiday(db, holiday_id)
+        return {"deleted": holiday_id}
+
+    @app.get("/api/calendar/leave-types")
+    def read_leave_types(db: sqlite3.Connection = Depends(get_db)) -> list[dict[str, Any]]:
+        return [
+            {"leave_type_id": item.leave_type_id, "name": item.name, "active": item.active}
+            for item in cal.list_leave_types(db)
+        ]
+
+    @app.get("/api/calendar/leave-records")
+    def read_leave_records(
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "leave_id": item.leave_id,
+                "leave_date": item.leave_date.isoformat(),
+                "leave_type_id": item.leave_type_id,
+                "leave_type_name": item.leave_type_name,
+                "note": item.note,
+            }
+            for item in cal.list_leave_records(db)
+        ]
+
+    @app.put("/api/calendar/leave-records")
+    def write_leave_record(
+        payload: dict[str, Any], db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        day = date.fromisoformat(payload["leave_date"])
+        cal.upsert_leave_record(
+            db,
+            leave_id=payload.get("leave_id") or f"L-{day.isoformat()}",
+            leave_date=day,
+            leave_type_id=payload["leave_type_id"],
+            note=payload.get("note"),
+        )
+        return {"saved": True}
+
+    @app.get("/api/calendar/events")
+    def read_events(db: sqlite3.Connection = Depends(get_db)) -> list[dict[str, Any]]:
+        return [
+            {
+                "event_id": item.event_id,
+                "event_date": item.event_date.isoformat(),
+                "title_en": item.title_en,
+                "title_kn": item.title_kn,
+                "event_kind": item.event_kind,
+            }
+            for item in cal.list_events(db)
+        ]
+
+    @app.put("/api/calendar/events")
+    def write_event(
+        payload: dict[str, Any], db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        day = date.fromisoformat(payload["event_date"])
+        cal.upsert_event(
+            db,
+            event_id=payload.get("event_id") or f"E-{day.isoformat()}",
+            event_date=day,
+            title_en=payload["title_en"],
+            title_kn=payload.get("title_kn"),
+            event_kind=payload.get("event_kind", "event"),
+        )
+        return {"saved": True}
+
+    @app.get("/api/calendar/overrides")
+    def read_overrides(db: sqlite3.Connection = Depends(get_db)) -> list[dict[str, Any]]:
+        return [
+            {
+                "override_id": item.override_id,
+                "override_date": item.override_date.isoformat(),
+                "is_working_day": item.is_working_day,
+                "reason_en": item.reason_en,
+                "reason_kn": item.reason_kn,
+            }
+            for item in cal.list_overrides(db)
+        ]
+
+    @app.put("/api/calendar/overrides")
+    def write_override(
+        payload: dict[str, Any], db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        day = date.fromisoformat(payload["override_date"])
+        cal.upsert_override(
+            db,
+            override_id=payload.get("override_id") or f"O-{day.isoformat()}",
+            override_date=day,
+            is_working_day=bool(payload["is_working_day"]),
+            reason_en=payload.get("reason_en"),
+            reason_kn=payload.get("reason_kn"),
+        )
+        return {"saved": True}
+
+    # --- calendar preview -----------------------------------------------
+
+    @app.get("/api/calendar/preview")
+    def preview_calendar(
+        start: str, end: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        projection = project_calendar(db, date.fromisoformat(start), date.fromisoformat(end))
+        return {
+            "working_days": len(projection.working_days),
+            "conflicts": list(projection.conflicts),
+            "days": [
+                {
+                    "day": item.day.isoformat(),
+                    "kind": item.kind.value,
+                    "is_working_day": item.is_working_day,
+                    "reasons_en": list(item.reasons_en),
+                    "reasons_kn": list(item.reasons_kn),
+                }
+                for item in projection.days
+            ],
+            "entries": [
+                {
+                    "entry_id": item.entry_id,
+                    "day": item.day.isoformat(),
+                    "kind": item.kind.value,
+                    "title_en": item.title_en,
+                }
+                for item in projection.entries
+            ],
+        }
+
+    # --- imports --------------------------------------------------------
+
+    @app.post("/api/imports")
+    async def stage_import(
+        dataset: str, file: UploadFile, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        if dataset not in JUDGES:
+            raise SurfaceError(
+                "unknown_dataset", f"{dataset!r} is not a dataset this tool imports"
+            )
+        content = await file.read()
+        try:
+            source = read_source_bytes(file.filename or "", content)
+        except SourceFormatError as error:
+            raise SurfaceError(error.constraint, error.detail) from error
+        batch, _ = staged.stage_source(db, dataset, source)
+        return _batch(db, batch.batch_id)
+
+    @app.get("/api/imports")
+    def list_imports(db: sqlite3.Connection = Depends(get_db)) -> list[dict[str, Any]]:
+        return [
+            {
+                "batch_id": batch.batch_id,
+                "dataset": batch.dataset,
+                "filename": batch.source_filename,
+                "status": batch.status,
+                "row_count": batch.row_count,
+                "error_count": batch.error_count,
+                "warning_count": batch.warning_count,
+                "staged_at": batch.staged_at,
+                "accepted_at": batch.accepted_at,
+            }
+            for batch in staged.list_batches(db)
+        ]
+
+    @app.get("/api/imports/{batch_id}")
+    def read_import(
+        batch_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        return _batch(db, batch_id)
+
+    @app.post("/api/imports/{batch_id}/accept")
+    def accept_import(
+        batch_id: str,
+        payload: dict[str, Any] | None = None,
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        note = None if payload is None else payload.get("note")
+        # Replacing the year is the default for a General Holiday import; merging is an
+        # explicit choice, because a merge leaves last year's cancellation in place.
+        holiday_mode = staged.C_HOLIDAY_REPLACE
+        if payload and payload.get("holiday_mode"):
+            holiday_mode = payload["holiday_mode"]
+        result = staged.accept_batch(
+            db, batch_id, note=note, holiday_mode=holiday_mode
+        )
+        return {
+            "accepted": True,
+            "inserted": result.inserted,
+            "updated": result.updated,
+            "excluded": result.excluded,
+            "feeder_overrides_applied": result.feeder_overrides_applied,
+        }
+
+    @app.post("/api/imports/{batch_id}/reject")
+    def reject_import(
+        batch_id: str,
+        payload: dict[str, Any] | None = None,
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        note = None if payload is None else payload.get("note")
+        staged.reject_batch(db, batch_id, note=note)
+        return {"rejected": True}
+
+    # --- generations ----------------------------------------------------
+
+    @app.post("/api/generations")
+    def generate(
+        payload: dict[str, Any], db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        spec = _spec(payload)
+        prepared = prepare_generation(db, spec)
+        draft = generate_draft(prepared.request)
+        run_id = save_run(db, prepared, draft)
+        return {
+            "run_id": run_id,
+            "status": draft.status.value,
+            "is_draft": draft.is_allocation_complete,
+            "months": len(draft.months),
+            "rows": len(draft.rows),
+            "visits": len(draft.visits),
+            "exceptions": len(draft.exceptions),
+            "missing_content": list(prepared.readiness.missing_content),
+        }
+
+    @app.get("/api/generations")
+    def history(db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+        grouped = runs_by_outcome(db)
+        return {
+            key: [
+                {
+                    "run_id": run.run_id,
+                    "created_at": run.created_at,
+                    "mode": run.mode,
+                    "start": run.start.isoformat(),
+                    "end": run.end.isoformat(),
+                    "months": list(run.months),
+                    "seed": run.seed,
+                    "outcome": run.outcome,
+                    "is_draft": run.is_draft,
+                    "revision_number": run.revision_number,
+                    "missing_content": list(run.missing_content),
+                }
+                for run in runs
+            ]
+            for key, runs in grouped.items()
+        }
+
+    @app.get("/api/generations/{run_id}")
+    def read_generation(
+        run_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        register = load_register(db, run_id)
+        return {
+            "run_id": run_id,
+            "status": register.status.value,
+            "is_draft": register.is_allocation_complete,
+            "mode": register.mode.value,
+            "start": register.start.isoformat(),
+            "end": register.end.isoformat(),
+            "seed": register.seed,
+            "generator_version": register.generator_version,
+            "allocator_version": register.allocator_version,
+            "missing_content": list(register.missing_content),
+            "is_operational_diary": register.is_operational_diary,
+            "months": [
+                {
+                    "month": month.month.label(),
+                    "status": month.status.value,
+                    "allocator_status": month.allocator_status,
+                    "obligations": dict(month.obligations),
+                    "declared_obligations": dict(month.declared_obligations),
+                    "visits": len(month.visits),
+                }
+                for month in register.months
+            ],
+            "exceptions": [
+                {
+                    "kind": item.kind.value,
+                    "constraint": item.constraint,
+                    "detail": item.detail,
+                    "month": None if item.month is None else item.month.label(),
+                    "asset_id": item.asset_id,
+                    "visit_date": (
+                        None if item.visit_date is None else item.visit_date.isoformat()
+                    ),
+                }
+                for item in register.exceptions
+            ],
+            "rows": [
+                {
+                    "day": row.day.isoformat(),
+                    "weekday": row.weekday,
+                    "kind": row.kind.value,
+                    "is_working_day": row.is_working_day,
+                    "reasons_en": list(row.reasons_en),
+                    "reasons_kn": list(row.reasons_kn),
+                    "visits": [
+                        {
+                            "asset_id": visit.visit.asset_id,
+                            "name_en": visit.name_en,
+                            "name_kn": visit.name_kn,
+                            "provenance": visit.provenance.value,
+                        }
+                        for visit in row.visits
+                    ],
+                    "entries": [
+                        {"kind": entry.kind.value, "title_en": entry.title_en}
+                        for entry in row.entries
+                    ],
+                    "warnings": list(row.warnings),
+                }
+                for row in register.rows
+            ],
+        }
+
+    @app.get("/api/generations/{run_id}/readiness")
+    def read_generation_readiness(
+        run_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> list[dict[str, Any]]:
+        return [dict(item) for item in load_readiness(db, run_id)]
+
+    @app.get("/api/generations/{run_id}/regenerate")
+    def repeat_generation(
+        run_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        """Prove the stored inputs still produce the same visits. Never a replacement."""
+
+        again = regenerate(db, run_id)
+        stored = load_register(db, run_id)
+        same = [
+            (visit.visit.asset_id, visit.visit.visit_date, visit.provenance)
+            for visit in again.visits
+        ] == [
+            (visit.visit.asset_id, visit.visit.visit_date, visit.provenance)
+            for visit in stored.visits
+        ]
+        return {"identical": same, "visits": len(again.visits)}
+
+    if STATIC.exists():
+        app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+
+    return app
+
+
+def _applied(db: sqlite3.Connection) -> tuple[int, ...]:
+    from ..infrastructure.sqlite.schema import applied_versions
+
+    return applied_versions(db)
+
+
+def _spec(payload: dict[str, Any]) -> GenerationSpec:
+    start = date.fromisoformat(payload["start"])
+    end = date.fromisoformat(payload["end"])
+    mode = DraftMode(payload.get("mode", "coverage_cycle"))
+    cycle_start = payload.get("cycle_start_month")
+    fixed: dict[MonthKey, tuple[Visit, ...]] = {}
+    for label, visits in (payload.get("fixed_by_month") or {}).items():
+        year, month = label.split("-", 1)
+        fixed[MonthKey(int(year), int(month))] = tuple(
+            Visit(item["asset_id"], date.fromisoformat(item["visit_date"]))
+            for item in visits
+        )
+    history = tuple(
+        Visit(item["asset_id"], date.fromisoformat(item["visit_date"]))
+        for item in payload.get("prior_history", ())
+    )
+    return GenerationSpec(
+        start=start,
+        end=end,
+        mode=mode,
+        seed=int(payload.get("seed", 0)),
+        attempt_budget=int(payload.get("attempt_budget", 400)),
+        rotation_offset=int(payload.get("rotation_offset", 0)),
+        cycle_start_month=(
+            None if not cycle_start else _month(cycle_start)
+        ),
+        cycle_duration_months=int(payload.get("cycle_duration_months", 1)),
+        cycle_visits_per_asset=int(payload.get("cycle_visits_per_asset", 1)),
+        dtc_target=payload.get("dtc_target"),
+        area_required=_counts(payload.get("area_required")),
+        feeder_required=_counts(payload.get("feeder_required")),
+        fixed_by_month=fixed,
+        prior_history=history,
+    )
+
+
+def _month(label: str) -> MonthKey:
+    year, month = label.split("-", 1)
+    return MonthKey(int(year), int(month))
+
+
+def _counts(payload: Any) -> dict[MonthKey, dict[str, int]]:
+    if not payload:
+        return {}
+    return {
+        _month(label): {key: int(value) for key, value in counts.items()}
+        for label, counts in payload.items()
+    }
+
+
+def _batch(db: sqlite3.Connection, batch_id: str) -> dict[str, Any]:
+    batch = staged.get_batch(db, batch_id)
+    rows = staged.staging_rows(db, batch_id)
+    return {
+        "batch_id": batch.batch_id,
+        "dataset": batch.dataset,
+        "filename": batch.source_filename,
+        "digest": batch.source_sha256,
+        "status": batch.status,
+        "row_count": batch.row_count,
+        "error_count": batch.error_count,
+        "warning_count": batch.warning_count,
+        "staged_at": batch.staged_at,
+        "accepted_at": batch.accepted_at,
+        "decision_note": batch.decision_note,
+        "can_accept": batch.status == "staged" and batch.error_count == 0,
+        "rows": [
+            {
+                "row_number": row.row_number,
+                "severity": row.severity,
+                "decision": row.decision,
+                "messages": list(row.messages),
+                "raw": row.raw,
+            }
+            for row in rows
+        ],
+    }
+
+
+def _dtc(row: masters.DtcRow) -> dict[str, Any]:
+    return {
+        "dtc_id": row.dtc_id,
+        "name": row.name,
+        "dtc_class": row.dtc_class,
+        "source_class": row.source_class,
+        "canonical_feeder_id": row.canonical_feeder_id,
+        "kva": row.kva,
+        "station": row.station,
+        "individual_adjustment": row.individual_adjustment,
+        "monthly_min": row.monthly_min,
+        "monthly_max": row.monthly_max,
+        "revisit_gap_days": row.revisit_gap_days,
+        "active": row.active,
+    }
+
+
+def _area(row: masters.AreaRow) -> dict[str, Any]:
+    return {
+        "area_id": row.area_id,
+        "name_kn": row.name_kn,
+        "name_en": row.name_en,
+        "weight": row.weight,
+        "aliases": list(row.aliases),
+        "monthly_min": row.monthly_min,
+        "monthly_max": row.monthly_max,
+        "revisit_gap_days": row.revisit_gap_days,
+        "active": row.active,
+    }
+
+
+def _feeder(row: masters.FeederRow) -> dict[str, Any]:
+    return {
+        "feeder_id": row.feeder_id,
+        "name": row.name,
+        "manual_multiplier": row.manual_multiplier,
+        "monthly_min": row.monthly_min,
+        "monthly_max": row.monthly_max,
+        "revisit_gap_days": row.revisit_gap_days,
+        "active": row.active,
+    }
+
+
+def _activity(row: masters.ActivityRow) -> dict[str, Any]:
+    return {
+        "activity_id": row.activity_id,
+        "category": row.category,
+        "description_en": row.description_en,
+        "description_kn": row.description_kn,
+        "weight": row.weight,
+        "monthly_min": row.monthly_min,
+        "monthly_max": row.monthly_max,
+        "repeat_gap_days": row.repeat_gap_days,
+        "weekday_mask": row.weekday_mask,
+        "active": row.active,
+    }

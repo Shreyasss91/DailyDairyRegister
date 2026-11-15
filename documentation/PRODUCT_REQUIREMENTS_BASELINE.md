@@ -558,3 +558,110 @@ succeeding is not evidence that the register is complete.
 approval, finalisation, immutable revision, correction revision, edit or lock
 persistence, regeneration acceptance, backup or restore, and no draft is ever
 marked reviewed or finalised.
+
+## 20. Implemented local application contract (as built)
+
+This section records the storage engine, the import path, the persistence of every
+generation attempt and the local surface, so a later change knows what was decided
+and why rather than rediscovering it.
+
+**SQLite is the single canonical source of truth for operational master data.**
+Areas, DTCs, feeders, activities, General Holidays, leave types and records, dated
+events, per-date overrides and effective weekly-off rules live in the database and
+nowhere else. A configuration file holds runtime settings only — database location,
+server port, logging — and never a competing master. There is no import cache, no
+JSON master and no second store to reconcile, because two stores for one identity is
+how a register comes to disagree with the office that owns it.
+
+**Master data enters by validated import or by operator entry.** The import path is
+four stages: the source file is read, judged against the dataset's own rules and
+written to staging; an operator sees what it would do; acceptance applies the whole
+batch in one transaction or nothing; the batch keeps its decision and note. Reading
+keeps every supplied value verbatim, including a blank feeder, a `#N/A` capacity and
+a placeholder, because those are facts about what was sent and §8 requires a
+reconciliation view of exactly those discrepancies. Judgement never repairs a value:
+an unrecognised class is an error rather than a guess at `DEPT` or `SELF_DTC`; a
+placeholder capacity is reported and never read as zero; a file naming the same
+record twice is refused on every repeat after the first, with the colliding row
+cited, because applying either order produces a different master. An accepted DTC
+row writes its supplied fields to a separate source-record table with the batch
+identifier, filename and digest, so the evidence keeps its provenance. The
+owner-confirmed feeder assignments from §8 are applied on acceptance over whatever
+the source said.
+
+**General Holiday import replaces only its own year.** The default replaces the
+`karnataka`-sourced rows for the imported year and leaves an operator's own entry for
+that year intact; a merge is an explicit choice. This is what stops last year's list
+from accumulating beside this year's.
+
+**Every generation attempt is persisted, and none is silently discarded.** A
+completed allocation becomes a numbered draft revision. An `INFEASIBLE` or
+`INDETERMINATE` attempt is stored with its monthly status and structured evidence and
+is marked as producing no draft, so it appears in history as a finding about the
+month rather than as a register. A new attempt is a new run and a new revision:
+nothing is updated in place, nothing is overwritten, and no attempt is marked
+reviewed or finalised, because those are separate capabilities and not a side effect
+of generating. There is no memory-only draft.
+
+**A run records what it was given, not a summary of it.** The stored request carries a
+schema version, the whole roster, the whole classified calendar, the configuration,
+the cycle, the weights, commitments and history. A fingerprint answers "is this the
+same master state" but cannot rebuild a request, and the office will edit masters
+tomorrow: a draft that can only be explained by reading today's live records can no
+longer be explained at all. A snapshot from an unknown schema version is refused
+rather than half-read. Reading a stored run returns the rows and visits that were
+presented; a separate replay re-derives from the snapshot. The two are compared, and
+a later master edit leaves the stored draft untouched.
+
+**No transaction is held across allocation.** Allocation finishes first; the write
+covers bookkeeping rows only, in one transaction, so a failure leaves no half-written
+run that could be mistaken for a complete one.
+
+**Stored rows come before stored meaning.** The row store reads and writes plain rows
+and imports nothing from the application layer; the mapping between a generated
+register and those rows lives in the application layer. The first arrangement had the
+two importing each other, which is a defect rather than a preference.
+
+**Readiness is measured from the database.** The missing-content list is derived from
+what is actually absent and changes when something is imported, so it cannot claim a
+holiday baseline is absent after one arrived, and cannot stay silent about an empty
+activity catalogue. An absent activity catalogue or holiday year does not block
+field-visit allocation; it means the result is not yet a complete operational diary,
+and it is reported as exactly that.
+
+**Calendar classification is decided in one place from stored facts.** Weekly-off
+rules are configured rather than compiled in. A General Holiday that falls on a weekly
+off keeps both reasons, as §4.1 requires. An override that makes a holiday a working
+day is honoured while the underlying holiday stays visible, because §4.1 asks for the
+source fact and the effective classification separately. An operator's own
+safety-meeting entry replaces the default sentence on that date rather than adding a
+second meeting, and a safety meeting consumes no working-day capacity.
+
+**Restricted Holidays are not a calendar concept here.** They are not imported,
+stored, classified, displayed or generated. A date recorded as nothing is an ordinary
+working day; a Sunday that is also a restricted holiday remains a Sunday with its
+weekly-off reason alone; an independent approved non-working condition survives on its
+own terms. This corrects the earlier draft, which carried a `RESTRICTED_HOLIDAY`
+classification and therefore contradicted §4.1.
+
+**The local surface decides nothing.** Python with FastAPI, SQLite, and HTML, CSS and
+vanilla JavaScript. It binds to the loopback address only and holds no
+authentication, because it has no network exposure to protect; there is no host option
+because the only useful value is already fixed. A route translates a request into an
+application call and a page renders the result. No route and no script reproduces a
+capacity rule, a gap rule, a cycle obligation or a violation filter: a rule copied
+into a handler is a rule that will disagree with the domain within a release, and a
+rule copied into the browser will disagree sooner. A refusal reaches the operator as a
+stable constraint with a sentence describing what to fix.
+
+**The output is labelled an allocator-backed draft.** It is never described as
+verified work, a reviewed register or a finalised register.
+
+**Weight is not reimplemented.** The scheduling weight comes from the domain's own
+`DtcWeights`: a DTC weighs its capacity scaled by its class multiplier and its
+individual adjustment; a feeder weighs the aggregate capacity of its active
+department DTCs scaled by its stored manual multiplier; an area carries its stored
+weight. The application feeds that model and owns no second formula.
+
+**No dependency was added for this work.** FastAPI, uvicorn, openpyxl and the
+standard library were already available; no solver, scheduler or ORM was introduced.

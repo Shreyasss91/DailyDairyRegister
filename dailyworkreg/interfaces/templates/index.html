@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DailyDairyRegister</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="app-bar">
+    <h1>DailyDairyRegister</h1>
+    <p class="subtitle">Local register tool for MESCOM field visits</p>
+    <p id="db-note" class="db-note"></p>
+  </header>
+
+  <nav class="tabs" id="tabs" role="tablist">
+    <button class="tab" data-view="home" role="tab">Overview</button>
+    <button class="tab" data-view="imports" role="tab">Imports</button>
+    <button class="tab" data-view="masters" role="tab">Masters</button>
+    <button class="tab" data-view="calendar" role="tab">Calendar</button>
+    <button class="tab" data-view="generate" role="tab">Generate</button>
+    <button class="tab" data-view="draft" role="tab">Draft</button>
+    <button class="tab" data-view="history" role="tab">History</button>
+  </nav>
+
+  <main id="panel" class="panel">
+
+    <section id="view-home" class="view">
+      <h2>Overview</h2>
+      <div id="missing" class="banner banner-warn" hidden></div>
+      <div class="row">
+        <button id="refresh-readiness" class="button">Refresh readiness</button>
+        <span id="readiness-summary" class="muted"></span>
+      </div>
+      <table class="table" id="readiness-table">
+        <thead>
+          <tr><th>Item</th><th>State</th><th>Detail</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <h3>Stored master data</h3>
+      <table class="table" id="summary-table">
+        <thead><tr><th>Master</th><th>Records</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section id="view-imports" class="view" hidden>
+      <h2>Imports</h2>
+      <p class="muted">
+        A source file is read, judged and staged. Nothing reaches the master data until
+        you accept the batch, and a batch with an unusable row cannot be accepted.
+      </p>
+      <div class="row">
+        <label>Dataset
+          <select id="import-dataset">
+            <option value="dtc">DTC roster</option>
+            <option value="area">Areas</option>
+            <option value="feeder">Feeders</option>
+            <option value="activity">Activity catalogue</option>
+            <option value="general_holiday">General Holidays</option>
+          </select>
+        </label>
+        <input type="file" id="import-file" accept=".csv,.tsv,.xlsx,.xlsm" />
+        <button id="import-upload" class="button">Read and judge</button>
+      </div>
+      <div id="import-result" class="banner" hidden></div>
+      <table class="table" id="imports-table">
+        <thead>
+          <tr><th>File</th><th>Dataset</th><th>Rows</th><th>Errors</th><th>Warnings</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="import-detail" class="detail" hidden></div>
+    </section>
+
+    <section id="view-masters" class="view" hidden>
+      <h2>Masters</h2>
+      <p class="muted">
+        Enter or correct a single record here. Bulk entry belongs in Imports. An asset that
+        is not active stops being scheduled but is never deleted.
+      </p>
+      <div class="row">
+        <label>Master
+          <select id="master-kind">
+            <option value="dtc">DTC</option>
+            <option value="area">Area</option>
+            <option value="feeder">Feeder</option>
+            <option value="activity">Activity</option>
+          </select>
+        </label>
+        <button id="master-refresh" class="button">Show</button>
+      </div>
+      <div id="master-form" class="form"></div>
+      <div id="master-table"></div>
+    </section>
+
+    <section id="view-calendar" class="view" hidden>
+      <h2>Calendar</h2>
+      <p class="muted">
+        General Holidays, leave, dated events and per-date overrides. A restricted holiday
+        is not recorded here: it is an ordinary working day.
+      </p>
+      <div class="row">
+        <label>From <input type="date" id="cal-start" /></label>
+        <label>To <input type="date" id="cal-end" /></label>
+        <button id="cal-preview" class="button">Show calendar</button>
+      </div>
+      <div id="cal-conflicts" class="banner banner-warn" hidden></div>
+      <div class="row">
+        <label>Weekly offs</label>
+        <label><input type="checkbox" id="rule-sunday" /> Sunday</label>
+        <label><input type="checkbox" id="rule-second-sat" /> Second Saturday</label>
+        <label><input type="checkbox" id="rule-fourth-sat" /> Fourth Saturday</label>
+        <button id="rules-save" class="button">Save rules</button>
+      </div>
+      <div id="cal-days"></div>
+      <h3>General Holidays</h3>
+      <div class="row">
+        <input type="date" id="holiday-date" />
+        <input type="text" id="holiday-name" placeholder="Holiday name" />
+        <input type="text" id="holiday-description" placeholder="Printed wording (optional)" />
+        <button id="holiday-save" class="button">Save holiday</button>
+      </div>
+      <div id="holiday-table"></div>
+      <h3>Dated events</h3>
+      <div class="row">
+        <input type="date" id="event-date" />
+        <input type="text" id="event-title" placeholder="Event title" />
+        <select id="event-kind">
+          <option value="event">Event</option>
+          <option value="activity">Activity</option>
+          <option value="safety_meeting">Safety meeting</option>
+        </select>
+        <button id="event-save" class="button">Save event</button>
+      </div>
+      <div id="event-table"></div>
+    </section>
+
+    <section id="view-generate" class="view" hidden>
+      <h2>Generate a draft register</h2>
+      <p class="muted">
+        The result is an allocator-backed draft. It is not verified work and it is not a
+        reviewed register.
+      </p>
+      <div class="form">
+        <label>From <input type="date" id="gen-start" /></label>
+        <label>To <input type="date" id="gen-end" /></label>
+        <label>Mode
+          <select id="gen-mode">
+            <option value="coverage_cycle">Coverage cycle</option>
+            <option value="capacity_fallback">Capacity fallback</option>
+          </select>
+        </label>
+        <label>Seed <input type="number" id="gen-seed" value="0" /></label>
+        <label>Cycle start month <input type="month" id="gen-cycle-start" /></label>
+        <label>Cycle months <input type="number" id="gen-cycle-months" value="1" min="1" /></label>
+        <label>Visits per asset <input type="number" id="gen-visits" value="1" min="1" /></label>
+        <label>DTC target (fallback) <input type="number" id="gen-dtc-target" min="0" /></label>
+        <button id="gen-run" class="button button-primary">Generate</button>
+      </div>
+      <div id="gen-result" class="banner" hidden></div>
+    </section>
+
+    <section id="view-draft" class="view" hidden>
+      <h2>Draft preview</h2>
+      <div id="draft-head" class="muted"></div>
+      <div id="draft-exceptions" class="detail" hidden></div>
+      <div id="draft-rows"></div>
+    </section>
+
+    <section id="view-history" class="view" hidden>
+      <h2>Generation history</h2>
+      <p class="muted">
+        Every attempt is kept. An attempt that produced no draft is listed separately,
+        because it is a finding about the month rather than a register.
+      </p>
+      <div id="history-groups"></div>
+    </section>
+
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
