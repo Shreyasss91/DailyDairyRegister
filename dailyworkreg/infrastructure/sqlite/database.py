@@ -84,19 +84,34 @@ def connect(path: Path) -> sqlite3.Connection:
 def transaction(connection: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     """Run a block in one write transaction, rolling back on any exception.
 
+    Re-entrant. A caller composing a repository write inside a larger unit of work
+    gets a savepoint rather than a second ``BEGIN``, because SQLite refuses the
+    latter outright and a nested repository call is a normal thing to write.
+
     Kept short on purpose. A generation run reads its inputs, releases the
     connection, runs the allocator with no transaction open, and only then opens
     one of these to persist the outcome. Holding a write transaction across a
     multi-second allocation would block every other writer for no benefit.
     """
 
-    connection.execute("BEGIN IMMEDIATE")
+    outermost = not connection.in_transaction
+    if outermost:
+        connection.execute("BEGIN IMMEDIATE")
+    else:
+        connection.execute("SAVEPOINT nested_write")
     try:
         yield connection
     except BaseException:
-        connection.execute("ROLLBACK")
+        if outermost:
+            connection.execute("ROLLBACK")
+        else:
+            connection.execute("ROLLBACK TO nested_write")
+            connection.execute("RELEASE nested_write")
         raise
-    connection.execute("COMMIT")
+    if outermost:
+        connection.execute("COMMIT")
+    else:
+        connection.execute("RELEASE nested_write")
 
 
 def open_database(path: Path | None = None) -> sqlite3.Connection:
