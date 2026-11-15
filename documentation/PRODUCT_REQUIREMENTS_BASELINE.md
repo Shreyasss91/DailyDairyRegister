@@ -199,7 +199,7 @@ Previously calculated feeder aggregates were provisional and used pre-correction
 ## 10. Combined field-visit constraints and target suggestions
 
 - Area, DTC and feeder visits share one configurable combined daily field-visit limit.
-- The exact default value for this combined limit is **not yet owner-confirmed**. Three per day was discussed as a candidate, not frozen as a decision.
+- Initial default: **3 combined field visits per working day** across area visits, DTC visits and feeder visits. The limit remains configurable.
 - Area-specific maximum remains two visits per day initially, configurable.
 - All three visit types occur only on working days.
 - Each visit type supports configurable monthly targets and per-asset minimum/maximum constraints where applicable.
@@ -268,8 +268,7 @@ Workflow states:
 
 The following points remain open and must not be silently converted into approved defaults:
 
-1. **Combined daily field-visit limit default:** confirm the initial default (3/day was only proposed). The setting itself is configurable.
-2. **Target-suggestion policy:** define and test the algorithm that proposes monthly area, DTC and feeder targets. It must account for working days, active assets, weights, revisit gaps, per-asset bounds and the combined daily cap. The user-approved requirement is that targets are suggested, editable and feasibility-checked; exact formula and example target numbers are not yet approved.
+1. **Target-suggestion policy:** define and test the algorithm that proposes monthly area, DTC and feeder targets. It must account for working days, active assets, weights, revisit gaps, per-asset bounds and the combined daily cap. The user-approved requirement is that targets are suggested, editable and feasibility-checked; exact formula and example target numbers are not yet approved.
 3. **Initial data validation:** during implementation, re-import/validate the supplied DTC source against the 113-SCD inclusion rule, class counts, preserved source fields and explicit feeder overrides. Do not infer missing source rows from this requirements document.
 4. **Holiday data validation:** load and verify the Karnataka General Holiday baseline for 2025 and 2026 only. Restricted Holidays must remain excluded.
 5. **Activity catalogue content:** prepare the initial 40–60 activity records with English/Kannada text for owner review before treating the catalogue as operationally approved.
