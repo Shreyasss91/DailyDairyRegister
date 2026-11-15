@@ -599,3 +599,30 @@ def test_without_commitments_behaviour_is_unchanged():
     assert len(result.all_visits) == 1
     assert result.committed_visits == ()
     assert result.over_covered == ()
+
+
+def test_an_invalid_commitment_error_carries_its_structured_violations():
+    """A caller must be able to read the offending dates without parsing prose.
+
+    The error text names the problem for a person; the violation objects name the
+    constraint, the asset and the exact dates for a program, and a register layer
+    needs the latter to show which commitment was refused.
+    """
+
+    saturday = date(2026, 11, 28)
+    assert saturday.weekday() == 5
+    with pytest.raises(InputError) as caught:
+        run_cycle(
+            one_dtc(),
+            quarter(),
+            FeasibilityConfig(),
+            cycle_of(1),
+            fixed_by_month={NOV: (Visit("SCD-001", saturday),)},
+        )
+    error = caught.value
+    assert error.constraint == "cycle_fixed_visit_invalid"
+    assert error.asset_id == "SCD-001"
+    assert error.violations
+    assert error.violations[0].asset_id == "SCD-001"
+    assert error.violations[0].constraint == "fixed_visit_not_on_working_date"
+    assert error.violations[0].visit_date == saturday

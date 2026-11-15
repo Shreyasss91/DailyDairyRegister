@@ -478,6 +478,7 @@ def _inventory_commitments(
                     f"{first.message}"
                 ),
                 asset_id=first.asset_id,
+                violations=violations,
             )
 
     return {month: tuple(group) for month, group in by_month.items()}, all_fixed

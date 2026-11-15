@@ -322,12 +322,25 @@ class InputError(ValueError):
         constraint: A stable identifier from the ``C_*`` constants.
         detail: A readable explanation naming what is wrong.
         asset_id: The offending asset, when the error is asset-specific.
+        violations: The structured violations behind the error, when it was raised
+            on a set of them. Empty for a malformed field.
     """
 
-    def __init__(self, constraint: str, detail: str, asset_id: str | None = None):
+    def __init__(
+        self,
+        constraint: str,
+        detail: str,
+        asset_id: str | None = None,
+        violations: tuple["Violation", ...] = (),
+    ):
         self.constraint = constraint
         self.detail = detail
         self.asset_id = asset_id
+        #: The structured violations that caused this error, when it was raised
+        #: because of a specific set of them rather than a malformed field. A
+        #: caller needing visit dates, conflicting dates or limits reads these
+        #: fields instead of parsing ``detail``.
+        self.violations = violations
         super().__init__(f"{constraint}: {detail}")
 
 
