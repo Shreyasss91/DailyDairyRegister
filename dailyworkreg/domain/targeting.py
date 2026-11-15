@@ -50,6 +50,7 @@ from .validator import (
     Visit,
     assess_feasibility,
     resolve_obligations,
+    validate_committed_visits,
     validate_schedule,
 )
 
@@ -69,6 +70,12 @@ C_MONTH_SELECTION_OUTSIDE_CYCLE = "month_selection_outside_cycle"
 C_CYCLE_OVER_COVERED = "cycle_obligation_over_covered"
 #: A multi-month helper received a partial (non full-calendar-month) request.
 C_PARTIAL_PERIOD_UNSUPPORTED = "partial_period_unsupported"
+#: A fixed-visit mapping named a month outside the declared cycle.
+C_FIXED_MONTH_OUTSIDE_CYCLE = "fixed_month_outside_cycle"
+#: A fixed visit's date is not in the month it was supplied under.
+C_FIXED_VISIT_WRONG_MONTH = "fixed_visit_in_wrong_month"
+#: A committed visit failed the shared hard-constraint validation.
+C_CYCLE_FIXED_VISIT_INVALID = "cycle_fixed_visit_invalid"
 
 
 def _validated_month_selection(
@@ -301,8 +308,14 @@ class MonthPlan:
     period: DatePeriod
     result: AllocationResult
     mode: TargetMode
-    #: Monthly obligations used, for the reproducibility snapshot.
+    #: The obligations this month was actually allocated against, after committed
+    #: visits in the cycle were reconciled against the declared plan. This is what
+    #: the allocator received and what the month's validation used.
     obligations: Mapping[str, int] = field(default_factory=dict)
+    #: The obligations the coverage cycle declared for this month, before
+    #: commitments were reconciled. Kept separately so the declared plan is never
+    #: confused with the adjusted one.
+    declared_obligations: Mapping[str, int] = field(default_factory=dict)
 
     @property
     def visits(self) -> tuple[Visit, ...]:
@@ -326,6 +339,11 @@ class MultiMonthResult:
     #: Assets whose committed visits exceed their cycle obligation. Surfaced
     #: rather than silently adding further visits.
     over_covered: tuple[Evidence, ...] = ()
+    #: Every committed visit inventoried from the cycle, in date order. These are
+    #: reported so a caller can reconcile the whole cycle without re-deriving the
+    #: inventory, and they are what the cycle-level reconciliation was computed
+    #: from.
+    committed_visits: tuple[Visit, ...] = ()
 
     @property
     def status(self) -> FeasibilityStatus:
@@ -347,6 +365,213 @@ class MultiMonthResult:
             if plan.month == month:
                 return plan
         return None
+
+
+@dataclass(frozen=True)
+class _CycleCommitments:
+    """The complete fixed-visit inventory for one declared cycle.
+
+    Commitments are reconciled against the cycle *before* any month is allocated,
+    because a commitment in a month the loop has not reached yet must still
+    discharge its obligation and must still constrain the gap. Reconciling only as
+    the loop arrives cannot see it, so an earlier month would allocate a visit it
+    did not owe and the later commitment would arrive too late to prevent it.
+
+    Attributes:
+        by_month: Committed visits, keyed by the cycle month they fall in.
+        effective: Monthly obligations after commitments. A commitment consumes
+            one obligation unit exactly once, so for every asset
+            ``generated + committed == declared``.
+        over_covered: Structured evidence for DTC cycle members whose commitments
+            exceed their cycle obligation.
+        all_fixed: Every committed visit in the cycle, in date order.
+    """
+
+    by_month: Mapping[MonthKey, tuple[Visit, ...]]
+    effective: Mapping[MonthKey, Mapping[str, int]]
+    over_covered: tuple[Evidence, ...]
+    all_fixed: tuple[Visit, ...]
+
+    def blockers_outside(self, month: MonthKey) -> tuple[Visit, ...]:
+        """Committed visits in every *other* cycle month.
+
+        These reach the allocator as gap blockers: they consume no capacity and no
+        obligation here, they only stop this month selecting a date too close to
+        them. Passing exactly the other months keeps each commitment from being
+        counted twice, and never supplies a visit this month also holds as its own
+        ``fixed`` input.
+        """
+
+        return tuple(
+            v
+            for v in self.all_fixed
+            if (v.visit_date.year, v.visit_date.month)
+            != (month.year, month.month)
+        )
+
+
+def _inventory_commitments(
+    locked: Mapping[MonthKey, Sequence[Visit]],
+    cycle: CoverageCycle,
+    calendar: Calendar,
+    roster: Sequence[Asset],
+    config: FeasibilityConfig,
+    prior_visits: Iterable[Visit],
+) -> tuple[dict[MonthKey, tuple[Visit, ...]], tuple[Visit, ...]]:
+    """Validate every commitment in the cycle, selected month or not.
+
+    A commitment is held to the same hard constraints a schedule is, and it is
+    held to them whether or not its month will ever be placed, because a month
+    omitted from placement is not permission to ignore what is already committed
+    there. An invalid commitment raises rather than being treated as a discharge:
+    a visit that could not have happened must not silently satisfy an obligation.
+
+    Raises:
+        InputError: A month key outside the cycle, a visit filed under a month
+            that does not contain its date, or a commitment that fails the shared
+            hard-constraint validation.
+    """
+
+    by_month: dict[MonthKey, list[Visit]] = {}
+    for month, visits in locked.items():
+        if not cycle.contains(month):
+            raise InputError(
+                C_FIXED_MONTH_OUTSIDE_CYCLE,
+                (
+                    f"fixed visits were supplied for {month.label()}, which is "
+                    "outside the declared cycle"
+                ),
+            )
+        for visit in visits:
+            if (visit.visit_date.year, visit.visit_date.month) != (
+                month.year,
+                month.month,
+            ):
+                raise InputError(
+                    C_FIXED_VISIT_WRONG_MONTH,
+                    (
+                        f"the committed visit for {visit.asset_id} on "
+                        f"{visit.visit_date.isoformat()} was supplied under "
+                        f"{month.label()}, which does not contain that date"
+                    ),
+                    asset_id=visit.asset_id,
+                )
+            by_month.setdefault(month, []).append(visit)
+
+    all_fixed = tuple(
+        sorted(
+            (v for group in by_month.values() for v in group),
+            key=lambda v: (v.visit_date, v.asset_id),
+        )
+    )
+
+    if all_fixed:
+        violations = validate_committed_visits(
+            all_fixed, calendar, roster, config, history=tuple(prior_visits)
+        )
+        if violations:
+            first = violations[0]
+            raise InputError(
+                C_CYCLE_FIXED_VISIT_INVALID,
+                (
+                    "a committed visit in the cycle is not a valid visit: "
+                    f"{first.message}"
+                ),
+                asset_id=first.asset_id,
+            )
+
+    return {month: tuple(group) for month, group in by_month.items()}, all_fixed
+
+
+def _dtc_commitment_counts(
+    all_fixed: Sequence[Visit],
+    roster: Sequence[Asset],
+) -> dict[str, int]:
+    """Count committed visits per DTC asset.
+
+    Only DTCs take part in cycle accounting. Area and feeder commitments are
+    preserved, consume capacity and constrain gaps, but are never compared with
+    ``cycles.visits_per_asset``: a month can hold several area visits legitimately
+    and none of that is DTC over-coverage.
+    """
+
+    types = {asset.asset_id: asset.asset_type for asset in roster}
+    counts: dict[str, int] = {}
+    for visit in all_fixed:
+        if types.get(visit.asset_id) is AssetType.DTC:
+            counts[visit.asset_id] = counts.get(visit.asset_id, 0) + 1
+    return counts
+
+
+def _reconcile_cycle_obligations(
+    resolution: CycleResolution,
+    cycle: CoverageCycle,
+    committed_dtc: Mapping[str, int],
+    all_fixed: Sequence[Visit],
+) -> tuple[dict[MonthKey, dict[str, int]], tuple[Evidence, ...]]:
+    """Reconcile commitments against the declared cycle obligations.
+
+    Each committed DTC visit consumes exactly one obligation unit, so the units
+    left for generation plus the commitments equal the declared obligation. A
+    commitment is charged to the month it falls in when that month still owes a
+    unit, and otherwise to the earliest month that does. Charging own-month first
+    stops a December commitment being taken out of November's unit when December
+    owes one of its own, while still letting a December commitment satisfy an
+    obligation the resolver placed in November when December owes nothing.
+
+    Subtracting a whole cycle's commitment count from every month's obligation is
+    the obvious shortcut and is wrong: an asset owing units in two months would be
+    reduced twice for one commitment.
+
+    Returns:
+        The effective obligations per month, and over-coverage evidence for DTC
+        cycle members whose commitments exceed their cycle obligation.
+    """
+
+    month_order = [plan.month for plan in resolution.plans]
+    remaining: dict[str, dict[MonthKey, int]] = {}
+    for plan in resolution.plans:
+        for asset_id, count in plan.obligations.items():
+            remaining.setdefault(asset_id, {})[plan.month] = count
+
+    for visit in all_fixed:
+        per_month = remaining.get(visit.asset_id)
+        if per_month is None:
+            # Not a DTC cycle member: preserved, but carries no cycle obligation.
+            continue
+        own = MonthKey(visit.visit_date.year, visit.visit_date.month)
+        if per_month.get(own, 0) > 0:
+            per_month[own] -= 1
+            continue
+        for month in month_order:
+            if per_month.get(month, 0) > 0:
+                per_month[month] -= 1
+                break
+        # No unit left: the commitment exceeds the obligation. It is preserved
+        # and reported as over-coverage rather than silently dropped.
+
+    effective: dict[MonthKey, dict[str, int]] = {month: {} for month in month_order}
+    for asset_id, per_month in remaining.items():
+        for month, count in per_month.items():
+            if count > 0:
+                effective[month][asset_id] = count
+
+    over_covered = tuple(
+        Evidence(
+            constraint=C_CYCLE_OVER_COVERED,
+            detail=(
+                f"{asset_id} has {count} committed visits in the cycle but its "
+                f"cycle obligation is {cycle.visits_per_asset}; every commitment "
+                "was preserved and no further visit was added for it"
+            ),
+            asset_id=asset_id,
+            limit=cycle.visits_per_asset,
+            actual=count,
+        )
+        for asset_id, count in sorted(committed_dtc.items())
+        if count > cycle.visits_per_asset
+    )
+    return effective, over_covered
 
 
 def run_cycle(
@@ -413,59 +638,40 @@ def run_cycle(
     place_set = set(place)
     locked = dict(fixed_by_month or {})
 
-    # Committed visits anywhere in the cycle count toward that asset's cycle
-    # obligation, whichever month they fall in. Without this, a DTC whose
-    # commitment landed in November while the resolver assigned it December would
-    # be owed a second visit in December, so the cycle would over-cover it.
-    committed_in_cycle: dict[str, int] = {}
-    for month, visits in locked.items():
-        for visit in visits:
-            if cycle.contains(month):
-                committed_in_cycle[visit.asset_id] = (
-                    committed_in_cycle.get(visit.asset_id, 0) + 1
-                )
-
-    over_covered = tuple(
-        Evidence(
-            constraint=C_CYCLE_OVER_COVERED,
-            detail=(
-                f"{asset_id} has {committed_in_cycle[asset_id]} committed visits in "
-                f"the cycle but its cycle obligation is {cycle.visits_per_asset}; "
-                "no further visits were added for it"
-            ),
-            asset_id=asset_id,
-            limit=cycle.visits_per_asset,
-            actual=count,
-        )
-        for asset_id, count in sorted(committed_in_cycle.items())
-        if count > cycle.visits_per_asset
+    # Commitments are inventoried and reconciled against the whole cycle before a
+    # single month is allocated. Reconciling inside the loop instead meant a
+    # commitment in a later month was invisible while an earlier month was placed,
+    # so the earlier month still allocated a visit it no longer owed.
+    by_month, all_fixed = _inventory_commitments(
+        locked, cycle, calendar, roster, config, prior_visits
+    )
+    committed_dtc = _dtc_commitment_counts(all_fixed, roster)
+    effective, over_covered = _reconcile_cycle_obligations(
+        resolution, cycle, committed_dtc, all_fixed
+    )
+    commitments = _CycleCommitments(
+        by_month=by_month,
+        effective=effective,
+        over_covered=over_covered,
+        all_fixed=all_fixed,
     )
 
+    # Only generated visits are carried as history. A commitment in another month
+    # reaches the allocator as a gap blocker instead, so it constrains placement in
+    # both directions and is never counted twice or supplied as history.
     carried: list[Visit] = list(prior_visits)
     plans: list[MonthPlan] = []
-    discharged: dict[str, int] = {}
 
     for plan in resolution.plans:
-        month_fixed = tuple(locked.get(plan.month, ()))
+        month_fixed = commitments.by_month.get(plan.month, ())
         if plan.month not in place_set:
-            # Not scheduled, but a commitment here still happened and must
-            # constrain later months. Skipping placement is not permission to
-            # forget it.
-            carried.extend(month_fixed)
-            for visit in month_fixed:
-                discharged[visit.asset_id] = discharged.get(visit.asset_id, 0) + 1
+            # Not scheduled. Its commitments were reconciled above and remain gap
+            # blockers for every month that is placed.
             continue
 
-        # Reduce this month's obligations by what commitments already discharged
-        # for that asset anywhere in the cycle.
-        obligations: dict[str, int] = {}
-        for asset_id, count in plan.obligations.items():
-            already = discharged.get(asset_id, 0)
-            remaining = max(0, count - already)
-            if remaining > 0:
-                obligations[asset_id] = remaining
-
+        obligations = dict(commitments.effective.get(plan.month, {}))
         period = _period_for(plan.month)
+        _require_full_month(period, "run_cycle")
         result = allocate_month(
             AllocationRequest(
                 period=period,
@@ -475,6 +681,7 @@ def run_cycle(
                 cycle_obligations=obligations,
                 history=tuple(carried),
                 fixed=month_fixed,
+                gap_blockers=commitments.blockers_outside(plan.month),
                 seed=seed + plan.month_index,
                 attempt_budget=attempt_budget,
                 from_cycle=True,
@@ -488,15 +695,9 @@ def run_cycle(
                 result=result,
                 mode=TargetMode.COVERAGE_CYCLE,
                 obligations=obligations,
+                declared_obligations=dict(plan.obligations),
             )
         )
-        for visit in month_fixed:
-            discharged[visit.asset_id] = discharged.get(visit.asset_id, 0) + 1
-
-        # Committed visits constrain later months whether or not this month's new
-        # allocations succeeded; the commitment exists either way. Only visits
-        # that were actually placed are carried as generated allocations.
-        carried.extend(month_fixed)
         if result.status is FeasibilityStatus.FEASIBLE:
             carried.extend(v for v in result.visits if v not in month_fixed)
 
@@ -506,6 +707,7 @@ def run_cycle(
         cycle_resolution=resolution,
         seed=seed,
         over_covered=over_covered,
+        committed_visits=all_fixed,
     )
 
 

@@ -149,6 +149,11 @@ class AllocationRequest:
     #: rather than re-derived here. Weight never outranks constraint pressure and
     #: never changes an obligation count.
     weights: Mapping[str, float] = field(default_factory=dict)
+    #: Committed visits outside this period that must constrain the revisit gap
+    #: in both directions. Passed through to the validator unchanged, so a
+    #: commitment later in a cycle blocks a date here before it is placed rather
+    #: than being discovered after this month is already accepted.
+    gap_blockers: tuple[Visit, ...] = ()
     #: Effective prorated limits, required for a partial month. A partial period
     #: must not silently use full-month limits, so the caller supplies these and
     #: ``allocate_month`` refuses the request without them.
@@ -231,7 +236,9 @@ def _attempt_placement(
 
     placed: list[Visit] = list(request.fixed)
     # Every visit that constrains a gap: prior history, commitments, placements.
-    gap_source: list[Visit] = list(request.history) + list(request.fixed)
+    gap_source: list[Visit] = (
+        list(request.history) + list(request.fixed) + list(request.gap_blockers)
+    )
 
     per_date: dict[date, int] = {}
     per_date_area: dict[date, int] = {}
@@ -374,6 +381,7 @@ def allocate_month(request: AllocationRequest) -> AllocationResult:
             config=request.config,
             proposed=(),
             history=request.history,
+            gap_blockers=request.gap_blockers,
             fixed=request.fixed,
             required_visits=request.required_visits,
             cycle_obligations=request.cycle_obligations,
@@ -435,6 +443,7 @@ def allocate_month(request: AllocationRequest) -> AllocationResult:
                 config=request.config,
                 proposed=candidate,
                 history=request.history,
+                gap_blockers=request.gap_blockers,
                 required_visits=request.required_visits,
                 cycle_obligations=request.cycle_obligations,
             ),
@@ -460,6 +469,7 @@ def allocate_month(request: AllocationRequest) -> AllocationResult:
             roster=request.roster,
             config=request.config,
             history=request.history,
+            gap_blockers=request.gap_blockers,
             fixed=request.fixed,
             required_visits=request.required_visits,
             cycle_obligations=request.cycle_obligations,
@@ -488,6 +498,7 @@ def allocate_month(request: AllocationRequest) -> AllocationResult:
                 config=request.config,
                 proposed=assessment.witness,
                 history=request.history,
+                gap_blockers=request.gap_blockers,
                 required_visits=request.required_visits,
                 cycle_obligations=request.cycle_obligations,
             ),

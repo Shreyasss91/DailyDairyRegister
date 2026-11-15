@@ -360,8 +360,10 @@ def test_fixed_visit_in_an_unselected_month_still_constrains_later_months():
     """Skipping placement is not permission to forget a commitment happened."""
 
     roster = dtcs(1)
-    # Committed 28 November; December cannot revisit before 5 December.
-    fixed = {MonthKey(2026, 11): (Visit("SCD-001", date(2026, 11, 28)),)}
+    # Committed Friday 27 November; December cannot revisit before 4 December.
+    # (28 November 2026 is a Saturday, and a commitment is now validated even in a
+    # month that is never placed, so it must be a real working date.)
+    fixed = {MonthKey(2026, 11): (Visit("SCD-001", date(2026, 11, 27)),)}
     result = run_cycle(
         roster,
         quarter_calendar(),
@@ -375,7 +377,7 @@ def test_fixed_visit_in_an_unselected_month_still_constrains_later_months():
     assert december is not None
     if december.result.status is FeasibilityStatus.FEASIBLE:
         for visit in december.visits:
-            assert (visit.visit_date - date(2026, 11, 28)).days >= 7
+            assert (visit.visit_date - date(2026, 11, 27)).days >= 7
 
 
 def test_failed_month_still_contributes_its_fixed_visits_to_history():

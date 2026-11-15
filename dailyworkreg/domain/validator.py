@@ -477,6 +477,13 @@ class ProposalContext:
     proposed: Sequence[Visit]
     history: Sequence[Visit] = ()
     fixed: Sequence[Visit] = ()
+    #: Committed visits *outside* the period that constrain the revisit gap in
+    #: both directions, for example a locked date later in the same coverage
+    #: cycle. They are gap blockers only: they consume no capacity, count toward
+    #: no obligation and are never returned as part of the month. Supplying them
+    #: is what lets a month place around a commitment it has not reached yet,
+    #: instead of accepting a date a later month then has to reject.
+    gap_blockers: Sequence[Visit] = ()
     required_visits: Mapping[str, int] = field(default_factory=dict)
     cycle_obligations: Mapping[str, int] = field(default_factory=dict)
 
@@ -510,6 +517,8 @@ class ObligationContext:
     config: FeasibilityConfig
     history: Sequence[Visit] = ()
     fixed: Sequence[Visit] = ()
+    #: Committed visits outside the period, constraining the revisit gap only.
+    gap_blockers: Sequence[Visit] = ()
     #: Declared per-asset visit obligation for this month. Only minima and
     #: cycle obligations belong here; a monthly maximum is never an obligation.
     required_visits: Mapping[str, int] = field(default_factory=dict)
@@ -992,6 +1001,7 @@ def _hard_constraint_violations(
     roster: Mapping[str, Asset],
     config: FeasibilityConfig,
     history: Sequence[Visit] = (),
+    gap_blockers: Sequence[Visit] = (),
 ) -> list[Violation]:
     """Check the hard constraints that any complete schedule must satisfy.
 
@@ -1082,7 +1092,12 @@ def _hard_constraint_violations(
     # 4. Per-asset checks. History is merged so that the revisit interval is
     #    enforced across month and cycle boundaries without a reset, and fixed
     #    visits constrain proposed ones through the same gap.
-    merged = visits_by_asset(tuple(history) + tuple(fixed) + tuple(proposed))
+    #    Gap blockers join the same grouping, so a commitment later in the cycle
+    #    constrains this period exactly as one before it does. The pairwise check
+    #    is order-independent because the merged bucket is sorted by date.
+    merged = visits_by_asset(
+        tuple(history) + tuple(gap_blockers) + tuple(fixed) + tuple(proposed)
+    )
     violations.extend(_revisit_violations(merged, roster, config))
     violations.extend(_monthly_count_violations(merged, period, roster, config))
 
@@ -1090,6 +1105,85 @@ def _hard_constraint_violations(
 
 
 # --- problem A: proposed-schedule validation --------------------------------
+
+
+def _days_in_month(year: int, month: int) -> int:
+    """Number of days in a calendar month.
+
+    Implemented here rather than through the standard library's ``calendar``
+    module because this module already defines a ``Calendar`` type for eligible
+    working dates, and importing the module under the same name would shadow it.
+    """
+
+    if month == 12:
+        return 31
+    return (date(year, month + 1, 1) - date(year, month, 1)).days
+
+
+def validate_committed_visits(
+    visits: Sequence[Visit],
+    calendar: Calendar,
+    roster: Sequence[Asset],
+    config: FeasibilityConfig,
+    history: Sequence[Visit] = (),
+) -> tuple[Violation, ...]:
+    """Validate an arbitrary set of committed visits, across month boundaries.
+
+    This exists because commitments must be checked before any allocation, and
+    they may fall in months the caller will never place. It is not a second hard
+    constraint implementation: it groups the visits by calendar month and runs
+    :func:`_hard_constraint_violations` once per group, passing every *other*
+    group as gap blockers. Month membership, working-date eligibility, active
+    assets, both daily capacities and the per-asset monthly maximum are therefore
+    evaluated exactly as they are for a schedule, while the revisit gap spans the
+    whole set with no month boundary reset.
+
+    Args:
+        visits: Committed visits in any order, from any number of months.
+        calendar: Eligible working dates.
+        roster: Asset roster.
+        config: Capacities and limits.
+        history: Visits before ``visits`` that must still constrain the gap.
+
+    Returns:
+        Every violation found, sorted deterministically. Empty means valid.
+    """
+
+    index = _index_roster(roster)
+    grouped: dict[tuple[int, int], list[Visit]] = {}
+    for visit in visits:
+        grouped.setdefault((visit.visit_date.year, visit.visit_date.month), []).append(
+            visit
+        )
+
+    violations: list[Violation] = []
+    for (year, month), bucket in sorted(grouped.items()):
+        period = DatePeriod(
+            start=date(year, month, 1),
+            end=date(year, month, _days_in_month(year, month)),
+        )
+        others = tuple(
+            v for (key, group) in grouped.items() if key != (year, month) for v in group
+        )
+        violations.extend(
+            _hard_constraint_violations(
+                fixed=tuple(bucket),
+                proposed=(),
+                period=period,
+                calendar=calendar,
+                roster=index,
+                config=config,
+                history=tuple(history),
+                gap_blockers=others,
+            )
+        )
+
+    # A pair of commitments spanning two months is seen from both sides, so the
+    # same violation can be produced twice. Deduplicate on the facts it reports.
+    unique: dict[tuple, Violation] = {}
+    for violation in violations:
+        unique.setdefault(violation.sort_key(), violation)
+    return tuple(sorted(unique.values(), key=lambda v: v.sort_key()))
 
 
 def validate_schedule(
@@ -1135,6 +1229,7 @@ def validate_schedule(
             roster=roster,
             config=context.config,
             history=context.history,
+            gap_blockers=context.gap_blockers,
         )
     )
 
@@ -1535,6 +1630,10 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
 
     node_budget = [context.config.search_node_limit]
     history_by_asset = visits_by_asset(context.history)
+    # Committed visits outside the period constrain placement in both directions,
+    # so the exact assessment and the constructive allocator agree on which dates
+    # are still available.
+    blockers_by_asset = visits_by_asset(context.gap_blockers)
 
     # Per-asset placements, honouring history, committed in-period visits and the
     # calendar-day gap. Committed visits already occupy their dates, so a
@@ -1549,6 +1648,9 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
             v.visit_date
             for v in fixed_by_asset.get(asset_id, ())
             if context.period.contains(v.visit_date)
+        ] + [
+            v.visit_date
+            for v in blockers_by_asset.get(asset_id, ())
         ]
         candidates = _candidate_dates(
             eligible, blocker_dates, limits.revisit_gap_days
