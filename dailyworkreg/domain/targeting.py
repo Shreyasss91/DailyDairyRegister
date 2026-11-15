@@ -33,14 +33,17 @@ from .cycle import (
     DtcWeights,
     MonthKey,
     resolve_cycle,
+    verify_cycle,
 )
 from .validator import (
     Asset,
     AssetType,
     Calendar,
     DatePeriod,
+    Evidence,
     FeasibilityConfig,
     FeasibilityStatus,
+    InputError,
     ObligationContext,
     ProposalContext,
     ValidationMode,
@@ -53,6 +56,111 @@ from .validator import (
 #: How a month's DTC targets were decided.
 CYCLE_MODE = "coverage_cycle"
 FALLBACK_MODE = "capacity_based_suggestion"
+
+#: A cycle resolution failed its structural verification.
+CYCLE_RESOLUTION_INVALID = "cycle_resolution_invalid"
+#: An explicit month selection was empty.
+C_MONTH_SELECTION_EMPTY = "month_selection_empty"
+#: An explicit month selection repeated a month.
+C_MONTH_SELECTION_DUPLICATE = "month_selection_duplicate"
+#: A selected month falls outside the declared cycle.
+C_MONTH_SELECTION_OUTSIDE_CYCLE = "month_selection_outside_cycle"
+#: Committed visits exceed an asset's cycle obligation.
+C_CYCLE_OVER_COVERED = "cycle_obligation_over_covered"
+#: A multi-month helper received a partial (non full-calendar-month) request.
+C_PARTIAL_PERIOD_UNSUPPORTED = "partial_period_unsupported"
+
+
+def _validated_month_selection(
+    selection: Sequence[MonthKey] | None,
+    cycle_months: Sequence[MonthKey],
+    cycle: CoverageCycle,
+) -> tuple[MonthKey, ...]:
+    """Validate an explicit month selection and return it in chronological order.
+
+    An empty selection is rejected rather than accepted: a run that places no
+    month would otherwise report the worst of zero outcomes, which is success,
+    and a caller would present an empty result as a complete plan.
+
+    Raises:
+        InputError: On an empty selection, a duplicate month, or a month outside
+            the declared cycle.
+    """
+
+    if selection is None:
+        return tuple(cycle_months)
+
+    chosen = tuple(selection)
+    if not chosen:
+        raise InputError(
+            C_MONTH_SELECTION_EMPTY,
+            "months_to_place was explicitly empty; at least one month must be "
+            "selected, because a run that places nothing is not a successful "
+            "allocation",
+        )
+    seen: set[MonthKey] = set()
+    for month in chosen:
+        if month in seen:
+            raise InputError(
+                C_MONTH_SELECTION_DUPLICATE,
+                f"month {month.label()} was selected more than once",
+            )
+        seen.add(month)
+        if not cycle.contains(month):
+            raise InputError(
+                C_MONTH_SELECTION_OUTSIDE_CYCLE,
+                f"month {month.label()} is outside the declared cycle",
+            )
+    # Chronological output regardless of input order.
+    return tuple(sorted(chosen, key=lambda m: m.ordinal()))
+
+
+def _validated_month_sequence(months: Sequence[MonthKey]) -> tuple[MonthKey, ...]:
+    """Validate a fallback month sequence: non-empty, unique, chronological.
+
+    Raises:
+        InputError: On an empty sequence or a duplicate month.
+    """
+
+    chosen = tuple(months)
+    if not chosen:
+        raise InputError(
+            C_MONTH_SELECTION_EMPTY,
+            "at least one month is required; a run that places nothing is not a "
+            "successful allocation",
+        )
+    seen: set[MonthKey] = set()
+    for month in chosen:
+        if month in seen:
+            raise InputError(
+                C_MONTH_SELECTION_DUPLICATE,
+                f"month {month.label()} appears more than once",
+            )
+        seen.add(month)
+    # Sorted, so history can never be carried backwards from a future month into
+    # an earlier one.
+    return tuple(sorted(chosen, key=lambda m: m.ordinal()))
+
+
+def _require_full_month(period: DatePeriod, caller: str) -> None:
+    """Reject a partial period in a convenience API.
+
+    Multi-month cycle and fallback helpers are full-calendar-month only. They say
+    so explicitly rather than quietly applying full-month limits to a shorter
+    period, which is the failure mode the partial-month contract exists to
+    prevent.
+    """
+
+    if not period.is_full_month:
+        raise InputError(
+            C_PARTIAL_PERIOD_UNSUPPORTED,
+            (
+                f"{caller} supports full calendar months only; "
+                f"{period.start.isoformat()} to {period.end.isoformat()} is a "
+                "partial month and needs explicit prorated limits through "
+                "allocate_month"
+            ),
+        )
 
 
 class TargetMode(str, Enum):
@@ -215,6 +323,9 @@ class MultiMonthResult:
     cycle_resolution: CycleResolution | None = None
     seed: int = 0
     allocator_version: str = "1.0.0"
+    #: Assets whose committed visits exceed their cycle obligation. Surfaced
+    #: rather than silently adding further visits.
+    over_covered: tuple[Evidence, ...] = ()
 
     @property
     def status(self) -> FeasibilityStatus:
@@ -286,32 +397,88 @@ def run_cycle(
         rotation_offset=rotation_offset,
     )
 
-    place = tuple(months_to_place) if months_to_place is not None else resolution.months
+    # A stored or freshly built plan is only trusted once its structure is
+    # verified. A corrupted resolution must never reach a successful allocation,
+    # so this fails closed rather than allocating from an inconsistent plan.
+    problems = verify_cycle(resolution)
+    if problems:
+        raise InputError(
+            CYCLE_RESOLUTION_INVALID,
+            "the cycle resolution failed verification: " + "; ".join(problems),
+        )
+
+    place = _validated_month_selection(
+        months_to_place, resolution.months, cycle
+    )
     place_set = set(place)
     locked = dict(fixed_by_month or {})
 
+    # Committed visits anywhere in the cycle count toward that asset's cycle
+    # obligation, whichever month they fall in. Without this, a DTC whose
+    # commitment landed in November while the resolver assigned it December would
+    # be owed a second visit in December, so the cycle would over-cover it.
+    committed_in_cycle: dict[str, int] = {}
+    for month, visits in locked.items():
+        for visit in visits:
+            if cycle.contains(month):
+                committed_in_cycle[visit.asset_id] = (
+                    committed_in_cycle.get(visit.asset_id, 0) + 1
+                )
+
+    over_covered = tuple(
+        Evidence(
+            constraint=C_CYCLE_OVER_COVERED,
+            detail=(
+                f"{asset_id} has {committed_in_cycle[asset_id]} committed visits in "
+                f"the cycle but its cycle obligation is {cycle.visits_per_asset}; "
+                "no further visits were added for it"
+            ),
+            asset_id=asset_id,
+            limit=cycle.visits_per_asset,
+            actual=count,
+        )
+        for asset_id, count in sorted(committed_in_cycle.items())
+        if count > cycle.visits_per_asset
+    )
+
     carried: list[Visit] = list(prior_visits)
     plans: list[MonthPlan] = []
+    discharged: dict[str, int] = {}
 
     for plan in resolution.plans:
+        month_fixed = tuple(locked.get(plan.month, ()))
         if plan.month not in place_set:
-            # Still resolve its obligations, but do not invent dates for a month
-            # the caller did not ask to schedule.
+            # Not scheduled, but a commitment here still happened and must
+            # constrain later months. Skipping placement is not permission to
+            # forget it.
+            carried.extend(month_fixed)
+            for visit in month_fixed:
+                discharged[visit.asset_id] = discharged.get(visit.asset_id, 0) + 1
             continue
+
+        # Reduce this month's obligations by what commitments already discharged
+        # for that asset anywhere in the cycle.
+        obligations: dict[str, int] = {}
+        for asset_id, count in plan.obligations.items():
+            already = discharged.get(asset_id, 0)
+            remaining = max(0, count - already)
+            if remaining > 0:
+                obligations[asset_id] = remaining
+
         period = _period_for(plan.month)
-        month_locked = tuple(locked.get(plan.month, ()))
         result = allocate_month(
             AllocationRequest(
                 period=period,
                 calendar=calendar,
                 roster=roster,
                 config=config,
-                cycle_obligations=dict(plan.obligations),
+                cycle_obligations=obligations,
                 history=tuple(carried),
-                fixed=month_locked,
+                fixed=month_fixed,
                 seed=seed + plan.month_index,
                 attempt_budget=attempt_budget,
                 from_cycle=True,
+                weights=resolution.weights,
             )
         )
         plans.append(
@@ -320,19 +487,25 @@ def run_cycle(
                 period=period,
                 result=result,
                 mode=TargetMode.COVERAGE_CYCLE,
-                obligations=dict(plan.obligations),
+                obligations=obligations,
             )
         )
-        # A failed month contributes nothing to history; carrying it would push
-        # the gap constraint onto a visit that never happened.
+        for visit in month_fixed:
+            discharged[visit.asset_id] = discharged.get(visit.asset_id, 0) + 1
+
+        # Committed visits constrain later months whether or not this month's new
+        # allocations succeeded; the commitment exists either way. Only visits
+        # that were actually placed are carried as generated allocations.
+        carried.extend(month_fixed)
         if result.status is FeasibilityStatus.FEASIBLE:
-            carried.extend(result.visits)
+            carried.extend(v for v in result.visits if v not in month_fixed)
 
     return MultiMonthResult(
         mode=TargetMode.COVERAGE_CYCLE,
         months=tuple(plans),
         cycle_resolution=resolution,
         seed=seed,
+        over_covered=over_covered,
     )
 
 
@@ -366,11 +539,14 @@ def run_fallback(
     areas_for = dict(area_required or {})
     feeders_for = dict(feeder_required or {})
 
+    ordered_months = _validated_month_sequence(months)
+
     carried: list[Visit] = list(prior_visits)
     plans: list[MonthPlan] = []
 
-    for index, month in enumerate(months):
+    for index, month in enumerate(ordered_months):
         period = _period_for(month)
+        _require_full_month(period, "run_fallback")
         area_map = dict(areas_for.get(month, {}))
         feeder_map = dict(feeders_for.get(month, {}))
         area_and_feeder_demand = sum(area_map.values()) + sum(feeder_map.values())

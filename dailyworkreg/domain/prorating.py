@@ -30,6 +30,13 @@ from .validator import Asset, AssetLimits, DatePeriod, FeasibilityConfig, InputE
 C_PARTIAL_MONTH_UNRESOLVED = "partial_month_effective_limits_missing"
 #: Raised when supplied effective limits contradict the configured ones.
 C_PARTIAL_MONTH_INCONSISTENT = "partial_month_effective_limits_inconsistent"
+#: Raised when supplied effective limits are empty or leave limits unaccounted for.
+C_PARTIAL_MONTH_INCOMPLETE = "partial_month_effective_limits_incomplete"
+#: Raised when effective limits name an asset that is not in the roster.
+C_PARTIAL_MONTH_UNKNOWN_ASSET = "partial_month_effective_limits_unknown_asset"
+
+#: Key used to supply the default effective limits explicitly.
+DEFAULT_LIMITS_KEY = "__default__"
 
 
 def full_month_config(config: FeasibilityConfig) -> FeasibilityConfig:
@@ -66,7 +73,7 @@ def partial_month_config(
             configured minimum, which would mean the proration was miscomputed.
     """
 
-    if effective_limits is None:
+    if effective_limits is None or not effective_limits:
         raise InputError(
             C_PARTIAL_MONTH_UNRESOLVED,
             (
@@ -78,19 +85,30 @@ def partial_month_config(
             ),
         )
 
-    default = effective_limits.get("__default__")
+    default = effective_limits.get(DEFAULT_LIMITS_KEY)
     merged: dict[str, AssetLimits] = {}
     for asset_id, limits in effective_limits.items():
-        if asset_id == "__default__":
+        if asset_id == DEFAULT_LIMITS_KEY:
             continue
         configured = config.limits_for(asset_id)
         _check_prorated(asset_id, configured, limits)
         merged[asset_id] = limits
 
-    if default is not None:
-        _check_prorated("__default__", config.default_asset_limits, default)
+    # The default limits must be accounted for explicitly. Falling back to the
+    # configured default silently applied full-month limits to a shorter period,
+    # which is precisely the bypass this contract exists to close.
+    if default is None:
+        raise InputError(
+            C_PARTIAL_MONTH_INCOMPLETE,
+            (
+                "a partial month must supply effective default limits under "
+                f"{DEFAULT_LIMITS_KEY!r}; omitting them would silently apply the "
+                "un-prorated configured default"
+            ),
+        )
+    _check_prorated(DEFAULT_LIMITS_KEY, config.default_asset_limits, default)
 
-    new_default = default if default is not None else config.default_asset_limits
+    new_default = default
     return FeasibilityConfig(
         combined_daily_cap=config.combined_daily_cap,
         area_daily_cap=config.area_daily_cap,

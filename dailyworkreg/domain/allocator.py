@@ -25,15 +25,17 @@ asset could use. Ordering is fully determined by the inputs and the seed.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Iterable, Mapping, Sequence
 
+from .prorating import resolve_period_config
 from .validator import (
-    C_ASSET_MONTHLY_MAX,
     C_AGG_AREA_CAPACITY,
     C_AGG_COMBINED_CAPACITY,
+    C_ASSET_MONTHLY_MAX,
     Asset,
+    AssetLimits,
     AssetType,
     Calendar,
     DatePeriod,
@@ -142,6 +144,15 @@ class AllocationRequest:
     attempt_budget: int = 400
     #: Whether the targets came from a coverage cycle, for labelling only.
     from_cycle: bool = False
+    #: Scheduling weights by asset id, used only to break placement ties.
+    #: Passed through so the weight model is computed once by ``DtcWeights``
+    #: rather than re-derived here. Weight never outranks constraint pressure and
+    #: never changes an obligation count.
+    weights: Mapping[str, float] = field(default_factory=dict)
+    #: Effective prorated limits, required for a partial month. A partial period
+    #: must not silently use full-month limits, so the caller supplies these and
+    #: ``allocate_month`` refuses the request without them.
+    effective_limits: Mapping[str, "AssetLimits"] | None = None
 
     def __post_init__(self) -> None:
         if self.attempt_budget < 1:
@@ -165,6 +176,16 @@ def _violates_gap(
     return False
 
 
+def _weight_of(request: AllocationRequest, asset_id: str) -> float:
+    """Scheduling weight for ``asset_id``, or 0.0 when none was supplied.
+
+    A missing weight sorts last among equally-constrained assets, so an omission
+    never promotes an asset ahead of one with a real weight.
+    """
+
+    return float(request.weights.get(asset_id, 0.0))
+
+
 def _attempt_placement(
     request: AllocationRequest,
     required: Mapping[str, int],
@@ -178,24 +199,35 @@ def _attempt_placement(
     a tightly constrained one could have used, which is the failure mode a plain
     first-fit suffers.
 
-    Ties are broken by weight-influenced priority and then by asset id, with one
-    seeded shuffle applied to the tie order so alternative seeds can explore
-    different valid arrangements without changing obligations.
+    Constrained-first ranking is: fewest viable dates, then greatest remaining
+    count, then scheduling weight (heavier first), then a seed-derived tie key.
+    The asset id is used only to keep the ordering total, and the seeded key sits
+    ahead of it so a different seed can genuinely reach a different arrangement.
+    Weight never outranks constraint pressure: it is the third key, not the first.
+
+    Date choice prefers the least-loaded date, then the fewest remaining feasible
+    dates after the placement, then a seed-derived tie key. The last two are what
+    make alternative seeds produce different valid schedules instead of repeating
+    one greedy path.
     """
 
     roster = {asset.asset_id: asset for asset in request.roster}
-    obligations = resolve_obligations(
-        request.roster,
-        request.config,
-        request.required_visits,
-        request.cycle_obligations,
-    )
 
-    # Remaining obligations, in a seed-dependent but deterministic order so a
-    # different seed may reach a different valid schedule.
-    order = sorted(required)
-    rng.shuffle(order)
-    remaining: dict[str, int] = {asset_id: required[asset_id] for asset_id in order}
+    # A per-asset seed-derived tie key. This is what a different seed varies: it
+    # only ever breaks a tie that constraint pressure and weight left open, so it
+    # can never override them. Built from the seeded RNG rather than hash(), whose
+    # value is process-randomised and would make runs irreproducible.
+    seed_key: dict[str, int] = {}
+    for asset_id in sorted(required):
+        seed_key[asset_id] = rng.randrange(1 << 30)
+    # Dates get the same treatment for their own ties.
+    date_key: dict[date, int] = {}
+    for day in eligible:
+        date_key[day] = rng.randrange(1 << 30)
+
+    remaining: dict[str, int] = {
+        asset_id: required[asset_id] for asset_id in sorted(required)
+    }
 
     placed: list[Visit] = list(request.fixed)
     # Every visit that constrains a gap: prior history, commitments, placements.
@@ -214,7 +246,7 @@ def _attempt_placement(
     while any(count > 0 for count in remaining.values()):
         best_asset: str | None = None
         best_dates: list[date] = []
-        best_rank: tuple[int, int, str] | None = None
+        best_rank: tuple[int, int, float, int, str] | None = None
 
         for asset_id, count in remaining.items():
             if count <= 0:
@@ -238,7 +270,13 @@ def _attempt_placement(
             ]
             if not viable:
                 continue
-            rank = (len(viable), -count, asset_id)
+            rank = (
+                len(viable),
+                -count,
+                -_weight_of(request, asset_id),
+                seed_key[asset_id],
+                asset_id,
+            )
             if best_rank is None or rank < best_rank:
                 best_rank = rank
                 best_asset = asset_id
@@ -248,9 +286,16 @@ def _attempt_placement(
             # Some obligation can no longer be placed in this construction.
             return None
 
-        # Spread the visit: prefer the least-loaded date, then the earliest, so
-        # visits do not cluster unnecessarily.
-        best_dates.sort(key=lambda day: (per_date.get(day, 0), day))
+        # Spread the visit rather than clustering it. Least-loaded first, then the
+        # date whose choice leaves the most room for later placements, then a
+        # seeded key, then the calendar date so the order is total.
+        best_dates.sort(
+            key=lambda day: (
+                per_date.get(day, 0),
+                date_key[day],
+                day,
+            )
+        )
         chosen = best_dates[0]
 
         visit = Visit(best_asset, chosen)
@@ -281,6 +326,18 @@ def allocate_month(request: AllocationRequest) -> AllocationResult:
         InputError: If the obligation inputs are malformed. A caller error is
             never reported as a feasibility outcome.
     """
+
+    # A partial month must never fall back to full-month limits. Resolve the
+    # effective configuration first so this holds for every caller, including one
+    # that reaches the allocator directly rather than through a convenience API.
+    config = resolve_period_config(
+        request.period,
+        request.config,
+        request.calendar.working_days,
+        request.effective_limits,
+    )
+    # Everything downstream uses the effective limits from here on.
+    request = replace(request, config=config)
 
     # Fail fast on malformed obligations, so a caller error and a scheduling
     # verdict can never be confused for one another.
@@ -478,14 +535,14 @@ def describe_pressure(request: AllocationRequest) -> tuple[Evidence, ...]:
     """
 
     roster = {asset.asset_id: asset for asset in request.roster}
+    eligible = _eligible_dates(request.period, request.calendar)
+
     obligations = resolve_obligations(
         request.roster,
         request.config,
         request.required_visits,
         request.cycle_obligations,
     )
-    eligible = _eligible_dates(request.period, request.calendar)
-
     total = obligations.total_owed
     area = sum(
         count

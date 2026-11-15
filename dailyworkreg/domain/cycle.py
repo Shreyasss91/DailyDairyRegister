@@ -397,12 +397,15 @@ def resolve_cycle(
             )
         )
 
-    # Deal the queue out by taking one unit per month in rotation, so a small
-    # roster spreads across the cycle instead of stacking into its first months.
-    # Front-loading was a defect: one DTC over three months came out as 1/0/0,
-    # leaving it never revisited. Round-robin dealing keeps the monthly totals at
-    # differ-by-at-most-one while spreading assets through the whole cycle, so
-    # the seven-day gap and history continuity are exercised across boundaries.
+    # Deal the queue out round-robin so a small roster spreads across the cycle
+    # instead of stacking into its first months. Front-loading was a defect: one
+    # DTC over three months came out as 1/0/0, leaving it never revisited.
+    #
+    # Units are counted per asset, not per key. Storing ``{asset_id: 1}`` from a
+    # list of repeats collapsed an asset owing several visits in one month down to
+    # a single visit: the plan reported ``total == 2`` while its obligations held
+    # ``{asset: 1}``, so a caller consumed one visit and the cycle still looked
+    # feasible. Obligations therefore carry the actual multiplicity.
     plans: list[CycleMonthPlan] = []
     assigned: list[list[str]] = [[] for _ in months]
     remaining_units = list(queue)
@@ -416,7 +419,10 @@ def resolve_cycle(
 
     for index, month in enumerate(months):
         chosen = assigned[index]
-        obligations = {asset_id: 1 for asset_id in chosen}
+        # Count repeated occurrences rather than collapsing them to one.
+        obligations: dict[str, int] = {}
+        for asset_id in chosen:
+            obligations[asset_id] = obligations.get(asset_id, 0) + 1
         plans.append(
             CycleMonthPlan(
                 month=month,
@@ -442,34 +448,140 @@ def resolve_cycle(
 
 
 def verify_cycle(resolution: CycleResolution) -> tuple[str, ...]:
-    """Check a resolution's internal arithmetic. Returns problems, empty if sound.
+    """Independently verify a stored cycle resolution. Returns problems, empty if sound.
 
-    Every active DTC must receive exactly its cycle obligation, and the monthly
-    plans must add up to the cycle total. This is deliberately a separate,
-    checkable function rather than an assertion buried in the resolver, so a
-    caller can verify a stored plan without re-running the resolution.
+    This checks the *structure* of a resolution rather than re-running it, so a
+    plan read back from storage can be trusted before it drives an allocation.
+    It verifies values and multiplicities, not merely the presence of asset ids:
+    counting ``obligations.keys()`` treats every key as one visit, which is
+    exactly how a month owing two visits to one asset silently became one.
+
+    The invariants checked are:
+
+    *   the resolution's months equal the declared cycle's months, in order;
+    *   month indices are ``0..n-1`` and consistent with the month key;
+    *   every planned asset belongs to the cycle roster;
+    *   every obligation value is a positive integer;
+    *   each month's obligations sum to its declared ``total``;
+    *   each asset's total across months equals its ``cycle_totals`` entry;
+    *   cycle totals equal ``visits_per_asset`` for every roster asset;
+    *   ``scheduled`` and ``obligations`` describe the same assignments and
+       multiplicities;
+    *   monthly totals differ by at most one, the resolver's distribution
+       contract.
     """
 
     problems: list[str] = []
     expected = resolution.cycle.visits_per_asset
-    seen: dict[str, int] = {asset_id: 0 for asset_id in resolution.roster_ids}
-    for plan in resolution.plans:
-        for asset_id in plan.obligations:
-            seen[asset_id] = seen.get(asset_id, 0) + 1
-    for asset_id, count in sorted(seen.items()):
+    roster = set(resolution.roster_ids)
+
+    # 1. Months must match the declared cycle exactly, in order.
+    declared = resolution.cycle.months()
+    if resolution.months != declared:
+        problems.append(
+            f"resolution months {[m.label() for m in resolution.months]} do not "
+            f"match the declared cycle {[m.label() for m in declared]}"
+        )
+    if len(resolution.plans) != len(declared):
+        problems.append(
+            f"resolution has {len(resolution.plans)} month plans for a "
+            f"{len(declared)}-month cycle"
+        )
+
+    per_asset: dict[str, int] = {asset_id: 0 for asset_id in roster}
+
+    for position, plan in enumerate(resolution.plans):
+        # 2. Month index and key consistency.
+        if plan.month_index != position:
+            problems.append(
+                f"plan {position} reports month_index {plan.month_index}"
+            )
+        if position < len(declared) and plan.month != declared[position]:
+            problems.append(
+                f"plan {position} is {plan.month.label()}, expected "
+                f"{declared[position].label()}"
+            )
+        if resolution.cycle.ordinal_index(plan.month) < 0:
+            problems.append(
+                f"plan month {plan.month.label()} is outside the declared cycle"
+            )
+
+        # 3. Obligation values must be positive integers, and every asset must
+        #    belong to the cycle roster.
+        for asset_id, count in plan.obligations.items():
+            if asset_id not in roster:
+                problems.append(
+                    f"{plan.month.label()} obligates {asset_id!r}, which is not in "
+                    "the cycle roster"
+                )
+                continue
+            if not isinstance(count, int) or isinstance(count, bool):
+                problems.append(
+                    f"{plan.month.label()} obligation for {asset_id} is "
+                    f"{count!r}, not an integer count"
+                )
+                continue
+            if count <= 0:
+                problems.append(
+                    f"{plan.month.label()} obligation for {asset_id} is {count}, "
+                    "expected a positive count"
+                )
+                continue
+            per_asset[asset_id] = per_asset.get(asset_id, 0) + count
+
+        # 4. The month's declared total must equal its obligation values.
+        declared_total = sum(
+            c for c in plan.obligations.values() if isinstance(c, int)
+        )
+        if declared_total != plan.total:
+            problems.append(
+                f"{plan.month.label()} obligations sum to {declared_total} but "
+                f"total is {plan.total}"
+            )
+
+        # 5. `scheduled` must match `obligations` exactly, multiplicities included.
+        scheduled_counts: dict[str, int] = {}
+        for asset_id in plan.scheduled:
+            scheduled_counts[asset_id] = scheduled_counts.get(asset_id, 0) + 1
+        if scheduled_counts != dict(plan.obligations):
+            problems.append(
+                f"{plan.month.label()} scheduled assignments "
+                f"{sorted(scheduled_counts.items())} disagree with obligations "
+                f"{sorted(plan.obligations.items())}"
+            )
+
+    # 6. Per-asset cycle totals must match, and match visits_per_asset.
+    for asset_id in sorted(roster):
+        count = per_asset.get(asset_id, 0)
+        declared_cycle = resolution.cycle_totals.get(asset_id)
+        if declared_cycle is None:
+            problems.append(f"{asset_id} has no cycle_totals entry")
+        elif count != declared_cycle:
+            problems.append(
+                f"{asset_id} receives {count} visits across the cycle but "
+                f"cycle_totals says {declared_cycle}"
+            )
         if count != expected:
             problems.append(
-                f"{asset_id} received {count} visits in the cycle, expected {expected}"
+                f"{asset_id} receives {count} visits across the cycle, expected "
+                f"{expected}"
             )
-    monthly_total = sum(plan.total for plan in resolution.plans)
-    if monthly_total != resolution.total_obligation:
+
+    for asset_id in sorted(set(resolution.cycle_totals) - roster):
         problems.append(
-            f"monthly plans total {monthly_total}, cycle obligation is "
-            f"{resolution.total_obligation}"
+            f"cycle_totals names {asset_id!r}, which is not in the cycle roster"
         )
+
+    # 7. The distribution contract: monthly totals differ by at most one.
     totals = sorted(plan.total for plan in resolution.plans)
     if totals and totals[-1] - totals[0] > 1:
+        problems.append(f"monthly totals are uneven by more than one: {totals}")
+
+    # 8. The whole resolution must carry exactly the cycle obligation.
+    if sum(per_asset.values()) != resolution.total_obligation:
         problems.append(
-            f"monthly totals are uneven by more than one: {totals}"
+            f"plans carry {sum(per_asset.values())} visits but the cycle "
+            f"obligation is {resolution.total_obligation}"
         )
+
     return tuple(problems)
