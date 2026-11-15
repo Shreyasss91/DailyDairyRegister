@@ -559,14 +559,46 @@ document.getElementById('gen-run').addEventListener('click', async () => {
 
 // --- draft -----------------------------------------------------------------
 
+/**
+ * Render validator attribution exactly as the server sent it.
+ *
+ * A single-asset finding shows its own id and type; a multi-asset finding shows
+ * the contributing set. Nothing here reads `detail` to recover an asset name, and
+ * nothing here decides which assets are relevant: an empty set is displayed as an
+ * empty set, because that is what the domain reported.
+ */
+function attributionTable(items) {
+  const ids = (item) => (item.contributing_assets || []).map((asset) => `${asset.asset_id} (${asset.asset_type})`).join(', ');
+  const dates = (item) => [item.visit_date, ...(item.offending_dates || [])].filter(Boolean).join(', ');
+  return table(
+    ['Month', 'Kind', 'Constraint', 'Asset', 'Type', 'Limit', 'Actual', 'Dates', 'Contributing assets', 'Detail'],
+    items.map((item) => el('tr', {}, [
+      el('td', { text: item.month || '' }),
+      el('td', { text: item.kind || '' }),
+      el('td', { text: item.constraint }),
+      el('td', { text: item.asset_id || '' }),
+      el('td', { text: item.asset_type || '' }),
+      el('td', { text: item.limit === null || item.limit === undefined ? '' : String(item.limit) }),
+      el('td', { text: item.actual === null || item.actual === undefined ? '' : String(item.actual) }),
+      el('td', { text: dates(item) }),
+      el('td', { text: ids(item) }),
+      el('td', { text: item.detail }),
+    ])),
+  );
+}
+
 async function openDraft(runId) {
   state.runId = runId;
   const head = document.getElementById('draft-head');
   const exceptions = document.getElementById('draft-exceptions');
+  const evidence = document.getElementById('draft-evidence');
   const target = document.getElementById('draft-rows');
   head.textContent = '';
   target.textContent = '';
   hide(exceptions);
+  hide(evidence);
+  exceptions.textContent = '';
+  evidence.textContent = '';
 
   const register = await api(`/api/generations/${runId}`);
   head.append(
@@ -583,15 +615,17 @@ async function openDraft(runId) {
   if (register.exceptions.length) {
     exceptions.hidden = false;
     exceptions.append(el('strong', { text: 'Exceptions' }));
-    exceptions.append(table(
-      ['Kind', 'Month', 'Asset', 'Detail'],
-      register.exceptions.map((item) => el('tr', {}, [
-        el('td', { text: item.kind }),
-        el('td', { text: item.month || '' }),
-        el('td', { text: item.asset_id || '' }),
-        el('td', { text: item.detail }),
-      ])),
-    ));
+    exceptions.append(attributionTable(register.exceptions));
+  }
+
+  const evidenceRows = register.months.flatMap((month) =>
+    month.evidence.map((item) => ({ ...item, month: month.month, kind: 'evidence' })));
+  if (evidenceRows.length) {
+    const block = document.getElementById('draft-evidence');
+    block.hidden = false;
+    block.textContent = '';
+    block.append(el('strong', { text: 'Month evidence' }));
+    block.append(attributionTable(evidenceRows));
   }
 
   target.append(table(

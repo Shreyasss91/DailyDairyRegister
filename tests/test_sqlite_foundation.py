@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from dailyworkreg.infrastructure.sqlite import (
+    MIGRATIONS,
     SCHEMA_VERSION,
     StorageError,
     applied_versions,
@@ -40,12 +41,17 @@ def db(tmp_path: Path) -> sqlite3.Connection:
 
 
 def test_a_fresh_database_records_every_migration(db):
-    assert applied_versions(db) == (SCHEMA_VERSION,)
+    # Every declared migration is recorded, and the newest one matches the
+    # declared schema version. Asserting a literal tuple would make adding a
+    # migration look like a regression.
+    assert applied_versions(db) == tuple(m.version for m in MIGRATIONS)
+    assert applied_versions(db)[-1] == SCHEMA_VERSION
 
 
 def test_migrations_are_idempotent(db):
+    before = applied_versions(db)
     assert apply_migrations(db) == ()
-    assert applied_versions(db) == (SCHEMA_VERSION,)
+    assert applied_versions(db) == before
 
 
 def test_the_database_file_is_created_where_asked(tmp_path):

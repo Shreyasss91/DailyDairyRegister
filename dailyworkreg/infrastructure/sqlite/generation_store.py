@@ -100,6 +100,9 @@ class ExceptionRecord:
     offending_dates_json: str
     limit_value: int | None
     actual_value: int | None
+    #: Serialized contributing assets. Defaulted so a caller that predates the
+    #: column still constructs a record, and so an old row reads as no attribution.
+    contributing_assets_json: str = "[]"
 
 
 @dataclass(frozen=True)
@@ -128,6 +131,17 @@ class RunSummary:
     master_version: int
     revision_number: int | None
     missing_content: tuple[str, ...]
+
+
+def _column(row: sqlite3.Row, name: str, default: str) -> str:
+    """Read an optional column, for a row selected from a schema that lacked it.
+
+    Migrations add new columns, so this is normally unnecessary. It exists so a
+    database opened without having been migrated, and read for history, still
+    yields its older rows instead of raising on a key that never existed.
+    """
+
+    return row[name] if name in row.keys() else default
 
 
 def next_revision_number(connection: sqlite3.Connection) -> int:
@@ -263,8 +277,9 @@ def insert_run(
             """
             INSERT INTO generation_exception (run_id, ordinal, kind, constraint_name,
                 detail, month_key, asset_id, asset_type, visit_date,
-                offending_dates_json, limit_value, actual_value)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                offending_dates_json, limit_value, actual_value,
+                contributing_assets_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -280,6 +295,7 @@ def insert_run(
                     item.offending_dates_json,
                     item.limit_value,
                     item.actual_value,
+                    item.contributing_assets_json,
                 )
                 for item in exceptions
             ],
@@ -388,6 +404,9 @@ def read_run(connection: sqlite3.Connection, run_id: str) -> StoredRun:
                 offending_dates_json=item["offending_dates_json"],
                 limit_value=item["limit_value"],
                 actual_value=item["actual_value"],
+                # A row written before the column existed has no attribution to
+                # read, so it is displayable with an empty set rather than an error.
+                contributing_assets_json=_column(item, "contributing_assets_json", "[]"),
             )
             for item in exceptions
         ),

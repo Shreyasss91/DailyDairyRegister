@@ -358,6 +358,9 @@ class DraftException:
     offending_dates: tuple[date, ...] = ()
     limit: int | None = None
     actual: int | None = None
+    #: The assets that jointly caused an aggregate finding, when the domain
+    #: identified them. Empty for a single-asset or unattributable finding.
+    contributing_assets: tuple[tuple[str, AssetType], ...] = ()
 
     @classmethod
     def from_evidence(
@@ -379,6 +382,7 @@ class DraftException:
             offending_dates=tuple(evidence.offending_dates),
             limit=evidence.limit,
             actual=evidence.actual,
+            contributing_assets=tuple(evidence.contributing_assets),
         )
 
     @classmethod
@@ -395,6 +399,7 @@ class DraftException:
             offending_dates=tuple(violation.offending_dates),
             limit=violation.limit,
             actual=violation.actual,
+            contributing_assets=tuple(violation.contributing_assets),
         )
 
 

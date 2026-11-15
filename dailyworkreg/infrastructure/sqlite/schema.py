@@ -23,7 +23,7 @@ from dataclasses import dataclass
 #: Bumped when the schema below changes. Migrations are applied in order and each
 #: one is idempotent, so re-running is safe and a fresh database simply replays the
 #: list.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -355,7 +355,24 @@ _MIGRATION_1 = Migration(
     ),
 )
 
-MIGRATIONS: tuple[Migration, ...] = (_MIGRATION_1,)
+# A generated draft can carry a finding caused jointly by several assets, such as
+# an area or combined capacity proof. Which assets those are is a fact the
+# validator established, so it is stored rather than left in the detail text. Rows
+# written before this column existed read as no attribution, which is the truth
+# about them.
+_MIGRATION_2 = Migration(
+    version=2,
+    name="attribute aggregate generation exceptions to their contributing assets",
+    statements=(
+        """
+        ALTER TABLE generation_exception
+        ADD COLUMN contributing_assets_json TEXT NOT NULL DEFAULT '[]'
+        """,
+    ),
+)
+
+
+MIGRATIONS: tuple[Migration, ...] = (_MIGRATION_1, _MIGRATION_2)
 
 
 def ensure_migration_table(connection: sqlite3.Connection) -> None:

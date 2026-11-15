@@ -665,3 +665,55 @@ weight. The application feeds that model and owns no second formula.
 
 **No dependency was added for this work.** FastAPI, uvicorn, openpyxl and the
 standard library were already available; no solver, scheduler or ORM was introduced.
+## 21. Implemented evidence attribution contract (as built)
+
+A diagnostic that describes which assets a failure concerns only in prose cannot be
+shown correctly. This section records the contract the validator, the store and the
+surface now share. It changes no constraint, limit, policy or verdict.
+
+**Attribution is singular or plural, never invented.** A fact about one asset names
+it in `Evidence.asset_id` with its roster `asset_type`. A fact about the combined
+demand of several assets lists them in `Evidence.contributing_assets` and leaves the
+singular fields empty, because assigning one asset to a joint proof picks a name out
+of arithmetic that does not single any out. A fact about the whole problem, such as a
+node budget exhausted while packing every asset at once, carries neither and says so
+in `detail`; an empty attribution is the honest answer and is presented as empty.
+
+**Which assets an aggregate proof names.** Area capacity names only the area assets
+whose demand is counted: those still owed visits this month and those already holding
+a committed visit in it. DTC and feeder assets are excluded, because they consume none
+of the area cap. Combined capacity names every asset in that same demanded set across
+all three categories. A joint packing failure names the assets that could not be
+packed, which is exactly that set. The roster is never named wholesale.
+
+**The collection is deterministic.** `contributing_assets` is deduplicated, ordered by
+asset id and paired with the type from the roster in force. An id absent from the
+roster is dropped rather than resolved by guesswork, so every name an operator sees is
+an asset in that run. `attribute_assets()` is the single place that decides this shape,
+and both `Violation.contributing_assets` and `Evidence.contributing_assets` use it, so
+the two cannot drift in order or membership.
+
+**Constructor compatibility.** `Evidence.contributing_assets` was appended last, after
+`limit` and `actual`, so a caller that constructed evidence positionally keeps its
+meaning. Inserting the field earlier would have moved a limit into the wrong field
+silently.
+
+**Preflight conversion preserves identity.** A committed visit that already breaks a
+hard constraint is reported through the same fields the concrete validator produces,
+including the contributing set, so an infeasibility from an invalid commitment is as
+diagnosable as a rejected schedule.
+
+**Persistence, and older records.** Evidence and exceptions store constraint, detail,
+asset id, asset type, visit date, offending dates, contributing assets, limit and
+actual. The exception table gained `contributing_assets_json` in schema migration 2
+with an empty default; a row written before it reads as having no attribution, which
+is the truth about that row. Decoding is lenient throughout: a missing field decodes
+to empty or absent, and an asset type this build does not recognise is dropped rather
+than raised, so a history written by another build remains readable. Nothing is
+recovered from `detail` to fill a gap, and the request snapshot schema is untouched
+because evidence serialisation and request snapshots are separate contracts.
+
+**Presentation.** The generation response reports each month's evidence and each
+exception with those fields, rendering an enum or an already-stored string identically
+so the client need not know which it received. The interface prints the supplied
+values in their own columns and reads no message text to recover an asset.

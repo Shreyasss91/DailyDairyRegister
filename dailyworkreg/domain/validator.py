@@ -624,6 +624,16 @@ class Evidence:
     ``detail``. A violation of the committed visits is reported with the same
     fields :class:`Violation` carries, so an ``INFEASIBLE`` verdict caused by
     invalid fixed commitments is as diagnosable as a rejected schedule.
+
+    Attribution is either singular or plural, never invented. A fact about one
+    asset names that asset in ``asset_id`` and ``asset_type``; a fact about the
+    combined demand of several assets lists them in ``contributing_assets`` and
+    leaves the singular fields empty. A fact that is genuinely about no
+    particular asset, such as a node budget exhausted across a whole packing
+    problem, carries neither and says so in ``detail``.
+
+    ``contributing_assets`` is always deduplicated and ordered by asset id, so two
+    runs over the same input render identically.
     """
 
     constraint: str
@@ -634,6 +644,10 @@ class Evidence:
     offending_dates: tuple[date, ...] = ()
     limit: int | None = None
     actual: int | None = None
+    #: Appended last so existing positional construction of ``limit`` and
+    #: ``actual`` keeps its meaning. Empty when the fact is not about a set of
+    #: assets, or when the method cannot identify the set without guessing.
+    contributing_assets: tuple[tuple[str, AssetType], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -691,6 +705,24 @@ def visits_by_asset(visits: Iterable[Visit]) -> dict[str, list[Visit]]:
     for bucket in grouped.values():
         bucket.sort(key=lambda v: v.visit_date)
     return grouped
+
+
+def attribute_assets(
+    asset_ids: Iterable[str], roster: Mapping[str, Asset]
+) -> tuple[tuple[str, AssetType], ...]:
+    """Pair asset ids with their roster types, deduplicated and ordered by id.
+
+    This is the one place that decides the shape of ``Evidence.contributing_assets``
+    and ``Violation.contributing_assets``, so the two never disagree about order or
+    membership. An id absent from the roster is dropped rather than guessed: a
+    caller showing this to an operator must be able to trust that every name it
+    sees is a real asset in this run.
+    """
+
+    return tuple(
+        (asset_id, roster[asset_id].asset_type)
+        for asset_id in sorted({a for a in asset_ids if a in roster})
+    )
 
 
 def visits_by_date(visits: Iterable[Visit]) -> dict[date, list[Visit]]:
@@ -1502,6 +1534,7 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                     offending_dates=violation.offending_dates,
                     limit=violation.limit,
                     actual=violation.actual,
+                    contributing_assets=violation.contributing_assets,
                 )
                 for violation in preflight
             ),
@@ -1565,6 +1598,8 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                         f"{asset_id} requires at least {limits.monthly_min} visits "
                         f"but its monthly maximum is {limits.monthly_max}"
                     ),
+                    asset_id=asset_id,
+                    asset_type=roster[asset_id].asset_type,
                     limit=limits.monthly_max,
                     actual=limits.monthly_min,
                 )
@@ -1580,6 +1615,8 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                         f"{asset_id} owes {total_for_asset} visits but the "
                         f"monthly maximum is {limits.monthly_max}"
                     ),
+                    asset_id=asset_id,
+                    asset_type=roster[asset_id].asset_type,
                     limit=limits.monthly_max,
                     actual=total_for_asset,
                 )
@@ -1604,6 +1641,14 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
     area_demand = area_required + fixed_area
     total_demand = total_required + fixed_total
 
+    # Every demand this month carries, from obligations still to place and from
+    # visits already committed. Only these assets contribute to an aggregate
+    # proof: naming the rest of the roster would attribute a capacity failure to
+    # assets that asked for nothing.
+    demanded_assets = set(required) | {
+        visit.asset_id for visit in context.fixed if context.period.contains(visit.visit_date)
+    }
+
     if area_demand > context.config.area_daily_cap * working_days:
         evidence.append(
             Evidence(
@@ -1617,6 +1662,14 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                 ),
                 limit=context.config.area_daily_cap * working_days,
                 actual=area_demand,
+                contributing_assets=attribute_assets(
+                    (
+                        asset_id
+                        for asset_id in demanded_assets
+                        if roster[asset_id].asset_type is AssetType.AREA
+                    ),
+                    roster,
+                ),
             )
         )
         return FeasibilityResult(
@@ -1635,6 +1688,7 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                 ),
                 limit=context.config.combined_daily_cap * working_days,
                 actual=total_demand,
+                contributing_assets=attribute_assets(demanded_assets, roster),
             )
         )
         return FeasibilityResult(
@@ -1679,6 +1733,8 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                         "the search node limit was reached while enumerating "
                         f"placements for {asset_id}; feasibility is undetermined"
                     ),
+                    asset_id=asset_id,
+                    asset_type=roster[asset_id].asset_type,
                     limit=context.config.search_node_limit,
                 )
             )
@@ -1696,6 +1752,8 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                         f"respects a {limits.revisit_gap_days}-calendar-day gap across "
                         f"{len(candidates)} usable eligible dates"
                     ),
+                    asset_id=asset_id,
+                    asset_type=roster[asset_id].asset_type,
                     limit=limits.revisit_gap_days,
                     actual=required[asset_id],
                 )
@@ -1710,6 +1768,8 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
     )
     if packed is None:
         if node_budget[0] <= 0:
+            # A budget exhausted across the whole joint packing problem is not
+            # attributable to one asset or to a subset, so no identity is claimed.
             evidence.append(
                 Evidence(
                     constraint=C_SEARCH_LIMIT,
@@ -1735,6 +1795,10 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                 ),
                 limit=context.config.combined_daily_cap,
                 actual=total_required,
+                # The joint packing problem is exactly the demand computed above:
+                # every asset still owed visits and every asset already holding a
+                # committed visit in the period.
+                contributing_assets=attribute_assets(demanded_assets, roster),
             )
         )
         return FeasibilityResult(

@@ -628,19 +628,15 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                     "obligations": dict(month.obligations),
                     "declared_obligations": dict(month.declared_obligations),
                     "visits": len(month.visits),
+                    "evidence": [_attribution(item) for item in month.evidence],
                 }
                 for month in register.months
             ],
             "exceptions": [
                 {
                     "kind": item.kind.value,
-                    "constraint": item.constraint,
-                    "detail": item.detail,
                     "month": None if item.month is None else item.month.label(),
-                    "asset_id": item.asset_id,
-                    "visit_date": (
-                        None if item.visit_date is None else item.visit_date.isoformat()
-                    ),
+                    **_attribution(item),
                 }
                 for item in register.exceptions
             ],
@@ -753,6 +749,44 @@ def _counts(payload: Any) -> dict[MonthKey, dict[str, int]]:
     return {
         _month(label): {key: int(value) for key, value in counts.items()}
         for label, counts in payload.items()
+    }
+
+
+def _type_name(asset_type: Any) -> str | None:
+    """Render an asset type as its stored name, whether enum or already text.
+
+    A record read back from the database and one built in memory are presented
+    identically, so the client never has to know which it received.
+    """
+
+    if asset_type is None:
+        return None
+    return getattr(asset_type, "value", asset_type)
+
+
+def _attribution(evidence: Any) -> dict[str, Any]:
+    """Render an evidence or exception as the client displays it.
+
+    The server sends the structured attribution it holds. The client never
+    reconstructs an asset from the message, so every field an operator can see
+    here came from the validator's own record of what failed.
+    """
+
+    return {
+        "constraint": evidence.constraint,
+        "detail": evidence.detail,
+        "asset_id": evidence.asset_id,
+        "asset_type": _type_name(evidence.asset_type),
+        "visit_date": (
+            None if evidence.visit_date is None else evidence.visit_date.isoformat()
+        ),
+        "offending_dates": [day.isoformat() for day in evidence.offending_dates],
+        "contributing_assets": [
+            {"asset_id": asset_id, "asset_type": _type_name(asset_type)}
+            for asset_id, asset_type in getattr(evidence, "contributing_assets", ())
+        ],
+        "limit": evidence.limit,
+        "actual": evidence.actual,
     }
 
 
