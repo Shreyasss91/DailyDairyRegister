@@ -312,6 +312,18 @@ Deterministic test vectors. The table below states expected outcomes under the d
 
 The "necessary only" rows (aggregate capacity and area-cap boundary) pass necessary conditions and nothing more. Full date-level feasibility of any target is established by the per-asset and per-date rules above, evaluated against the actual calendar of the selected period, not by these inequalities alone.
 
+### 10.7 Feasibility assessment outcomes and their proof conditions
+
+The feasibility validator distinguishes three outcomes, and the distinction is part of the requirement rather than an implementation detail. A scheduler that reports "infeasible" because a heuristic attempt failed would refuse targets that are in fact schedulable.
+
+- **FEASIBLE** requires a concrete witness: an assignment of visits to eligible working dates that satisfies every hard constraint and can be re-validated independently.
+- **INFEASIBLE** requires a proof. Only the following establish it: a configured minimum above the effective per-asset maximum; an obligation above the effective per-asset maximum; a failed aggregate necessary condition (`A > 2 * W` or `A + D + F > C * W`); an asset for which no gap-respecting placement exists at all; or a completed exhaustive search that found no joint assignment.
+- **INDETERMINATE** is reported when the search budget is exhausted before any of the above is settled. It is neither an acceptance nor a rejection, and it must be surfaced to the user as such.
+
+The joint packing problem (placing per-asset visit counts onto working dates under both daily caps) is not solvable by greedy placement in general, because a first-fit assignment can fail on an instance that is in fact feasible. Therefore a failed construction is never sufficient evidence of infeasibility, and the validator must not use one as such.
+
+Cost note: the exact search is tractable for small rosters and becomes expensive as the number of assets with multi-visit obligations grows. A large roster with obligations at the aggregate boundary is expected to return INDETERMINATE within a default budget. Recording a target as feasible at scale therefore requires either a tighter obligation set or a stronger proof method, and neither is assumed here.
+
 ## 11. Language and text storage
 
 - Support English, Kannada and bilingual modes.

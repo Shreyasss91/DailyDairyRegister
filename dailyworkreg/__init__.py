@@ -1,0 +1,1 @@
+"""DailyDairyRegister domain package."""
