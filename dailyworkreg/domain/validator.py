@@ -74,6 +74,7 @@ C_MINIMUM_ON_INACTIVE_ASSET = "minimum_on_inactive_asset"
 C_PERIOD_NOT_SINGLE_MONTH = "period_not_single_calendar_month"
 C_FIXED_VISIT_OUTSIDE_PERIOD = "fixed_visit_outside_period"
 C_FIXED_VISIT_NON_WORKING = "fixed_visit_not_on_working_date"
+C_FIXED_VISIT_INACTIVE_ASSET = "fixed_visit_on_inactive_asset"
 C_CYCLE_EXCEEDS_MONTHLY = "cycle_obligation_exceeds_monthly_portion"
 
 
@@ -403,7 +404,10 @@ def resolve_obligations(
                     f"{label} names unknown asset {asset_id!r}",
                     asset_id,
                 )
-            if not isinstance(count, int) or count < 0:
+            # ``bool`` subclasses ``int`` in Python, so an explicit exclusion is
+            # required or ``True`` would be accepted as a count of one. A
+            # boolean is a mistaken input, never a visit count.
+            if not isinstance(count, int) or isinstance(count, bool) or count < 0:
                 raise InputError(
                     C_NEGATIVE_OBLIGATION,
                     f"{label} for {asset_id!r} must be a non-negative integer, "
@@ -592,10 +596,20 @@ class Violation:
 
 @dataclass(frozen=True)
 class Evidence:
-    """A machine-readable fact supporting a feasibility verdict."""
+    """A machine-readable fact supporting a feasibility verdict.
+
+    The structured fields describe the fact without requiring a caller to parse
+    ``detail``. A violation of the committed visits is reported with the same
+    fields :class:`Violation` carries, so an ``INFEASIBLE`` verdict caused by
+    invalid fixed commitments is as diagnosable as a rejected schedule.
+    """
 
     constraint: str
     detail: str
+    asset_id: str | None = None
+    asset_type: "AssetType | None" = None
+    visit_date: date | None = None
+    offending_dates: tuple[date, ...] = ()
     limit: int | None = None
     actual: int | None = None
 
@@ -950,6 +964,128 @@ def _fixed_visit_violations(
                     offending_dates=(visit.visit_date,),
                 )
             )
+        # An inactive asset cannot carry a committed visit merely because it is
+        # still present in the roster. The commitment must not be honoured, and
+        # it must not be silently accepted as satisfied work either.
+        if not asset.active:
+            violations.append(
+                Violation(
+                    constraint=C_FIXED_VISIT_INACTIVE_ASSET,
+                    message=(
+                        f"committed visit to {visit.asset_id} on "
+                        f"{visit.visit_date.isoformat()} refers to an inactive asset"
+                    ),
+                    asset_id=visit.asset_id,
+                    asset_type=asset.asset_type,
+                    visit_date=visit.visit_date,
+                    offending_dates=(visit.visit_date,),
+                )
+            )
+    return violations
+
+
+def _hard_constraint_violations(
+    fixed: Sequence[Visit],
+    proposed: Sequence[Visit],
+    period: DatePeriod,
+    calendar: Calendar,
+    roster: Mapping[str, Asset],
+    config: FeasibilityConfig,
+    history: Sequence[Visit] = (),
+) -> list[Violation]:
+    """Check the hard constraints that any complete schedule must satisfy.
+
+    This is the one place the hard constraints are evaluated. Both public paths
+    use it: :func:`validate_schedule` to explain why a concrete schedule is
+    rejected, and :func:`assess_feasibility` as preflight, so an assessment can
+    never call a month feasible on a schedule this function rejects.
+
+    Committed visits are checked exactly as strictly as proposed ones. A fixed
+    visit is immutable input, so a violation here means no valid complete
+    schedule can exist around it; it is reported, never dropped.
+
+    Args:
+        fixed: Committed in-period visits.
+        proposed: Visits proposed in the same period.
+        period: The single calendar month under assessment.
+        calendar: Eligible working dates.
+        roster: Assets by id.
+        config: Capacities and per-asset limits.
+        history: Prior-period visits, contributing visit-gap continuity only.
+
+    Returns:
+        Violations ordered deterministically. Empty when the schedule is sound.
+    """
+
+    violations: list[Violation] = []
+
+    # 1. Committed in-period visits must themselves be well formed.
+    violations.extend(_fixed_visit_violations(fixed, period, calendar, roster))
+
+    # 2. Individual membership, identity, activity and working-date eligibility.
+    for visit in proposed:
+        if not period.contains(visit.visit_date):
+            violations.append(
+                Violation(
+                    constraint=C_OUTSIDE_PERIOD,
+                    message=(
+                        f"visit to {visit.asset_id} on {visit.visit_date.isoformat()} "
+                        f"falls outside {period.start.isoformat()} to "
+                        f"{period.end.isoformat()}"
+                    ),
+                    asset_id=visit.asset_id,
+                    visit_date=visit.visit_date,
+                )
+            )
+            continue
+        asset = roster.get(visit.asset_id)
+        if asset is None:
+            violations.append(
+                Violation(
+                    constraint=C_UNKNOWN_ASSET,
+                    message=f"visit refers to unknown asset {visit.asset_id}",
+                    asset_id=visit.asset_id,
+                    visit_date=visit.visit_date,
+                )
+            )
+            continue
+        if not asset.active:
+            violations.append(
+                Violation(
+                    constraint=C_INACTIVE_ASSET,
+                    message=f"visit refers to inactive asset {visit.asset_id}",
+                    asset_id=visit.asset_id,
+                    asset_type=asset.asset_type,
+                    visit_date=visit.visit_date,
+                )
+            )
+        if not calendar.is_working(visit.visit_date):
+            violations.append(
+                Violation(
+                    constraint=C_WORKING_DATE,
+                    message=(
+                        f"{visit.visit_date.isoformat()} is not an eligible working date, "
+                        f"but {visit.asset_id} is proposed on it"
+                    ),
+                    asset_id=visit.asset_id,
+                    asset_type=asset.asset_type,
+                    visit_date=visit.visit_date,
+                )
+            )
+
+    # 3. Daily capacity. Different categories share one date within the
+    #    combined cap, so both caps are evaluated over the actual date buckets.
+    #    Committed visits consume the same capacity as proposed ones.
+    all_in_period = tuple(fixed) + tuple(proposed)
+    violations.extend(_daily_cap_violations(all_in_period, roster, config))
+
+    # 4. Per-asset checks. History is merged so that the revisit interval is
+    #    enforced across month and cycle boundaries without a reset, and fixed
+    #    visits constrain proposed ones through the same gap.
+    merged = visits_by_asset(tuple(history) + tuple(fixed) + tuple(proposed))
+    violations.extend(_revisit_violations(merged, roster, config))
+    violations.extend(_monthly_count_violations(merged, period, roster, config))
+
     return violations
 
 
@@ -986,94 +1122,35 @@ def validate_schedule(
 
     roster = context.asset_index()
     obligations = context.obligations()
-    violations: list[Violation] = []
 
-    # 1. Committed in-period visits must themselves be well formed. They are
-    #    never dropped: a schedule built on an invalid commitment is not valid.
-    violations.extend(
-        _fixed_visit_violations(
-            context.fixed, context.period, context.calendar, roster
+    # Every hard constraint is evaluated by the shared path, which the
+    # feasibility assessment also uses as preflight. The two cannot disagree
+    # about what a valid schedule is.
+    violations: list[Violation] = list(
+        _hard_constraint_violations(
+            fixed=context.fixed,
+            proposed=context.proposed,
+            period=context.period,
+            calendar=context.calendar,
+            roster=roster,
+            config=context.config,
+            history=context.history,
         )
     )
 
-    # 1. Period membership, asset identity, asset activity and working-date
-    #    eligibility. Every proposed visit is examined individually.
-    for visit in context.proposed:
-        if not context.period.contains(visit.visit_date):
-            violations.append(
-                Violation(
-                    constraint=C_OUTSIDE_PERIOD,
-                    message=(
-                        f"visit to {visit.asset_id} on {visit.visit_date.isoformat()} "
-                        f"falls outside {context.period.start.isoformat()} to "
-                        f"{context.period.end.isoformat()}"
-                    ),
-                    asset_id=visit.asset_id,
-                    visit_date=visit.visit_date,
-                )
-            )
-            continue
-        asset = roster.get(visit.asset_id)
-        if asset is None:
-            violations.append(
-                Violation(
-                    constraint=C_UNKNOWN_ASSET,
-                    message=f"visit refers to unknown asset {visit.asset_id}",
-                    asset_id=visit.asset_id,
-                    visit_date=visit.visit_date,
-                )
-            )
-            continue
-        if not asset.active:
-            violations.append(
-                Violation(
-                    constraint=C_INACTIVE_ASSET,
-                    message=f"visit refers to inactive asset {visit.asset_id}",
-                    asset_id=visit.asset_id,
-                    asset_type=asset.asset_type,
-                    visit_date=visit.visit_date,
-                )
-            )
-        if not context.calendar.is_working(visit.visit_date):
-            violations.append(
-                Violation(
-                    constraint=C_WORKING_DATE,
-                    message=(
-                        f"{visit.visit_date.isoformat()} is not an eligible working date, "
-                        f"but {visit.asset_id} is proposed on it"
-                    ),
-                    asset_id=visit.asset_id,
-                    asset_type=asset.asset_type,
-                    visit_date=visit.visit_date,
-                )
-            )
-
-    # 2. Daily capacity. Different categories share one date within the
-    #    combined cap, so both caps are evaluated over the actual date buckets.
-    #    Committed visits consume the same capacity as proposed ones.
-    all_in_period = tuple(context.fixed) + tuple(context.proposed)
-    violations.extend(_daily_cap_violations(all_in_period, roster, context.config))
-
-    # 3. Per-asset checks. History is merged so that the revisit interval is
-    #    enforced across month and cycle boundaries without a reset, and fixed
-    #    visits constrain proposed ones through the same gap.
-    merged = visits_by_asset(
-        tuple(context.history) + tuple(context.fixed) + tuple(context.proposed)
-    )
-    violations.extend(_revisit_violations(merged, roster, context.config))
-    violations.extend(
-        _monthly_count_violations(merged, context.period, roster, context.config)
-    )
-
-    # 4. Obligations, when the caller requires them. The same resolved
-    #    specification drives this check as drives feasibility assessment.
+    # Obligations, when the caller requires them. The same resolved
+    # specification drives this check as drives feasibility assessment.
     if mode is ValidationMode.OBLIGATIONS:
+        merged = visits_by_asset(
+            tuple(context.history) + tuple(context.fixed) + tuple(context.proposed)
+        )
         violations.extend(
             _obligation_violations(
                 merged, context.period, roster, context.config, obligations
             )
         )
 
+    all_in_period = tuple(context.fixed) + tuple(context.proposed)
     days_used: dict[date, int] = {}
     for day, bucket in visits_by_date(all_in_period).items():
         days_used[day] = len(bucket)
@@ -1287,6 +1364,41 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
     eligible = _eligible_dates(context.period, context.calendar)
     working_days = len(eligible)
 
+    # Preflight. Committed visits are immutable input, so if they already break a
+    # hard constraint then no valid complete schedule can exist around them and
+    # the month is infeasible whatever else remains to be placed. This check runs
+    # before every path that can return FEASIBLE, including the path where the
+    # obligations are already discharged and nothing remains to allocate.
+    #
+    # It is the same evaluation validate_schedule performs, so an assessment can
+    # never call a month feasible on a schedule that path rejects.
+    preflight = _hard_constraint_violations(
+        fixed=context.fixed,
+        proposed=(),
+        period=context.period,
+        calendar=context.calendar,
+        roster=roster,
+        config=context.config,
+        history=context.history,
+    )
+    if preflight:
+        return FeasibilityResult(
+            status=FeasibilityStatus.INFEASIBLE,
+            evidence=tuple(
+                Evidence(
+                    constraint=violation.constraint,
+                    detail=violation.message,
+                    asset_id=violation.asset_id,
+                    asset_type=violation.asset_type,
+                    visit_date=violation.visit_date,
+                    offending_dates=violation.offending_dates,
+                    limit=violation.limit,
+                    actual=violation.actual,
+                )
+                for violation in preflight
+            ),
+        )
+
     # Committed in-period visits discharge part of each obligation and consume
     # capacity. They are subtracted from what remains to be placed rather than
     # being treated as ordinary prior history.
@@ -1312,14 +1424,15 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
     )
 
     if not required:
-        # Nothing remains to place. The committed visits alone must still be a
-        # valid schedule, and the witness covers them so the caller can check.
+        # Nothing remains to place. The preflight above has already established
+        # that the committed visits form a valid schedule, so the witness is the
+        # complete month and passes independent validation.
         return FeasibilityResult(
             status=FeasibilityStatus.FEASIBLE,
             evidence=(),
             witness=tuple(
                 sorted(
-                    context.fixed,
+                    (v for v in context.fixed if context.period.contains(v.visit_date)),
                     key=lambda v: (v.visit_date, v.asset_id),
                 )
             ),
