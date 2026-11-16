@@ -116,3 +116,31 @@ input, select {
 .tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; background: #ececea; color: var(--muted); }
 .tag-fixed { background: #e8eef4; color: #1f4f74; }
 .tag-allocated { background: #eaf1ea; color: #2f6b46; }
+/* Review, lock and correction states. A date is reviewed, locked, both or
+   neither, and the register shows each on its own rather than as one badge. */
+.tag-reviewed { background: #1f6f43; color: #fff; }
+.tag-pending { background: #6b5b14; color: #fff; }
+.tag-locked { background: #33415c; color: #fff; }
+.controls { margin-left: 0.4rem; }
+.link {
+  background: none;
+  border: none;
+  padding: 0 0.25rem;
+  color: #2f6fb0;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+.inline-form {
+  margin-top: 0.35rem;
+  padding: 0.4rem;
+  border: 1px solid #ccc;
+  background: #fafafa;
+}
+.inline-form .field { display: inline-block; margin-right: 0.5rem; }
+.inline-form input, .inline-form select { font: inherit; padding: 0.1rem; }
+.status-visits_moved { background: #f3f6e8; }
+.status-changed { background: #fdf3e2; }
+.status-locked_preserved { background: #eef2f7; }
+.status-added { background: #eaf6ee; }
+.status-removed { background: #fbeceb; }

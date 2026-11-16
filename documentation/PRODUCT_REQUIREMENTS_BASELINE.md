@@ -717,3 +717,99 @@ because evidence serialisation and request snapshots are separate contracts.
 exception with those fields, rendering an enum or an already-stored string identically
 so the client need not know which it received. The interface prints the supplied
 values in their own columns and reads no message text to recover an asset.
+
+## 22. Implemented review, correction and regeneration contract (as built)
+
+An issued register is a document an office works from, so it is never edited in place.
+This section records the contract the store, the application layer and the surface now
+share for reviewing, correcting and re-proposing one. It changes no constraint, limit,
+policy or verdict, and it neither finalises a register nor produces a PDF or a
+spreadsheet.
+
+**A register, a revision and an attempt are three different things.** A *register* is
+the continuity of one document across a period and a mode: the same November register
+is still the same register after three corrections. A *revision* is one issued state of
+it, numbered within that register from one, and immutable: a correction is a new
+revision whose parent is the one corrected, never an update to a revision already
+issued. An *attempt* is a generation that produced no draft at all — that is stored
+with its monthly evidence and reported as an attempt, because a run that decided a
+month could not be covered has no revision number to be given.
+
+**Review is a statement about content, not a click.** A date is `pending_review` until
+an operator marks it reviewed, and marking it records a fingerprint of the row they were
+looking at. A review offered against content that has since changed is refused under
+`stale_review` rather than recorded against a row nobody saw. Withdrawal is recorded
+too: a review is an act with a time, a note and an author's intent, and a register that
+cannot show when a date was looked at cannot answer a question asked of it months later.
+Month review state is derived on read from the dates beneath it, never stored, so it
+cannot disagree with them.
+
+**Review and lock are independent in both directions.** A reviewed date is not locked
+and a locked date need not be reviewed. A lock is the operator saying this date is
+settled: a correction that would change a locked date's content is refused under
+`locked_date_content_changed`, and its content survives a correction, a regeneration and
+an acceptance exactly as it stood. The lock is what preserves a correction; an unlocked
+correction is the operator's current preference and a regeneration may legitimately
+replace it.
+
+**A correction is judged by the register's own validator.** An entry edit, an addition, a
+removal, an entry moved to another date and a visit moved to another date each produce a
+new revision whose validity is established by the same validator that judged the draft,
+running in obligation-aware mode against the month's own stored obligations. The edit
+layer performs no date arithmetic and asserts no capacity: it presents the visits as they
+would be and lets the validator decide, and a refusal carries the validator's structured
+violations so the surface can name the asset and the rule. A visit moves within its own
+calendar month only (`visit_move_crosses_month_unsupported`), because the validator
+assesses one calendar month by contract and a move across a boundary would be judged by
+neither month's context. A correction that changes nothing is refused
+(`correction_changes_nothing`) instead of minting an empty revision.
+
+**Entries carry provenance.** A `calendar` entry is re-derivable from the calendar, a
+`manual` entry was entered by an operator and is never erased by a regeneration, and a
+`locked` entry is preserved because its date is locked. A safety meeting replaced by an
+operator is therefore theirs, not the default sentence, and the register shows which it
+is. A manual *leave* entry is refused: leave is an approved absence in the leave master,
+not a typed sentence that would sit beside it claiming the same authority.
+
+**Regeneration proposes; the register does not move until somebody accepts.** The
+candidate is a stored revision of the same register, recording the revision it descends
+from and the seed it used, entirely pending and holding no locks, because a proposal has
+not been reviewed by anyone. Until it is accepted the register keeps pointing at the
+revision the office holds; a refusal, an infeasibility or a failed generation leaves that
+revision exactly where it was. A candidate that would change a locked date is not offered
+at all (`locked_date_content_changed`, naming the dates), and the check runs again at
+acceptance, which is the moment the guarantee must hold. Acceptance carries the review and
+lock state of the revision being replaced — a review only where the stored content is
+provably identical, recording the revision it came from; a lock only where the content it
+protected is unchanged — then moves the register's pointer and records the decision in one
+transaction. A candidate already refused cannot later be accepted
+(`candidate_already_decided`), and a revision no regeneration produced cannot be accepted
+or refused at all.
+
+**What the generator is given is the whole of this layer's decision.** Locked visits are
+supplied as committed visits for the month containing them, merged with the revision's own
+commitments on `(asset, date)` so no fact arrives twice, and never also as prior history
+or as a gap blocker — the generator derives those from the same committed set. Every entry
+the revision holds is supplied once, because the generator does not re-project a calendar;
+dropping them would lose the operator's manual entries, and keeping only those would be an
+edit layer deciding whose work survives. A locked visit returns from the allocator as a
+commitment and its recorded provenance is restored afterwards, so a date preserved by a
+lock is not made to look changed by it. The regeneration reaches no scheduling decision of
+its own: it calls the generator and allocator that produced the first draft.
+
+**Comparison is typed and identity-based.** Two revisions are compared by asset id and
+date for visits, by entry id for entries, and by month for status. Nothing reads a
+description to decide whether two rows are the same row. Each date is reported as
+unchanged, added, removed, changed, visits_moved or locked_preserved, with the base and
+proposed rows, the visits added, removed and paired into moves, the entries added,
+removed and changed with before-and-after values, the base revision's lock and review
+state for that date, and warnings where the day's classification or reasons differ
+without the work changing. A month unresolved in the candidate keeps its structured
+evidence in the comparison, so an unsettled regeneration is visible rather than rounded
+into success.
+
+**Presentation.** The draft screen shows review state, lock state, allocation status and
+operational completeness as four separate things, because they answer four different
+questions and one badge cannot carry them. Every act sends what the operator entered and
+renders what the server decided; the client holds no date rule, no capacity rule and no
+fitness test, and it reads no diagnostic prose to recover an asset or a cause.

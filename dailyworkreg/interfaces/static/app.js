@@ -601,6 +601,9 @@ async function openDraft(runId) {
   evidence.textContent = '';
 
   const register = await api(`/api/generations/${runId}`);
+  const review = await api(`/api/generations/${runId}/review`);
+  const days = new Map(review.dates.map((day) => [day.date, day]));
+  state.registerId = review.register_id;
   head.append(
     el('p', {}, [
       el('strong', { text: register.is_draft ? 'Allocator-backed draft' : 'No draft — attempt recorded' }),
@@ -629,19 +632,16 @@ async function openDraft(runId) {
   }
 
   target.append(table(
-    ['Date', 'Day', 'Calendar', 'Visits', 'Entries', 'Warnings'],
-    register.rows.map((row) => el('tr', { class: row.is_working_day ? '' : 'row-nonworking' }, [
-      el('td', { class: 'day-line', text: row.day }),
-      el('td', { text: weekdayName(row.weekday) }),
-      el('td', { text: row.reasons_en.join('; ') || (row.is_working_day ? 'working' : row.kind) }),
-      el('td', {}, row.visits.map((visit) => el('div', {}, [
-        el('span', { class: `tag tag-${visit.provenance}`, text: visit.provenance }),
-        el('span', { text: ` ${visit.asset_id} ${visit.name_en}` }),
-      ]))),
-      el('td', { text: row.entries.map((entry) => entry.title_en).join('; ') }),
-      el('td', { text: row.warnings.join('; ') }),
-    ])),
+    ['Date', 'Day', 'Calendar', 'Visits', 'Entries', 'Warnings', 'Review', 'Lock', 'Corrections'],
+    register.rows.map((row) => draftRow(row, days.get(row.day) || {
+      date: row.day, state: 'pending_review', locked: false,
+    })),
   ));
+
+  const registerDetail = await api(`/api/registers/${review.register_id}`);
+  renderRevisions(registerDetail);
+  renderRegeneration(register, review);
+  hide(document.getElementById('candidate-panel'));
 }
 
 // --- history ---------------------------------------------------------------
@@ -683,6 +683,368 @@ async function loadHistory() {
       ])),
     ));
   });
+}
+
+// --- review, locks, corrections and regeneration ---------------------------
+
+// The draft is one revision of a register. Everything below reads the review state
+// the server holds and sends the operator's acts back to it; none of it decides what
+// a row contains, which date is eligible or whether a month is complete.
+
+function reviewTag(day) {
+  return el('span', {
+    class: day.state === 'reviewed' ? 'tag tag-reviewed' : 'tag tag-pending',
+    text: day.state === 'reviewed' ? 'reviewed' : 'pending review',
+  });
+}
+
+function lockTag(day) {
+  return el('span', {
+    class: day.locked ? 'tag tag-locked' : 'tag',
+    text: day.locked ? 'locked' : 'unlocked',
+  });
+}
+
+function inlineForm(fields, onSave) {
+  const inputs = {};
+  const rows = fields.map((field) => {
+    let input;
+    if (field.kind === 'select') {
+      input = el('select', {}, field.options.map((option) => el('option', { value: option, text: option })));
+      input.value = field.value || field.options[0];
+    } else {
+      input = el('input', { type: field.kind || 'text', value: field.value || '' });
+    }
+    if (field.type) input.type = field.type;
+    inputs[field.name] = input;
+    return el('label', { class: 'field' }, [el('span', { text: field.label }), input]);
+  });
+  const form = el('div', { class: 'inline-form' }, rows);
+  form.append(el('div', { class: 'actions' }, [
+    el('button', {
+      class: 'button',
+      text: 'Save',
+      onclick: async () => {
+        const values = {};
+        Object.entries(inputs).forEach(([name, input]) => { values[name] = input.value; });
+        await onSave(values);
+      },
+    }),
+    el('button', {
+      class: 'button button-quiet',
+      text: 'Cancel',
+      onclick: () => form.remove(),
+    }),
+  ]));
+  return form;
+}
+
+async function act(path, options, runId) {
+  const banner = document.getElementById('draft-banner');
+  try {
+    const answer = await api(path, options);
+    hide(banner);
+    await openDraft(runId || (answer && answer.run_id) || state.runId);
+    return answer;
+  } catch (error) {
+    showBanner(banner, 'error', error.message, [error.constraint]);
+    return null;
+  }
+}
+
+function entryControls(row, entry) {
+  return el('span', { class: 'controls' }, [
+    el('button', {
+      class: 'link',
+      text: 'edit',
+      onclick: (event) => {
+        const form = inlineForm(
+          [
+            { name: 'title_en', label: 'English' , value: entry.title_en },
+            { name: 'title_kn', label: 'Kannada', value: entry.title_kn || '' },
+            { name: 'kind', label: 'Kind', kind: 'select', value: entry.kind,
+              options: ['activity', 'event', 'safety_meeting'] },
+            { name: 'reason', label: 'Reason' },
+          ],
+          async (values) => {
+            await act(
+              `/api/generations/${state.runId}/entries/${entry.entry_id}`,
+              {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(values),
+              },
+              values.runId,
+            );
+          },
+        );
+        event.target.closest('td').append(form);
+      },
+    }),
+    el('button', {
+      class: 'link',
+      text: 'remove',
+      onclick: () => act(
+        `/api/generations/${state.runId}/entries/${entry.entry_id}`,
+        { method: 'DELETE' },
+      ),
+    }),
+    el('button', {
+      class: 'link',
+      text: 'move',
+      onclick: (event) => {
+        const form = inlineForm(
+          [
+            { name: 'date', label: 'Move to', type: 'date' },
+            { name: 'reason', label: 'Reason' },
+          ],
+          async (values) => {
+            await act(
+              `/api/generations/${state.runId}/entries/${entry.entry_id}/move`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(values),
+              },
+            );
+          },
+        );
+        event.target.closest('td').append(form);
+      },
+    }),
+  ]);
+}
+
+function visitControls(row, visit) {
+  return el('span', { class: 'controls' }, [
+    el('button', {
+      class: 'link',
+      text: 'move',
+      onclick: (event) => {
+        const form = inlineForm(
+          [
+            { name: 'to', label: `Move to (within ${row.day.slice(0, 7)})`, type: 'date' },
+            { name: 'reason', label: 'Reason' },
+          ],
+          async (values) => {
+            await act(`/api/generations/${state.runId}/visits/move`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                asset_id: visit.asset_id,
+                from: row.day,
+                to: values.to,
+                reason: values.reason,
+              }),
+            });
+          },
+        );
+        event.target.closest('td').append(form);
+      },
+    }),
+  ]);
+}
+
+function draftRow(row, day) {
+  const cells = [
+    el('td', { class: 'day-line', text: row.day }),
+    el('td', { text: weekdayName(row.weekday) }),
+    el('td', { text: row.reasons_en.join('; ') || (row.is_working_day ? 'working' : row.kind) }),
+    el('td', {}, row.visits.map((visit) => el('div', {}, [
+      el('span', { class: `tag tag-${visit.provenance}`, text: visit.provenance }),
+      el('span', { text: ` ${visit.asset_id} ${visit.name_en}` }),
+      visitControls(row, visit),
+    ]))),
+    el('td', {}, row.entries.map((entry) => el('div', {}, [
+      el('span', { text: entry.title_kn ? `${entry.title_en} / ${entry.title_kn}` : entry.title_en }),
+      el('span', { class: 'muted', text: ` (${entry.kind}${entry.provenance && entry.provenance !== 'calendar' ? ', ' + entry.provenance : ''})` }),
+      entryControls(row, entry),
+    ]))),
+    el('td', { text: row.warnings.join('; ') }),
+    el('td', {}, [
+      reviewTag(day),
+      el('button', {
+        class: 'link',
+        text: day.state === 'reviewed' ? 'withdraw' : 'mark reviewed',
+        onclick: () => act(
+          `/api/generations/${state.runId}/review/${row.day}`,
+          day.state === 'reviewed'
+            ? { method: 'DELETE' }
+            : {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ fingerprint: day.fingerprint }),
+            },
+        ),
+      }),
+    ]),
+    el('td', {}, [
+      lockTag(day),
+      el('button', {
+        class: 'link',
+        text: day.locked ? 'unlock' : 'lock',
+        onclick: () => act(
+          `/api/generations/${state.runId}/locks/${row.day}`,
+          day.locked ? { method: 'DELETE' } : { method: 'PUT' },
+        ),
+      }),
+    ]),
+    el('td', {}, [
+      el('button', {
+        class: 'link',
+        text: 'add entry',
+        onclick: (event) => {
+          const form = inlineForm(
+            [
+              { name: 'title_en', label: 'English' },
+              { name: 'title_kn', label: 'Kannada' },
+              { name: 'kind', label: 'Kind', kind: 'select',
+                options: ['activity', 'event', 'safety_meeting'] },
+              { name: 'reason', label: 'Reason' },
+            ],
+            async (values) => {
+              await act(`/api/generations/${state.runId}/entries`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ...values, date: row.day }),
+              });
+            },
+          );
+          event.target.closest('td').append(form);
+        },
+      }),
+    ]),
+  ];
+  return el('tr', { class: row.is_working_day ? '' : 'row-nonworking' }, cells);
+}
+
+function renderRevisions(register) {
+  const target = document.getElementById('draft-revisions');
+  target.textContent = '';
+  target.append(el('strong', { text: 'Revisions' }));
+  target.append(table(
+    ['#', 'Kind', 'Created', 'Parent', 'Decision', 'Current', 'Action'],
+    register.revisions.map((revision) => el('tr', {}, [
+      el('td', { text: String(revision.revision_number) }),
+      el('td', { text: revision.kind }),
+      el('td', { text: revision.created_at.replace('T', ' ').slice(0, 19) }),
+      el('td', { text: revision.parent_run_id ? revision.parent_run_id.slice(0, 8) : '' }),
+      el('td', { text: revision.decision || '' }),
+      el('td', { text: revision.is_current ? 'yes' : '' }),
+      el('td', {}, [
+        el('button', {
+          class: 'button button-quiet',
+          text: 'Open',
+          onclick: async () => {
+            await openDraft(revision.run_id);
+            activate('draft');
+          },
+        }),
+      ]),
+    ])),
+  ));
+}
+
+function comparisonTable(comparison) {
+  const cell = (value) => (value === null || value === undefined ? '' : String(value));
+  const visits = (row) => (row ? row.visits.map((item) => `${item[0]} (${item[1]})`).join('; ') : '');
+  const entries = (row) => (row ? row.entries.map((item) => `${item[2]}`).join('; ') : '');
+  return table(
+    ['Date', 'Status', 'Locked', 'Reviewed in base', 'Base visits', 'Proposed visits',
+      'Visits added', 'Visits removed', 'Visits moved', 'Entries added', 'Entries removed',
+      'Entries changed', 'Warning'],
+    comparison.dates.map((item) => el('tr', { class: `status-${item.status}` }, [
+      el('td', { class: 'day-line', text: item.date }),
+      el('td', { text: item.status }),
+      el('td', { text: item.locked ? 'locked' : '' }),
+      el('td', { text: item.review_state }),
+      el('td', { text: visits(item.base) }),
+      el('td', { text: visits(item.proposed) }),
+      el('td', { text: item.visits.added.join(', ') }),
+      el('td', { text: item.visits.removed.join(', ') }),
+      el('td', { text: item.visits.moved.map((move) => `${move.asset_id}: ${move.from} to ${move.to}`).join('; ') }),
+      el('td', { text: item.entries.added.map((entry) => entry.title_en).join('; ') }),
+      el('td', { text: item.entries.removed.map((entry) => entry.title_en).join('; ') }),
+      el('td', { text: item.entries.changed.map((entry) => entry.after.title_en).join('; ') }),
+      el('td', { text: item.warnings.map((warning) => warning.detail).join('; ') }),
+    ])),
+  );
+}
+
+async function showCandidate(registerId, candidate, runId) {
+  const panel = document.getElementById('candidate-panel');
+  panel.hidden = false;
+  panel.textContent = '';
+  if (!candidate.eligible) {
+    showBanner(panel, 'error', candidate.detail || 'the candidate is not eligible', [candidate.blocked_by]);
+    return;
+  }
+  const comparison = await api(`/api/revisions/${runId}/compare/${candidate.candidate_run_id}`);
+  panel.append(el('strong', { text: `Candidate ${candidate.candidate_run_id.slice(0, 8)} · seed ${candidate.seed}` }));
+  panel.append(el('p', { class: 'muted', text: Object.entries(comparison.summary)
+    .map(([key, count]) => `${key}: ${count}`).join(' · ') }));
+  if (comparison.months.some((month) => month.unresolved_evidence.length)) {
+    panel.append(attributionTable(comparison.months.flatMap((month) =>
+      month.unresolved_evidence.map((item) => ({ ...item, month: month.month, kind: 'unresolved' })))));
+  }
+  panel.append(comparisonTable(comparison));
+  panel.append(el('div', { class: 'actions' }, [
+    el('input', { type: 'text', id: 'accept-note', placeholder: 'note' }),
+    el('button', {
+      class: 'button',
+      text: 'Accept candidate',
+      onclick: async () => {
+        const note = document.getElementById('accept-note').value;
+        const answer = await api(`/api/registers/${registerId}/candidates/${candidate.candidate_run_id}/accept`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note }),
+        });
+        hide(panel);
+        await openDraft(answer.run_id);
+      },
+    }),
+    el('button', {
+      class: 'button button-quiet',
+      text: 'Refuse candidate',
+      onclick: async () => {
+        await api(`/api/registers/${registerId}/candidates/${candidate.candidate_run_id}/reject`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note: 'refused from the draft screen' }),
+        });
+        hide(panel);
+        await openDraft(runId);
+      },
+    }),
+  ]));
+}
+
+function renderRegeneration(register, review) {
+  const target = document.getElementById('draft-regenerate');
+  target.textContent = '';
+  const seed = el('input', { type: 'number', id: 'candidate-seed', placeholder: 'seed (blank: same)' });
+  target.append(el('div', { class: 'actions' }, [
+    seed,
+    el('button', {
+      class: 'button',
+      text: 'Generate candidate',
+      onclick: async () => {
+        const body = seed.value === '' ? {} : { seed: Number(seed.value) };
+        const candidate = await api(`/api/registers/${review.register_id}/candidates`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        await showCandidate(review.register_id, candidate, register.run_id);
+      },
+    }),
+    el('span', {
+      class: 'muted',
+      text: `register ${review.register_id} · revision ${register.revision_number || 'none'}`
+        + ` · ${review.reviewed_dates}/${review.total_dates} dates reviewed · ${review.locked_dates} locked`,
+    }),
+  ]));
 }
 
 // --- start -----------------------------------------------------------------
