@@ -25,9 +25,10 @@ from __future__ import annotations
 import dataclasses
 import sqlite3
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Any, Callable
+from typing import Any
 
 from ..domain.validator import (
     Calendar,
@@ -42,6 +43,7 @@ from .draft_generation import (
     DayEntryKind,
     DayEntryProvenance,
     DraftDayRow,
+    DraftMonth,
     DraftRegister,
     GeneratedVisit,
     VisitProvenance,
