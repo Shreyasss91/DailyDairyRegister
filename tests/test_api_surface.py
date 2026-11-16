@@ -14,6 +14,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from dailyworkreg.application.register_edits import C_DATE_LOCKED
 from dailyworkreg.application.revisions import (
     C_DATE_NOT_LOCKED,
     C_REGISTER_UNKNOWN,
@@ -546,3 +547,84 @@ def test_an_unknown_register_is_a_stable_refusal(stocked):
     answer = stocked.get("/api/registers/R-nope")
     assert answer.status_code == 400
     assert answer.json()["error"]["constraint"] == C_REGISTER_UNKNOWN
+
+
+# --- corrections ---------------------------------------------------------
+
+
+def _first_entry(client: TestClient, run_id: str) -> tuple[str, dict]:
+    draft = client.get(f"/api/generations/{run_id}").json()
+    for row in draft["rows"]:
+        if row["entries"]:
+            return row["day"], row["entries"][0]
+    raise AssertionError("the fixture draft carries no entry")
+
+
+def test_correcting_an_entry_through_the_api_returns_a_new_revision(stocked):
+    made = generate(stocked)
+    label, entry = _first_entry(stocked, made["run_id"])
+
+    answer = stocked.put(
+        f"/api/generations/{made['run_id']}/entries/{entry['entry_id']}",
+        json={"title_en": "Corrected", "reason": "typo"},
+    )
+
+    assert answer.status_code == 200
+    body = answer.json()
+    assert body["parent_run_id"] == made["run_id"]
+    assert body["revision_number"] == 2
+    assert body["action"] == "edit_entry"
+
+
+def test_adding_an_entry_through_the_api_keeps_both_languages_apart(stocked):
+    made = generate(stocked)
+    answer = stocked.post(
+        f"/api/generations/{made['run_id']}/entries",
+        json={
+            "date": "2026-11-05",
+            "kind": "activity",
+            "title_en": "Meter reading",
+            "title_kn": "ಮೀಟರ್ ಓದುವಿಕೆ",
+        },
+    )
+
+    assert answer.status_code == 200
+    draft = stocked.get(f"/api/generations/{answer.json()['run_id']}").json()
+    row = next(item for item in draft["rows"] if item["day"] == "2026-11-05")
+    added = [item for item in row["entries"] if item["title_en"] == "Meter reading"]
+    assert len(added) == 1
+    assert added[0]["title_kn"] == "ಮೀಟರ್ ಓದುವಿಕೆ"
+
+
+def test_a_rejected_visit_move_explains_which_rule_refused_it(stocked):
+    made = generate(stocked)
+    draft = stocked.get(f"/api/generations/{made['run_id']}").json()
+    visit = next(
+        (row["day"], item) for row in draft["rows"] for item in row["visits"]
+    )
+    day, held = visit
+
+    answer = stocked.post(
+        f"/api/generations/{made['run_id']}/visits/move",
+        json={"asset_id": held["asset_id"], "from": day, "to": "2026-11-01"},
+    )
+
+    assert answer.status_code == 400
+    error = answer.json()["error"]
+    assert error["constraint"] == "corrected_visit_fails_validation"
+    assert error["violations"][0]["constraint"] == "not_a_working_date"
+    assert error["violations"][0]["asset_id"] == held["asset_id"]
+
+
+def test_an_entry_on_a_locked_date_cannot_be_corrected_through_the_api(stocked):
+    made = generate(stocked)
+    label, entry = _first_entry(stocked, made["run_id"])
+    stocked.put(f"/api/generations/{made['run_id']}/locks/{label}", json={})
+
+    answer = stocked.put(
+        f"/api/generations/{made['run_id']}/entries/{entry['entry_id']}",
+        json={"title_en": "Refused"},
+    )
+
+    assert answer.status_code == 400
+    assert answer.json()["error"]["constraint"] == C_DATE_LOCKED

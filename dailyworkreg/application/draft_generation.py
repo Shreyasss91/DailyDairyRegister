@@ -146,6 +146,14 @@ class VisitProvenance(str, Enum):
     ALLOCATED = "allocated"
 
 
+class DayEntryProvenance(str, Enum):
+    """Where a non-visit entry came from, which decides whether it survives."""
+
+    CALENDAR = "calendar"
+    MANUAL = "manual"
+    LOCKED = "locked"
+
+
 class DayEntryKind(str, Enum):
     """A non-visit entry on a date row.
 
@@ -260,13 +268,22 @@ class CalendarDay:
 
 @dataclass(frozen=True)
 class DayEntry:
-    """An externally supplied non-visit entry for a date row."""
+    """A non-visit entry for a date row, with where it came from.
+
+    ``provenance`` is what lets a regeneration tell an entry it may re-derive from the
+    calendar apart from one an operator wrote. A projected safety meeting carries
+    ``calendar`` and will be projected again; a correction carries ``manual`` and must
+    survive every later generation; an entry on a locked date carries ``locked``
+    because that date is preserved rather than rebuilt. Regenerating over a manual
+    entry would erase a person's work without a trace.
+    """
 
     entry_id: str
     day: date
     kind: DayEntryKind
     title_en: str
     title_kn: str | None = None
+    provenance: str = DayEntryProvenance.CALENDAR
 
 
 @dataclass(frozen=True)

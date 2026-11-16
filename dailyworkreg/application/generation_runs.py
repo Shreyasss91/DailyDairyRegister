@@ -45,6 +45,8 @@ from ..infrastructure.sqlite.generation_store import (
 )
 from .draft_generation import (
     CalendarDayKind,
+    DayEntry,
+    DayEntryKind,
     DraftDayRow,
     DraftException,
     DraftExceptionKind,
@@ -211,8 +213,8 @@ def _exception_records(draft: DraftRegister) -> tuple[ExceptionRecord, ...]:
 def _entry_records(draft: DraftRegister) -> tuple[revision_state.EntryRow, ...]:
     """Every non-visit entry, with the identity it will be edited by later.
 
-    Everything generated here comes from the calendar projection, so it is stored as
-    ``calendar``: an operator correction is a later revision and carries ``manual``.
+    The entry carries its own provenance, so a correction stored beside a projected
+    safety meeting stays distinguishable from it.
     """
 
     records: list[revision_state.EntryRow] = []
@@ -226,7 +228,7 @@ def _entry_records(draft: DraftRegister) -> tuple[revision_state.EntryRow, ...]:
                     kind=entry.kind.value,
                     title_en=entry.title_en,
                     title_kn=entry.title_kn,
-                    provenance="calendar",
+                    provenance=entry.provenance,
                 )
             )
     return tuple(records)
@@ -445,9 +447,27 @@ def load_register(connection: sqlite3.Connection, run_id: str) -> DraftRegister:
         for item in stored.months
     )
 
+    # Entries are read from their own table when a revision has any, because that is
+    # where an operator's correction lives and the request snapshot cannot know about
+    # it. A revision stored before entries had a table falls back to the snapshot, so
+    # an older draft still opens with its safety meetings rather than empty rows.
     entries_by_day: dict[date, list[Any]] = {}
-    for entry in request.entries:
-        entries_by_day.setdefault(entry.day, []).append(entry)
+    stored_entries = revision_state.entries(connection, run_id)
+    if stored_entries:
+        for item in stored_entries:
+            entries_by_day.setdefault(date.fromisoformat(item.row_date), []).append(
+                DayEntry(
+                    entry_id=item.entry_id,
+                    day=date.fromisoformat(item.row_date),
+                    kind=DayEntryKind(item.kind),
+                    title_en=item.title_en,
+                    title_kn=item.title_kn,
+                    provenance=item.provenance,
+                )
+            )
+    else:
+        for entry in request.entries:
+            entries_by_day.setdefault(entry.day, []).append(entry)
 
     rows = tuple(
         DraftDayRow(

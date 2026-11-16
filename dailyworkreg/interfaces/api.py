@@ -40,6 +40,13 @@ from ..application.generation_runs import (
     save_run,
 )
 from ..application.readiness import assess_readiness
+from ..application.register_edits import (
+    add_entry,
+    edit_entry,
+    move_entry,
+    move_visit,
+    remove_entry,
+)
 from ..application.revisions import (
     RevisionError,
     clear_review,
@@ -164,9 +171,15 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     @app.exception_handler(RevisionError)
     async def revision_error(_: Request, error: RevisionError) -> JSONResponse:
-        payload = {
+        payload: dict[str, Any] = {
             "error": {"constraint": error.constraint, "detail": error.detail}
         }
+        if error.violations:
+            # A refused correction carries the same structured findings any other
+            # refusal does, so the operator is told which rule and which asset.
+            payload["error"]["violations"] = [
+                _attribution(item) for item in error.violations
+            ]
         return JSONResponse(status_code=400, content=payload)
 
     # --- pages ---------------------------------------------------------
@@ -692,7 +705,13 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                         for visit in row.visits
                     ],
                     "entries": [
-                        {"kind": entry.kind.value, "title_en": entry.title_en}
+                        {
+                            "entry_id": entry.entry_id,
+                            "kind": entry.kind.value,
+                            "title_en": entry.title_en,
+                            "title_kn": entry.title_kn,
+                            "provenance": entry.provenance,
+                        }
                         for entry in row.entries
                     ],
                     "warnings": list(row.warnings),
@@ -723,6 +742,81 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             for visit in stored.visits
         ]
         return {"identical": same, "visits": len(again.visits)}
+
+    # --- corrections -----------------------------------------------------
+
+    @app.put("/api/generations/{run_id}/entries/{entry_id}")
+    def correct_entry(
+        run_id: str,
+        entry_id: str,
+        payload: dict[str, Any],
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        outcome = edit_entry(
+            db,
+            run_id,
+            entry_id,
+            title_en=payload.get("title_en"),
+            title_kn=payload.get("title_kn"),
+            kind=payload.get("kind"),
+            reason=payload.get("reason"),
+        )
+        return dict(outcome.__dict__)
+
+    @app.post("/api/generations/{run_id}/entries")
+    def create_entry(
+        run_id: str,
+        payload: dict[str, Any],
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        outcome = add_entry(
+            db,
+            run_id,
+            day=date.fromisoformat(payload["date"]),
+            kind=payload["kind"],
+            title_en=payload["title_en"],
+            title_kn=payload.get("title_kn"),
+            reason=payload.get("reason"),
+        )
+        return dict(outcome.__dict__)
+
+    @app.delete("/api/generations/{run_id}/entries/{entry_id}")
+    def delete_entry(
+        run_id: str, entry_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        return dict(remove_entry(db, run_id, entry_id).__dict__)
+
+    @app.post("/api/generations/{run_id}/entries/{entry_id}/move")
+    def relocate_entry(
+        run_id: str,
+        entry_id: str,
+        payload: dict[str, Any],
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        outcome = move_entry(
+            db,
+            run_id,
+            entry_id,
+            to_day=date.fromisoformat(payload["date"]),
+            reason=payload.get("reason"),
+        )
+        return dict(outcome.__dict__)
+
+    @app.post("/api/generations/{run_id}/visits/move")
+    def relocate_visit(
+        run_id: str,
+        payload: dict[str, Any],
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        outcome = move_visit(
+            db,
+            run_id,
+            asset_id=payload["asset_id"],
+            from_day=date.fromisoformat(payload["from"]),
+            to_day=date.fromisoformat(payload["to"]),
+            reason=payload.get("reason"),
+        )
+        return dict(outcome.__dict__)
 
     # --- registers, revisions, review and locks --------------------------
 
@@ -876,7 +970,10 @@ def _attribution(evidence: Any) -> dict[str, Any]:
 
     return {
         "constraint": evidence.constraint,
-        "detail": evidence.detail,
+        # Evidence carries `detail`; a raw Violation carries the same sentence as
+        # `message`. Both are rendered into the field the client reads, so a
+        # rejected correction is explained exactly like any other refusal.
+        "detail": getattr(evidence, "detail", None) or evidence.message,
         "asset_id": evidence.asset_id,
         "asset_type": _type_name(evidence.asset_type),
         "visit_date": (
