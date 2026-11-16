@@ -652,8 +652,39 @@ def finalisation(
 def finalisation_for_run(
     connection: sqlite3.Connection, run_id: str
 ) -> FinalisationRow | None:
+    """The newest finalisation recorded from this revision, if any.
+
+    One revision can close several months, so this is a summary of the revision rather
+    than a statement about any one month; ask ``finalisation_for_run_month`` when the
+    month matters.
+    """
+
     row = connection.execute(
-        "SELECT * FROM month_finalisation WHERE run_id = ?", (run_id,)
+        "SELECT * FROM month_finalisation WHERE run_id = ? ORDER BY sequence DESC",
+        (run_id,),
+    ).fetchone()
+    return None if row is None else _finalisation(row)
+
+
+def finalisations_of_run(
+    connection: sqlite3.Connection, run_id: str
+) -> tuple[FinalisationRow, ...]:
+    """Every month this revision closed, oldest first."""
+
+    rows = connection.execute(
+        "SELECT * FROM month_finalisation WHERE run_id = ? ORDER BY month, sequence",
+        (run_id,),
+    ).fetchall()
+    return tuple(_finalisation(row) for row in rows)
+
+
+def finalisation_for_run_month(
+    connection: sqlite3.Connection, run_id: str, month: str
+) -> FinalisationRow | None:
+    row = connection.execute(
+        "SELECT * FROM month_finalisation WHERE run_id = ? AND month = ?"
+        " ORDER BY sequence DESC",
+        (run_id, month),
     ).fetchone()
     return None if row is None else _finalisation(row)
 

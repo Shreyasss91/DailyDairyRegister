@@ -1076,3 +1076,87 @@ def test_a_database_left_at_schema_three_gains_finalisation(tmp_path):
     assert connection.execute(
         "SELECT COUNT(*) AS n FROM generation_row"
     ).fetchone()["n"] == 1
+
+
+# --- one revision can close more than one month ----------------------------
+
+
+def test_one_revision_closes_each_of_its_months(db):
+    # A register that spans two months holds both, so both are closed from the same
+    # revision. Uniqueness on the revision alone would make the second month impossible.
+    run_id = stored(db, start=date(2026, 11, 1), end=date(2026, 12, 31), cycle_months=2)
+    register_id = revisions.register_of(db, run_id)
+    review_every_date(db, run_id)
+
+    november = finalise.finalise_month(db, run_id, "2026-11")
+    december = finalise.finalise_month(db, run_id, "2026-12")
+
+    assert november["run_id"] == december["run_id"] == run_id
+    assert [november["sequence"], december["sequence"]] == [1, 1]
+    assert finalise.finalised_months(db, register_id) == {
+        "2026-11": november["fingerprint"],
+        "2026-12": december["fingerprint"],
+    }
+    assert finalise.finalised_months_of_run(db, run_id) == ("2026-11", "2026-12")
+
+
+def test_a_closing_one_month_does_not_make_the_next_look_finalised(db):
+    run_id = stored(db, start=date(2026, 11, 1), end=date(2026, 12, 31), cycle_months=2)
+    review_every_date(db, run_id)
+    finalise.finalise_month(db, run_id, "2026-11")
+
+    check = finalise.check_finalisation(db, run_id, "2026-12")
+
+    assert check.eligible is True, [item.as_dict() for item in check.blockers]
+    assert finalise.C_ALREADY_FINALISED not in {item.code for item in check.blockers}
+
+
+def test_a_correction_of_one_closed_month_carries_the_other(db):
+    run_id = stored(db, start=date(2026, 11, 1), end=date(2026, 12, 31), cycle_months=2)
+    register_id = revisions.register_of(db, run_id)
+    review_every_date(db, run_id)
+    finalise.finalise_month(db, run_id, "2026-11")
+    finalise.finalise_month(db, run_id, "2026-12")
+
+    correction = finalise.create_correction_revision(db, run_id, reason="November only")
+    corrected_run = correction["correction_run_id"]
+
+    # Both months' reviews are carried, because neither month's content changed yet.
+    assert len(correction["carried_reviews"]) == 61
+    assert correction["pending_dates"] == []
+    check = finalise.check_finalisation(db, corrected_run, "2026-11")
+    assert check.eligible is True, [item.as_dict() for item in check.blockers]
+
+    successor = finalise.finalise_month(db, corrected_run, "2026-11")
+
+    assert successor["sequence"] == 2
+    # December is untouched: its record, its version in force and its own sequence.
+    december = finalise.correction_chain(db, register_id, "2026-12")
+    assert [item["sequence"] for item in december] == [1]
+    assert december[0]["is_latest"] is True
+    assert december[0]["run_id"] == run_id
+    months = {item["month"]: item for item in finalise.month_lifecycle(db, register_id)}
+    assert months["2026-12"]["lifecycle"] == "finalised"
+    assert months["2026-11"]["open_correction_run_id"] is None
+
+
+def test_a_correction_finalised_after_further_edits_closes_the_branch(db):
+    run_id, _, correction = a_correction(db)
+    corrected_run = correction["correction_run_id"]
+    edit = add_entry(
+        db, corrected_run, day=date(2026, 11, 13), kind="activity",
+        title_en="A further correction",
+    )
+    review_every_date(db, edit.run_id, month="2026-11")
+    finalise.finalise_month(db, edit.run_id, "2026-11")
+
+    months = {
+        item["month"]: item
+        for item in finalise.month_lifecycle(db, correction["register_id"])
+    }
+    # The branch is closed even though it was worked on across revisions.
+    assert months["2026-11"]["open_correction_run_id"] is None
+    assert months["2026-11"]["lifecycle"] == "finalised"
+    with pytest.raises(finalise.FinalisationError) as error:
+        finalise.abandon_correction(db, correction["register_id"], "2026-11")
+    assert error.value.constraint == finalise.C_NOT_A_CORRECTION

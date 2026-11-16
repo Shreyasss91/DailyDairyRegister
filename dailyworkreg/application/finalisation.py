@@ -226,10 +226,9 @@ def finalised_months_of_run(
 ) -> tuple[str, ...]:
     """Which months of this revision have been closed."""
 
-    record = revision_state.finalisation_for_run(connection, run_id)
-    if record is None:
-        return ()
-    return (record.month,)
+    return tuple(
+        record.month for record in revision_state.finalisations_of_run(connection, run_id)
+    )
 
 
 def assert_month_not_finalised(
@@ -457,7 +456,7 @@ def check_finalisation(
             )
         )
 
-    existing = revision_state.finalisation_for_run(connection, run_id)
+    existing = revision_state.finalisation_for_run_month(connection, run_id, month)
     if existing is not None:
         blockers.append(
             Blocker(
@@ -830,16 +829,23 @@ def finalise_month(
                     "finalised, so nothing was written; open the current revision"
                 ),
             )
-        if revision_state.finalisation_for_run(connection, run_id) is not None:
+        if (
+            revision_state.finalisation_for_run_month(connection, run_id, month)
+            is not None
+        ):
             raise FinalisationError(
                 C_ALREADY_FINALISED,
-                "this revision was finalised a moment ago and cannot be finalised again",
+                "this month was finalised a moment ago and cannot be finalised again",
             )
         revision_state.insert_finalisation(connection, record)
         revision_state.set_latest_finalisation(
             connection, register_id, month, finalisation_id
         )
-        if state is not None and state.open_correction_run_id == run_id:
+        open_run = None if state is None else state.open_correction_run_id
+        if open_run is not None and _descends_from(connection, run_id, open_run):
+            # The correction may have been worked on across several revisions, so what
+            # closes the month is that the finalised revision descends from the open
+            # correction, not that it is that exact revision.
             revision_state.clear_open_correction(connection, register_id, month)
 
     return finalisation_payload(connection, record)
@@ -1219,10 +1225,19 @@ def _carry_reviews(
     new_run_id: str,
     record: revision_state.FinalisationRow,
 ) -> tuple[list[str], list[str]]:
-    """Carry a review only where the content it attested is provably unchanged."""
+    """Carry a review only where the content it attested is provably unchanged.
+
+    Written through the row store rather than through ``mark_reviewed`` on purpose. A
+    review is an attestation of content, and this copy is restoring one against content
+    whose fingerprint is identical, not making a new assertion about a closed month. A
+    register of two months carries the reviews of both, while the correction changes one:
+    refusing the untouched month's carry would leave its copy unreviewed and force a
+    second review of a month nobody changed.
+    """
 
     before = {
-        item["date"]: item for item in revisions.review_state(connection, source_run_id)["dates"]
+        item["date"]: item
+        for item in revisions.review_state(connection, source_run_id)["dates"]
     }
     carried: list[str] = []
     pending: list[str] = []
@@ -1233,18 +1248,28 @@ def _carry_reviews(
             and previous["state"] == "reviewed"
             and previous["fingerprint"] == item["fingerprint"]
         ):
-            revisions.mark_reviewed(
+            revision_state.set_review(
                 connection,
                 new_run_id,
-                date.fromisoformat(item["date"]),
+                item["date"],
+                state=revision_state.REVIEWED,
+                reviewed_at=datetime.now().isoformat(),
                 note=f"carried from the finalised revision {record.revision_number}",
-                expected_fingerprint=item["fingerprint"],
+                content_fingerprint=item["fingerprint"],
+            )
+            revision_state.set_carried_from(
+                connection, new_run_id, item["date"], source_run_id
             )
             carried.append(item["date"])
         else:
             pending.append(item["date"])
-    for day in revision_state.locks(connection, source_run_id):
-        revisions.lock_date(connection, new_run_id, date.fromisoformat(day))
+
+    # Locks are preserved for the same reason: they are a property of the issued dates,
+    # and copying a revision must not quietly free them.
+    for day, row in revision_state.locks(connection, source_run_id).items():
+        revision_state.lock(
+            connection, new_run_id, day, locked_at=row.locked_at, note=row.note
+        )
     return carried, pending
 
 

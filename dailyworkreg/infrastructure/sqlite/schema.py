@@ -621,7 +621,11 @@ _MIGRATION_4_STATEMENTS = (
         readiness_json         TEXT NOT NULL DEFAULT '[]',
         master_version         INTEGER NOT NULL DEFAULT 0,
         note                   TEXT,
-        UNIQUE (run_id),
+        -- One revision can close several months of its range, so the key is the pair.
+        -- Uniqueness on the revision alone would make closing November prevent December
+        -- from being closed from the same revision, which is the opposite of monthly
+        -- finalisation.
+        UNIQUE (run_id, month),
         UNIQUE (register_id, month, sequence)
     )
     """,
