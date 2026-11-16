@@ -30,6 +30,16 @@ from ..application.calendar_projection import (
 )
 from ..application.draft_generation import DraftMode, generate_draft
 from ..application.draft_requests import GenerationInputError, GenerationSpec, prepare_generation
+from ..application.finalisation import (
+    FinalisationError,
+    abandon_correction,
+    check_finalisation,
+    correction_chain,
+    create_correction_revision,
+    finalisation_record,
+    finalise_month,
+    month_lifecycle,
+)
 from ..application.generation_runs import (
     GenerationStorageError,
     list_runs,
@@ -97,6 +107,14 @@ def _fail(constraint: str, error: Exception, status: int = 400) -> JSONResponse:
     return JSONResponse(
         status_code=status, content={"error": {"constraint": constraint, "detail": detail}}
     )
+
+
+def _tokens(value: str | None) -> tuple[str, ...]:
+    """Acknowledgements from a query string, one per repeated parameter."""
+
+    if not value:
+        return ()
+    return tuple(item for item in (part.strip() for part in value.split(",")) if item)
 
 
 def _error_payload(error: Exception) -> JSONResponse:
@@ -175,6 +193,19 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.exception_handler(SnapshotError)
     async def snapshot_error(_: Request, error: SnapshotError) -> JSONResponse:
         return _error_payload(error)
+
+    @app.exception_handler(FinalisationError)
+    async def finalisation_error(
+        _: Request, error: FinalisationError
+    ) -> JSONResponse:
+        payload: dict[str, Any] = {
+            "error": {"constraint": error.constraint, "detail": error.detail}
+        }
+        if error.blockers:
+            # Every reason a month cannot be closed travels with the refusal, so the page
+            # shows the whole picture rather than the first thing that went wrong.
+            payload["error"]["blockers"] = [item.as_dict() for item in error.blockers]
+        return JSONResponse(status_code=400, content=payload)
 
     @app.exception_handler(RevisionError)
     async def revision_error(_: Request, error: RevisionError) -> JSONResponse:
@@ -943,6 +974,73 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         run_id: str, day: date, db: sqlite3.Connection = Depends(get_db)
     ) -> dict[str, Any]:
         return unlock_date(db, run_id, day)
+
+    # --- finalising a month, and correcting a finalised one --------------
+
+    @app.get("/api/registers/{register_id}/months")
+    def read_month_lifecycle(
+        register_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> list[dict[str, Any]]:
+        return month_lifecycle(db, register_id)
+
+    @app.get("/api/generations/{run_id}/finalisation")
+    def read_finalisation_check(
+        run_id: str,
+        month: str,
+        acknowledged: str | None = None,
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        return check_finalisation(
+            db, run_id, month, acknowledged=_tokens(acknowledged)
+        ).as_dict()
+
+    @app.post("/api/generations/{run_id}/finalisation")
+    def close_month(
+        run_id: str,
+        payload: dict[str, Any],
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        return finalise_month(
+            db,
+            run_id,
+            payload["month"],
+            acknowledged=tuple(payload.get("acknowledged") or ()),
+            note=payload.get("note"),
+        )
+
+    @app.get("/api/registers/{register_id}/finalisations/{month}")
+    def read_month_finalisations(
+        register_id: str, month: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> list[dict[str, Any]]:
+        return correction_chain(db, register_id, month)
+
+    @app.get("/api/finalisations/{finalisation_id}")
+    def read_finalisation(
+        finalisation_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        return finalisation_record(db, finalisation_id)
+
+    @app.post("/api/finalisations/{finalisation_id}/corrections")
+    def start_correction(
+        finalisation_id: str,
+        payload: dict[str, Any],
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        record = finalisation_record(db, finalisation_id)
+        return create_correction_revision(
+            db, record["run_id"], reason=payload.get("reason", "")
+        )
+
+    @app.delete("/api/registers/{register_id}/months/{month}/correction")
+    def drop_correction(
+        register_id: str,
+        month: str,
+        payload: dict[str, Any] | None = None,
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        return abandon_correction(
+            db, register_id, month, note=(payload or {}).get("note")
+        )
 
     if STATIC.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")

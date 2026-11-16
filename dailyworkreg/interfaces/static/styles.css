@@ -144,3 +144,14 @@ input, select {
 .status-locked_preserved { background: #eef2f7; }
 .status-added { background: #eaf6ee; }
 .status-removed { background: #fbeceb; }
+.month-card {
+  margin: 0.6rem 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  background: #fff;
+}
+.month-card .tag { margin-right: 0.4rem; }
+.status-ok { color: #2f6b3a; }
+.status-correction_draft { background: #f3eef8; }
+.status-finalised { background: #eaf1ea; }

@@ -873,3 +873,133 @@ boundary, and neither exists yet. Enabling proration without them would produce 
 month that looks authoritative and is not. A later bounded act implements partial-month
 scheduling in full; until then the rule is arithmetic and tests, never a generated
 register.
+
+
+## 24. Implemented monthly finalisation and correction contract (as built)
+
+A register's months are closed one at a time, and a closed month is never reopened. This
+section records what is built, so a later change is a recorded decision rather than a
+silent one.
+
+### 24.1 Dimensions that stay distinct
+
+Seven things are recorded and reported separately, because collapsing any two of them
+would let an operator believe one state is another:
+
+| Dimension | Where it lives |
+| --- | --- |
+| The register | `register`, keyed `register_id` |
+| An immutable revision | `generation_run`, one row per revision, `revision_number` scoped to the register |
+| The current working revision | `register.current_run_id` |
+| A finalised monthly version | `month_finalisation`, one row per `(register, month, sequence)` |
+| The version in force for a month | `month_state.latest_finalisation_id` |
+| Review state | `date_review`, per date per revision, against a content fingerprint |
+| Lock state | `date_lock`, per date per revision |
+| An open correction | `month_state.open_correction_run_id` |
+
+Finalisation is monthly, not all-or-nothing across a range: closing November leaves
+December open, and December is closed by its own act with its own record. Every mutation
+is transactional; a failed write leaves neither a record nor a pointer.
+
+### 24.2 The decision to close is made in the application, once
+
+`dailyworkreg/application/finalisation.py` is the only code that decides whether a month
+may be closed and the only code that writes the record. A route translates, a page
+renders. `check_finalisation(connection, run_id, month, acknowledged=...)` returns
+`eligible` plus every blocker, each with a stable code, a label in an operator's words, a
+detail, the dates concerned and, where an acknowledgement is needed, the opaque token.
+
+The gates, in the order they are reported:
+
+1. **Current revision.** A superseded revision cannot be finalised, because closing it
+   would finalise content nobody is working from.
+2. **Not already finalised.** A month cannot be closed twice.
+3. **Allocation complete.** The month's stored status must be `allocation_complete`; an
+   `INFEASIBLE` or `INDETERMINATE` allocator status blocks the month by its own code.
+4. **Every date reviewed, against content that still matches.** Sundays, weekly offs,
+   General Holidays and dates with no visits are included: a date reviewed when it was
+   empty is a fact the office asserted. A review whose stored fingerprint no longer
+   matches the content is stale and blocks the month.
+5. **Operational masters present now.** Measured at closing time, not trusted from
+   generation time: the DTC roster, the official Karnataka General Holiday baseline for
+   each year the month touches, and the approved activity catalogue. A missing dependency
+   names itself. Nothing is fabricated to satisfy a gate.
+6. **The calendar still what the register describes.** A General Holiday recorded on a
+   date the revision holds as a working day blocks closing; a calendar that silently
+   moved under a register would make the closed document describe a day that never was.
+7. **No unresolved finding.** Stored `infeasible` and `unresolved` exceptions block the
+   month. `over_covered` does not block, it requires acknowledgement.
+8. **Acknowledgements for the findings that must be seen.** Every calendar conflict and
+   every over-covered commitment for this month needs an explicit acknowledgement, and an
+   acknowledgement naming no finding is refused rather than accepted. Findings are never
+   deleted; the acknowledgement is stored against the exact revision and fingerprint, and
+   the finding remains visible in the record.
+
+A month that does not cover the whole calendar month is refused as a part-month, decided
+from the stored rows rather than from the request. Partial-month scheduling is not
+implemented (section 23), so a part-month cannot be closed.
+
+### 24.3 The record and its write
+
+`finalise_month` runs the gates outside a write transaction — readiness and calendar
+projection read the masters, and that is not work to hold a lock across. The write that
+follows is short and re-checks the two things that would make the decision stale: the
+month's content fingerprint and the register's current revision. If either moved, nothing
+is written and the operator is asked to look again.
+
+The record holds the register, month, revision, sequence, parent finalisation, the
+revision it corrects (if any), the closing timestamp, the content fingerprint, the whole
+month content as approved (dates, visits, entries, warnings, month status, obligations and
+evidence), the acknowledged findings with what they said, the readiness measured at the
+moment of closing, the master version, and the operator's note. It is written once.
+
+### 24.4 Immutability
+
+A finalised month is refused by every path, and the refusal is a sentence an operator can
+act on:
+
+- entry edit, add, remove and move;
+- review, and review withdrawal;
+- lock and unlock;
+- regeneration of the revision, and acceptance of a candidate that would replace it.
+
+The guards are **month-scoped**, not revision-scoped, so a revision that has closed
+November can still be worked on in December. `finalisation.month_is_editable` answers the
+question, and the database triggers in migration 4 are narrowed to the row's own month for
+the same reason. Below the application, `BEFORE UPDATE` and `BEFORE DELETE` triggers abort
+any change to a finalised month's rows, reviews and locks, and any change to a finalisation
+record; those are the last line, not the operator-facing rule.
+
+There is no reopen, no unfinalise and no endpoint that deletes a record or a revision.
+
+### 24.5 Correction revisions
+
+`create_correction_revision(connection, finalised_run_id, reason=...)` is the only way to
+change a closed month. Preconditions: the source revision is finalised; that finalisation
+is the month's latest (a correction of a superseded version would branch the month's
+history); the reason is not empty; no other correction of the month is open; and the copy
+it starts from is verified against the record's fingerprint before anything is opened.
+
+The correction is a new revision that begins as an exact copy of the issued month. It
+records what it corrects (the revision and the finalisation), the reason, and the moment.
+It does not move the month's latest-finalisation pointer, so an open correction is a
+**correction draft** — never the version in force. Review is carried only for dates whose
+content fingerprint is unchanged, and those dates say they were carried; every other date
+starts pending. The original's locks are preserved, and a date that was locked changes
+only after an explicit unlock inside the correction.
+
+Finalising a correction records the next sequence with the previous finalisation as its
+parent and the original revision as what it corrects; the earlier versions stay readable
+exactly as issued, marked superseded. `abandon_correction` drops an open correction and
+returns the register to the record in force, leaving the abandoned revision readable —
+revisions are never deleted.
+
+### 24.6 What is not modelled
+
+- Partial-month generation, and therefore the use of the section 23 proration rule to
+  build a schedule. A part-month is still refused.
+- Reopening a finalised month, in place or by any other act.
+- PDF and Excel output of a finalised version; backup and restore.
+- An activity-selection scheduler. Entries on a date are rendered and corrected; which
+  activity belongs on a date is still the operator's entry, not a computed choice.
+- Authentication or multi-operator attribution. The note is the only human record.

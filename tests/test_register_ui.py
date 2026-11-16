@@ -88,3 +88,47 @@ def test_review_and_lock_are_displayed_as_separate_dimensions():
     assert "tag-locked" in APP_JS
     assert "pending review" in APP_JS
     assert "reviewed" in APP_JS and "locked" in APP_JS
+
+
+# --- closing a month, and correcting a closed one -------------------------
+
+
+def test_the_page_offers_a_place_to_close_a_month(client):
+    answer = client.get("/")
+
+    assert answer.status_code == 200
+    assert 'id="draft-months"' in answer.text
+
+
+def test_the_page_sends_finalisation_and_correction_to_the_server():
+    for path in ("/finalisation", "/finalisations/", "/corrections", "/months/"):
+        assert path in APP_JS, path
+
+
+def test_allocation_review_locks_and_finalisation_are_shown_separately():
+    # Four dimensions, four labels. Collapsing them into one status is what lets an
+    # operator believe a reviewed month is a closed one.
+    for label in ("'Allocation'", "'Review'", "'Locks'", "'Finalisation'"):
+        assert label in APP_JS, label
+
+
+def test_the_client_decides_no_finalisation_eligibility():
+    lowered = APP_JS.lower()
+    for word in (
+        "dates_not_reviewed",
+        "month_already_finalised",
+        "over_coverage_not_acknowledged",
+        "calendar_conflict_not_acknowledged",
+        "operational_masters_missing",
+        "correction_reason_required",
+        "month_is_finalised_and_immutable",
+    ):
+        assert word not in lowered, word
+    # No eligibility rule, no fingerprint comparison: the server answers both.
+    assert not re.search(r"eligible\s*=", APP_JS)
+    assert "fingerprint ===" not in APP_JS
+
+
+def test_an_acknowledgement_is_sent_back_exactly_as_it_arrived():
+    assert "value: item.token" in APP_JS
+    assert "node.value" in APP_JS

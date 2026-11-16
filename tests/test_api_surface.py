@@ -675,3 +675,225 @@ def test_a_candidate_can_be_refused_through_the_api_and_the_register_stays(stock
     assert refused["decision"] == "rejected"
     assert refused["current_run_id"] == made["run_id"]
     assert stocked.get(f"/api/registers/{register_id}/candidates").json() == []
+
+
+# --- finalising a month ----------------------------------------------------
+
+
+def review_all(client: TestClient, run_id: str) -> None:
+    for item in client.get(f"/api/generations/{run_id}/review").json()["dates"]:
+        client.put(
+            f"/api/generations/{run_id}/review/{item['date']}",
+            json={"fingerprint": item["fingerprint"]},
+        )
+
+
+def closed_month(client: TestClient, **overrides) -> tuple[str, dict]:
+    made = generate(client, **overrides)
+    review_all(client, made["run_id"])
+    answer = client.post(
+        f"/api/generations/{made['run_id']}/finalisation",
+        json={"month": "2026-11", "note": "closed"},
+    )
+    assert answer.status_code == 200, answer.text
+    return made["run_id"], answer.json()
+
+
+def test_why_a_month_cannot_be_finalised_is_answered_with_every_reason(stocked):
+    made = generate(stocked)
+
+    body = stocked.get(
+        f"/api/generations/{made['run_id']}/finalisation?month=2026-11"
+    ).json()
+
+    assert body["eligible"] is False
+    assert body["reviewed_dates"] == 0
+    assert body["total_dates"] == 30
+    codes = {item["code"] for item in body["blockers"]}
+    assert "dates_not_reviewed" in codes
+    blocker = next(
+        item for item in body["blockers"] if item["code"] == "dates_not_reviewed"
+    )
+    assert "2026-11-01" in blocker["dates"]
+
+
+def test_reviewing_every_date_makes_a_month_eligible(stocked):
+    made = generate(stocked)
+    review_all(stocked, made["run_id"])
+
+    body = stocked.get(
+        f"/api/generations/{made['run_id']}/finalisation?month=2026-11"
+    ).json()
+
+    assert body["eligible"] is True, body["blockers"]
+    assert body["blockers"] == []
+    assert body["is_operational_diary"] is True
+
+
+def test_a_month_is_finalised_over_the_surface(stocked):
+    run_id, record = closed_month(stocked)
+
+    assert record["month"] == "2026-11"
+    assert record["sequence"] == 1
+    assert record["is_latest"] is True
+    assert len(record["content"]["rows"]) == 30
+
+    read_back = stocked.get(f"/api/finalisations/{record['finalisation_id']}").json()
+    assert read_back["fingerprint"] == record["fingerprint"]
+    assert read_back["note"] == "closed"
+
+
+def test_a_blocked_finalisation_carries_its_blockers(stocked):
+    made = generate(stocked)
+
+    answer = stocked.post(
+        f"/api/generations/{made['run_id']}/finalisation",
+        json={"month": "2026-11"},
+    )
+
+    assert answer.status_code == 400
+    error = answer.json()["error"]
+    assert error["constraint"] == "dates_not_reviewed"
+    assert error["blockers"]
+    assert any(item["code"] == "dates_not_reviewed" for item in error["blockers"])
+    assert stocked.get(f"/api/finalisations/{'MF-nothing'}").status_code == 400
+
+
+def test_a_finalised_month_refuses_edits_over_the_surface(stocked):
+    run_id, _ = closed_month(stocked)
+
+    answer = stocked.post(
+        f"/api/generations/{run_id}/entries",
+        json={"date": "2026-11-04", "kind": "activity", "title_en": "Late"},
+    )
+
+    assert answer.status_code == 400
+    assert answer.json()["error"]["constraint"] in {
+        "month_is_finalised_and_immutable",
+        "revision_is_not_current",
+    }
+
+
+def test_the_month_lifecycle_reports_four_separate_dimensions(stocked):
+    run_id, record = closed_month(stocked)
+    register = stocked.get(f"/api/generations/{run_id}").json()
+    register_id = stocked.get(f"/api/generations/{run_id}/review").json()["register_id"]
+
+    months = stocked.get(f"/api/registers/{register_id}/months").json()
+
+    assert [item["month"] for item in months] == ["2026-11"]
+    month = months[0]
+    assert month["allocation_complete"] is True
+    assert month["allocator_status"].upper() == "FEASIBLE"
+    assert month["reviewed_dates"] == month["total_dates"] == 30
+    assert month["finalised"] is True
+    assert month["latest_finalisation_id"] == record["finalisation_id"]
+    assert month["locked_dates"] == 0
+    assert month["lifecycle"] == "finalised"
+    assert register["is_draft"] is True
+
+
+def test_one_month_is_finalised_while_the_next_stays_open(stocked):
+    made = generate(stocked, end="2026-12-31", cycle_duration_months=2)
+    review_all(stocked, made["run_id"])
+    register_id = stocked.get(f"/api/generations/{made['run_id']}/review").json()[
+        "register_id"
+    ]
+
+    answer = stocked.post(
+        f"/api/generations/{made['run_id']}/finalisation",
+        json={"month": "2026-11"},
+    )
+    assert answer.status_code == 200
+
+    months = {
+        item["month"]: item
+        for item in stocked.get(f"/api/registers/{register_id}/months").json()
+    }
+    assert months["2026-11"]["lifecycle"] == "finalised"
+    assert months["2026-12"]["lifecycle"] == "reviewed"
+    assert months["2026-12"]["finalised"] is False
+
+
+# --- correcting a finalised month -----------------------------------------
+
+
+def test_a_correction_is_started_from_a_finalised_month(stocked):
+    run_id, record = closed_month(stocked)
+
+    answer = stocked.post(
+        f"/api/finalisations/{record['finalisation_id']}/corrections",
+        json={"reason": "the 4th was entered wrong"},
+    )
+
+    assert answer.status_code == 200, answer.text
+    body = answer.json()
+    assert body["correction_of_run_id"] == run_id
+    assert body["correction_of_finalisation_id"] == record["finalisation_id"]
+    assert body["reason"] == "the 4th was entered wrong"
+    assert body["next_sequence"] == 2
+    assert len(body["carried_reviews"]) == 30
+
+
+def test_a_correction_without_a_reason_is_refused(stocked):
+    _, record = closed_month(stocked)
+
+    answer = stocked.post(
+        f"/api/finalisations/{record['finalisation_id']}/corrections",
+        json={"reason": "  "},
+    )
+
+    assert answer.status_code == 400
+    assert answer.json()["error"]["constraint"] == "correction_reason_required"
+
+
+def test_the_original_version_is_readable_after_its_correction_is_finalised(stocked):
+    run_id, record = closed_month(stocked)
+    correction = stocked.post(
+        f"/api/finalisations/{record['finalisation_id']}/corrections",
+        json={"reason": "a correction"},
+    ).json()
+    corrected_run = correction["correction_run_id"]
+    edit = stocked.post(
+        f"/api/generations/{corrected_run}/entries",
+        json={"date": "2026-11-04", "kind": "activity", "title_en": "Corrected"},
+    ).json()
+    corrected_run = edit["run_id"]
+    review_all(stocked, corrected_run)
+    successor = stocked.post(
+        f"/api/generations/{corrected_run}/finalisation", json={"month": "2026-11"}
+    )
+    assert successor.status_code == 200, successor.text
+    successor = successor.json()
+    assert successor["sequence"] == 2
+    assert successor["parent_finalisation_id"] == record["finalisation_id"]
+    assert successor["correction_of_run_id"] == run_id
+
+    chain = stocked.get(
+        f"/api/registers/{correction['register_id']}/finalisations/2026-11"
+    ).json()
+    assert [item["sequence"] for item in chain] == [1, 2]
+    assert [item["is_latest"] for item in chain] == [False, True]
+    assert chain[0]["content"] == record["content"]
+    titles = [item[2] for item in chain[1]["content"]["rows"]["2026-11-04"]["entries"]]
+    assert "Corrected" in titles
+
+
+def test_an_open_correction_can_be_abandoned_over_the_surface(stocked):
+    run_id, record = closed_month(stocked)
+    correction = stocked.post(
+        f"/api/finalisations/{record['finalisation_id']}/corrections",
+        json={"reason": "opened by mistake"},
+    ).json()
+
+    answer = stocked.delete(
+        f"/api/registers/{correction['register_id']}/months/2026-11/correction"
+    )
+
+    assert answer.status_code == 200
+    assert answer.json()["current_run_id"] == run_id
+    months = stocked.get(
+        f"/api/registers/{correction['register_id']}/months"
+    ).json()
+    assert months[0]["lifecycle"] == "finalised"
+    assert months[0]["open_correction_run_id"] is None

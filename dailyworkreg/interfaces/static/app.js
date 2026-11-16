@@ -642,6 +642,7 @@ async function openDraft(runId) {
   renderRevisions(registerDetail);
   renderRegeneration(register, review);
   hide(document.getElementById('candidate-panel'));
+  await renderMonths(review.register_id, runId);
 }
 
 // --- history ---------------------------------------------------------------
@@ -1045,6 +1046,272 @@ function renderRegeneration(register, review) {
         + ` · ${review.reviewed_dates}/${review.total_dates} dates reviewed · ${review.locked_dates} locked`,
     }),
   ]));
+}
+
+// --- closing a month, and correcting a closed one --------------------------
+
+// Review, locks, allocation and finalisation answer four different questions, so they
+// are shown as four separate facts. The client never decides whether a month may be
+// closed: it asks the server for the reasons and renders them, and it sends back the
+// opaque acknowledgement tokens exactly as they arrived.
+
+function dimension(label, value) {
+  return el('span', { class: 'tag', text: `${label}: ${value}` });
+}
+
+function monthDimensions(month) {
+  return el('div', { class: 'actions' }, [
+    el('strong', { text: month.month }),
+    dimension('Stage', month.lifecycle),
+    dimension('Allocation', month.allocation_complete
+      ? month.allocator_status
+      : `${month.allocator_status} (no complete allocation)`),
+    dimension('Review', `${month.reviewed_dates} of ${month.total_dates} dates`),
+    dimension('Locks', `${month.locked_dates} locked`),
+    dimension('Finalisation', month.finalised
+      ? `closed ${isoDay(month.finalised_at)} as revision ${month.latest_finalisation_revision}`
+      : 'not finalised'),
+  ]);
+}
+
+function blockerTable(check) {
+  if (!check.blockers.length) {
+    return el('p', { class: 'status-ok', text: 'Ready to close.' });
+  }
+  return table(
+    ['What is in the way', 'Detail', 'Dates'],
+    check.blockers.map((blocker) => el('tr', {}, [
+      el('td', { text: blocker.label }),
+      el('td', { text: blocker.detail }),
+      el('td', { text: (blocker.dates || []).join(', ') || '—' }),
+    ])),
+  );
+}
+
+function acknowledgements(check) {
+  const items = [
+    ...check.over_coverage.map((item) => ({ ...item, what: 'Over-covered commitment' })),
+    ...check.conflicts.map((item) => ({ ...item, what: 'Calendar conflict' })),
+  ];
+  if (!items.length) {
+    return null;
+  }
+  return el('div', { class: 'detail' }, [
+    el('strong', { text: 'Recorded findings to acknowledge' }),
+    el('p', { class: 'muted', text: 'These stay on the record after closing; acknowledging says you have seen them.' }),
+    table(
+      ['Finding', 'Detail', 'Acknowledge'],
+      items.map((item) => el('tr', {}, [
+        el('td', { text: item.what }),
+        el('td', { text: item.detail || `${item.asset_id || ''} ${item.limit ?? ''} → ${item.actual ?? ''}` }),
+        el('td', {}, [
+          el('input', { type: 'checkbox', class: 'ack', value: item.token, title: item.token }),
+        ]),
+      ])),
+    ),
+  ]);
+}
+
+function collectAcknowledgements(root) {
+  return Array.from(root.querySelectorAll('input.ack:checked')).map((node) => node.value);
+}
+
+function renderFinalisationCheck(target, check, runId, registerId) {
+  target.textContent = '';
+  const note = el('input', { type: 'text', placeholder: 'Note (optional)' });
+  const result = el('div', { class: 'detail' });
+  const ack = acknowledgements(check);
+
+  target.append(
+    el('p', { class: 'muted', text: check.eligible
+      ? 'The server reports this month can be closed.'
+      : 'The server reports this month cannot be closed yet.' }),
+    el('p', { class: 'muted', text: `Draft complete diary: ${check.is_operational_diary ? 'yes' : 'no'}`
+      + (check.missing_content.length ? ` · missing: ${check.missing_content.join(', ')}` : '') }),
+    blockerTable(check),
+    ack,
+    el('div', { class: 'actions' }, [
+      note,
+      el('button', {
+        class: 'button button-primary',
+        text: 'Finalise this month',
+        onclick: async () => {
+          try {
+            const record = await api(`/api/generations/${runId}/finalisation`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                month: check.month,
+                note: note.value.trim() === '' ? null : note.value.trim(),
+                acknowledged: collectAcknowledgements(target),
+              }),
+            });
+            showBanner(result, 'ok', `Closed ${record.month} as version ${record.sequence}.`, [
+              `finalisation ${record.finalisation_id}`,
+              `fingerprint ${record.fingerprint.slice(0, 12)}`,
+            ]);
+            await renderMonths(registerId, runId);
+          } catch (error) {
+            showBanner(result, 'warn', error.message);
+          }
+        },
+      }),
+    ]),
+    result,
+  );
+}
+
+function renderChain(target, chain, registerId, runId) {
+  target.textContent = '';
+  if (!chain.length) {
+    target.append(el('p', { class: 'muted', text: 'This month has not been finalised.' }));
+    return;
+  }
+  const detail = el('div', { class: 'detail' });
+  target.append(
+    table(
+      ['Version', 'Revision', 'Closed at', 'Corrects', 'Status', 'Document'],
+      chain.map((item) => el('tr', {}, [
+        el('td', { text: String(item.sequence) }),
+        el('td', { text: String(item.revision_number) }),
+        el('td', { text: isoDay(item.finalised_at) }),
+        el('td', { text: item.correction_of_run_id || '—' }),
+        el('td', { text: item.is_latest ? 'in force' : 'superseded' }),
+        el('td', {}, [
+          el('button', {
+            class: 'link',
+            text: 'View',
+            onclick: async () => {
+              const record = await api(`/api/finalisations/${item.finalisation_id}`);
+              renderIssuedDocument(detail, record, registerId, runId);
+            },
+          }),
+        ]),
+      ])),
+    ),
+    detail,
+  );
+}
+
+function renderIssuedDocument(target, record, registerId, runId) {
+  target.textContent = '';
+  const days = Object.keys(record.content.rows).sort();
+  target.append(
+    el('p', { class: 'muted', text: `Issued version ${record.sequence} of ${record.month}`
+      + ` · closed ${isoDay(record.finalised_at)} · ${record.acknowledged.length} acknowledged`
+      + ` · fingerprint ${record.fingerprint.slice(0, 12)}` }),
+    el('p', { class: 'muted', text: 'This is the document as approved. It cannot be changed.' }),
+    table(
+      ['Date', 'Visits', 'Entries', 'Warnings'],
+      days.map((day) => {
+        const row = record.content.rows[day];
+        return el('tr', {}, [
+          el('td', { text: day }),
+          el('td', { text: row.visits.map((visit) => visit[2]).join(', ') }),
+          el('td', { text: row.entries.map((entry) => entry[2]).join(', ') }),
+          el('td', { text: (row.warnings || []).map((item) => item[1]).join(', ') }),
+        ]);
+      }),
+    ),
+  );
+  if (record.acknowledged.length) {
+    target.append(table(
+      ['Acknowledged finding', 'Detail'],
+      record.acknowledged.map((item) => el('tr', {}, [
+        el('td', { text: item.constraint || 'calendar conflict' }),
+        el('td', { text: item.detail }),
+      ])),
+    ));
+  }
+  const reason = el('input', { type: 'text', placeholder: 'Why does this version need correcting?' });
+  const outcome = el('div', { class: 'detail' });
+  target.append(
+    el('div', { class: 'actions' }, [
+      reason,
+      el('button', {
+        class: 'button',
+        text: 'Start a correction',
+        onclick: async () => {
+          try {
+            const correction = await api(`/api/finalisations/${record.finalisation_id}/corrections`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reason: reason.value }),
+            });
+            showBanner(outcome, 'ok', `Correction opened as revision ${correction.revision_number}.`, [
+              `It starts as a copy of version ${correction.correction_of_sequence}.`,
+              `${correction.pending_dates.length} date(s) must be reviewed again.`,
+            ]);
+            await renderMonths(registerId, runId);
+          } catch (error) {
+            showBanner(outcome, 'warn', error.message);
+          }
+        },
+      }),
+    ]),
+    outcome,
+  );
+}
+
+function monthCard(registerId, runId, month) {
+  const panel = el('div', { class: 'month-card' });
+  const checkTarget = el('div', { class: 'detail' });
+  const chainTarget = el('div', { class: 'detail' });
+
+  const actions = el('div', { class: 'actions' }, [
+    el('button', {
+      class: 'button',
+      text: 'Why can this be closed?',
+      onclick: async () => {
+        const check = await api(
+          `/api/generations/${runId}/finalisation?month=${encodeURIComponent(month.month)}`,
+        );
+        renderFinalisationCheck(checkTarget, check, runId, registerId);
+      },
+    }),
+    el('button', {
+      class: 'button',
+      text: 'Issued versions',
+      onclick: async () => {
+        const chain = await api(`/api/registers/${registerId}/finalisations/${month.month}`);
+        renderChain(chainTarget, chain, registerId, runId);
+      },
+    }),
+  ]);
+
+  if (month.open_correction_run_id) {
+    actions.append(
+      el('button', {
+        class: 'button',
+        text: `Open the correction (revision ${month.open_correction_revision || '?'})`,
+        onclick: () => openDraft(month.open_correction_run_id),
+      }),
+      el('button', {
+        class: 'button',
+        text: 'Abandon the correction',
+        onclick: async () => {
+          await api(
+            `/api/registers/${registerId}/months/${encodeURIComponent(month.month)}/correction`,
+            { method: 'DELETE' },
+          );
+          await renderMonths(registerId, runId);
+        },
+      }),
+    );
+  }
+
+  panel.append(monthDimensions(month), actions, checkTarget, chainTarget);
+  return panel;
+}
+
+async function renderMonths(registerId, runId) {
+  const target = document.getElementById('draft-months');
+  if (!target) return;
+  target.textContent = '';
+  const months = await api(`/api/registers/${registerId}/months`);
+  target.append(el('h3', { text: 'Closing the month' }));
+  target.append(el('p', { class: 'muted', text: 'Each month is closed on its own. A closed month is never reopened; a mistake is corrected by a new version.' }));
+  months.forEach((month) => target.append(monthCard(registerId, runId, month)));
 }
 
 // --- start -----------------------------------------------------------------
