@@ -1,7 +1,7 @@
 # DailyDairyRegister — data templates and office-data guide
 
-**Folder:** \`data/templates/\`  
-**Local working copy:** \`data/record_A/\`  
+**Folder:** `data/templates/`  
+**Local working copy:** `data/record_A/`  
 **Purpose:** prepare one office's master data and month-specific operational inputs without changing the pristine templates.
 
 > **Important status labels**
@@ -14,12 +14,12 @@
 
 1. Clone or pull the repository. The templates are individual files directly in this folder; there is no extraction step.
 2. Read this file before editing.
-3. Copy only the required CSVs into \`data/record_A/\`. Edit the copies, not the originals in \`data/templates/\`.
-4. Keep UTF-8 encoding (Kannada fields require it) and ISO dates \`YYYY-MM-DD\`.
-5. Preserve original source spelling, blank values and literal markers such as \`#N/A\`. Do not replace blanks with zero or invented values.
+3. Copy only the required CSVs into `data/record_A/`. Edit the copies, not the originals in `data/templates/`.
+4. Keep UTF-8 encoding (Kannada fields require it) and ISO dates `YYYY-MM-DD`.
+5. Preserve original source spelling, blank values and literal markers such as `#N/A`. Do not replace blanks with zero or invented values.
 6. Keep source files, notification copies, approvals, source sheet names, extraction dates and issuing-office details available for provenance.
 7. The application import lifecycle is **read → judge → stage → operator review → accept/reject**. Uploading is not acceptance. Do not edit SQLite directly.
-8. Never put filled office data, personal/employee data, actual DTC roster rows, leave/events/commitments, local DBs or backups in Git. \`data/record_A/**\` is ignored by Git; its README is tracked.
+8. Never put filled office data, personal/employee data, actual DTC roster rows, leave/events/commitments, local DBs or backups in Git. `data/record_A/**` is ignored by Git; its README is tracked.
 
 ## 2. What the current application can import
 
@@ -27,28 +27,28 @@ The current tabular importer registers exactly these five dataset keys:
 
 | Dataset key | File in this folder | Status |
 |---|---|---|
-| \`dtc\` | \`01_dtc_master_roster.csv\` | Blank import template |
-| \`general_holiday\` | \`02_karnataka_general_holidays_2025_2026.csv\` | Notification transcription; verify first |
-| \`activity\` | \`03_activity_catalogue_blank_import.csv\` | Blank import template |
-| \`area\` | \`04_area_master.csv\` | Seeded reference rows in import shape |
-| \`feeder\` | \`05_feeder_master.csv\` | Seeded reference rows in import shape |
+| `dtc` | `01_dtc_master_roster.csv` | Blank import template |
+| `general_holiday` | `02_karnataka_general_holidays_2025_2026.csv` | Notification transcription; verify first |
+| `activity` | `03_activity_catalogue_blank_import.csv` | Blank import template |
+| `area` | `04_area_master.csv` | Seeded reference rows in import shape |
+| `feeder` | `05_feeder_master.csv` | Seeded reference rows in import shape |
 
-These headers are aligned with the repository's current \`dailyworkreg/infrastructure/imports/datasets.py\` aliases. Keep the headers unchanged. Importability is not approval: review the staging verdict, warnings, raw-source retention, and proposed canonical changes before acceptance.
+These headers are aligned with the repository's current `dailyworkreg/infrastructure/imports/datasets.py` aliases. Keep the headers unchanged. Importability is not approval: review the staging verdict, warnings, raw-source retention, and proposed canonical changes before acceptance.
 
 The remaining files are reference/calculation/capture material. They are **not** separate importer datasets. Do not try to upload them under another dataset key.
 
 ## 3. DTC master roster
 
-### File: \`01_dtc_master_roster.csv\`
+### File: `01_dtc_master_roster.csv`
 
 Blank header:
-\`DTC ID,DTC Name,Class,Feeder,Feeder Code,MDM Code,kVA,Station\`
+`DTC ID,DTC Name,Class,Feeder,Feeder Code,MDM Code,kVA,Station`
 
 - Keep every source row from the original source extract, including SCF/SCE rows. Let the import judge explicitly exclude them; do not pre-filter them.
 - The expected reconciliation is **113 SCD**: 68 DEPT and 45 SELF_DTC (42 MSB + 3 OWN). Expected excluded source records: five SCF and one SCE. These are checks against the source, not target numbers to force by editing.
 - Accepted source classes are DEPT, MSB and OWN. DEPT maps to canonical class DEPT; MSB/OWN map to SELF_DTC while retaining source subgroup. SCF/SCE are excluded. Unknown classes are errors, not guesses.
-- Preserve source DTC name, feeder text, feeder code, MDM code, kVA, station and original source class. The \`Feeder\` column is source feeder text, not a canonical feeder ID.
-- Blank or \`#N/A\` kVA must not be treated as zero. It leaves the weight incomplete and should be reviewed.
+- Preserve source DTC name, feeder text, feeder code, MDM code, kVA, station and original source class. The `Feeder` column is source feeder text, not a canonical feeder ID.
+- Blank or `#N/A` kVA must not be treated as zero. It leaves the weight incomplete and should be reviewed.
 - Capture source filename, issuing office, worksheet name, extraction date and source/as-of date in the import batch notes or separate provenance record.
 
 Owner-confirmed canonical overrides applied by the current application on DTC batch acceptance:
@@ -66,13 +66,13 @@ Keep the supplied feeder string unchanged. The override sets the canonical feede
 
 ## 4. Karnataka General Holidays 2025–2026
 
-### File: \`02_karnataka_general_holidays_2025_2026.csv\`
+### File: `02_karnataka_general_holidays_2025_2026.csv`
 
 - Contains 19 dates for 2025 and 20 dates for 2026, transcribed from the Karnataka State General Holiday notification/circular references recorded in the source columns and below.
 - **Do not regard this transcription as finally verified.** The copies linked below are hosted by third parties, not official Karnataka government domains. Check the signed notification, Gazette or your office copy before importing/accepting. Check for subsequent Government corrigenda/orders, especially date changes or conditional alternate observance directions.
 - 2025: Government of Karnataka No.DPAR 16 HHL 2024 dated 21-11-2024; source copy: [KEA-hosted 2025 circular PDF](https://kea.co.in/wp-content/uploads/2024/12/Circular-No-68-2024-KARNATAKA-GOVERNMENT-HOLIDAYS-FOR-THE-YEAR-2025.pdf). The CSV transcribes the General Holiday table; it does not claim a Notification-I label for this source.
 - 2026: Government of Karnataka No.DPAR 16 HHL 2025 dated 17-11-2025, Notification-I; source copy: [2026 notification PDF mirror](https://comply4hr.com/noti/2016/KASAR2025Nov17.pdf).
-- The importer reads \`Date\`, \`Name\`, and optional \`Description\`. The extra calendar-year/notification/source-document columns remain as raw provenance in the staged source row.
+- The importer reads `Date`, `Name`, and optional `Description`. The extra calendar-year/notification/source-document columns remain as raw provenance in the staged source row.
 - Description is blank because no owner-approved register wording was supplied. Do not invent Kannada translations or daily wording here.
 - Only General Holidays are included. Restricted Holidays are ordinary working days in this product and must be ignored entirely: do not import, display, classify or add their names/dates.
 - Do not add Kodagu district local holidays for the Shivamogga section. Do not add bank-only holidays as General Holidays.
@@ -82,16 +82,16 @@ Keep the supplied feeder string unchanged. The override sets the canonical feede
 ## 5. Approved O&M activity catalogue
 
 ### Files
-- \`03_activity_catalogue_blank_import.csv\` — the only file intended for the activity importer.
-- \`03_activity_proposed_examples_DO_NOT_IMPORT.csv\` — 51 English drafting suggestions; **not approved**, not operational data, and with no approved Kannada translations.
+- `03_activity_catalogue_blank_import.csv` — the only file intended for the activity importer.
+- `03_activity_proposed_examples_DO_NOT_IMPORT.csv` — 51 English drafting suggestions; **not approved**, not operational data, and with no approved Kannada translations.
 
 Blank importer headings:
-\`Activity ID,Category,Description,Kannada,Weight,Monthly Min,Monthly Max,Repeat Gap,Weekdays\`
+`Activity ID,Category,Description,Kannada,Weight,Monthly Min,Monthly Max,Repeat Gap,Weekdays`
 
 Target catalogue size is approximately 40–60 distinct approved MESCOM/BESCOM section-level activities across technical O&M, preventive maintenance, consumer service, revenue/energy accounting, safety, inspection/administration and works.
 
 For every approved activity, supply:
-- a stable unique \`Activity ID\`;
+- a stable unique `Activity ID`;
 - category;
 - approved English description;
 - approved Kannada description;
@@ -104,9 +104,9 @@ The proposed examples are a starting point for review only. Rewrite/approve them
 
 ## 6. Area master
 
-### File: \`04_area_master.csv\`
+### File: `04_area_master.csv`
 
-**APPROVED BASELINE / SEEDED** identities from current \`seed.py\` and product baseline §7. Sixteen canonical areas and known aliases are prefilled; English names remain blank because no approved transliterations were available.
+**APPROVED BASELINE / SEEDED** identities from current `seed.py` and product baseline §7. Sixteen canonical areas and known aliases are prefilled; English names remain blank because no approved transliterations were available.
 
 | ID | Canonical Kannada name | Known alias |
 |---|---|---|
@@ -127,15 +127,15 @@ The proposed examples are a starting point for review only. Rewrite/approve them
 | A-15 | ಉಪ್ಪಾರ ಕೇರಿ | — |
 | A-16 | ಕಸ್ತೂರ್ಬಾ ರಸ್ತೆ | — |
 
-Headers: \`Area ID\`, \`Kannada Name\` (required), \`English Name\`, \`Aliases\` (semicolon-separated), \`Weight\`, \`Monthly Min\`, \`Monthly Max\`, \`Revisit Gap\`.
+Headers: `Area ID`, `Kannada Name` (required), `English Name`, `Aliases` (semicolon-separated), `Weight`, `Monthly Min`, `Monthly Max`, `Revisit Gap`.
 
 Prefilled values (weight 1.0, minimum 0, maximum 3, revisit gap 7 calendar days) are the repository's current seeded settings. Maximum 3 is a cap, not an obligation. No policy requires all 16 areas to be visited monthly. DTC-to-area mapping remains deferred; do not invent one.
 
 ## 7. Feeder master and DTC override reference
 
 ### Files
-- \`05_feeder_master.csv\` — current four seeded feeder identities in importer shape.
-- \`05_dtc_feeder_overrides_reference.csv\` — six owner-confirmed mappings; reference only, not an importer dataset.
+- `05_feeder_master.csv` — current four seeded feeder identities in importer shape.
+- `05_dtc_feeder_overrides_reference.csv` — six owner-confirmed mappings; reference only, not an importer dataset.
 
 | Feeder ID | Seeded canonical feeder |
 |---|---|
@@ -151,9 +151,9 @@ Feeder weight is derived from the sum of installed kVA of active DEPT DTCs assig
 ## 8. DTC class mapping and weighting
 
 ### Files
-- \`06_dtc_classification_reference.csv\` — reference policy already implemented by the DTC judge.
-- \`07_dtc_weighting_template.csv\` — a working calculation/reference sheet for up to 113 DTCs, **not an importer dataset**.
-- \`07_dtc_weighting_worked_examples_DO_NOT_IMPORT.csv\` — three fictional formula demonstrations.
+- `06_dtc_classification_reference.csv` — reference policy already implemented by the DTC judge.
+- `07_dtc_weighting_template.csv` — a working calculation/reference sheet for up to 113 DTCs, **not an importer dataset**.
+- `07_dtc_weighting_worked_examples_DO_NOT_IMPORT.csv` — three fictional formula demonstrations.
 
 | Source class | Canonical class | Retained subgroup | Active? | Class multiplier |
 |---|---|---|---|---:|
@@ -173,15 +173,15 @@ The files below are useful source/capture sheets, but the current tabular import
 
 | File | One row represents | Required evidence / notes |
 |---|---|---|
-| \`08_monthly_leave_records.csv\` | One employee leave interval | Employee ID/name; CL or FPL; inclusive dates; full-day flag; approval status; approver and written approval reference |
-| \`09_monthly_special_events.csv\` | One dated event/inspection/programme | Date/type/title; details; venue; organising authority; source/approval reference; status |
-| \`10_monthly_additional_meetings.csv\` | One additional meeting | Date/type/title; venue; convenor; participants/sections; notice/reference; status |
-| \`11_monthly_fixed_dtc_visits.csv\` | One confirmed DTC visit commitment | Date; canonical DTC ID; reason/scope; requester; written authority/source reference; commitment status |
-| \`12_monthly_fixed_area_visits.csv\` | One confirmed area visit commitment | Date; canonical Area ID; reason/scope; requester; authority/reference; commitment status |
-| \`13_monthly_fixed_feeder_visits.csv\` | One confirmed feeder visit commitment | Date; canonical Feeder ID; reason/scope; requester; authority/reference; commitment status |
-| \`14_monthly_date_overrides.csv\` | One explicit date override | Date; Y/N effective working-day decision; reasons in both languages; written approval; approving officer; underlying calendar fact |
+| `08_monthly_leave_records.csv` | One employee leave interval | Employee ID/name; CL or FPL; inclusive dates; full-day flag; approval status; approver and written approval reference |
+| `09_monthly_special_events.csv` | One dated event/inspection/programme | Date/type/title; details; venue; organising authority; source/approval reference; status |
+| `10_monthly_additional_meetings.csv` | One additional meeting | Date/type/title; venue; convenor; participants/sections; notice/reference; status |
+| `11_monthly_fixed_dtc_visits.csv` | One confirmed DTC visit commitment | Date; canonical DTC ID; reason/scope; requester; written authority/source reference; commitment status |
+| `12_monthly_fixed_area_visits.csv` | One confirmed area visit commitment | Date; canonical Area ID; reason/scope; requester; authority/reference; commitment status |
+| `13_monthly_fixed_feeder_visits.csv` | One confirmed feeder visit commitment | Date; canonical Feeder ID; reason/scope; requester; authority/reference; commitment status |
+| `14_monthly_date_overrides.csv` | One explicit date override | Date; Y/N effective working-day decision; reasons in both languages; written approval; approving officer; underlying calendar fact |
 
-The matching files ending \`_example_DO_NOT_IMPORT.csv\` contain fictional rows solely to illustrate shape. Do not copy those rows into real data. The initial leave model has no half-day leave. Do not mark leave or a fixed visit approved/committed without the relevant authority. Multiple events/meetings can occur on one date. Do not duplicate the automatic every-Monday safety meeting as an additional meeting unless it is a distinct meeting.
+The matching files ending `_example_DO_NOT_IMPORT.csv` contain fictional rows solely to illustrate shape. Do not copy those rows into real data. The initial leave model has no half-day leave. Do not mark leave or a fixed visit approved/committed without the relevant authority. Multiple events/meetings can occur on one date. Do not duplicate the automatic every-Monday safety meeting as an additional meeting unless it is a distinct meeting.
 
 ## 10. Shared scheduling rules to remember
 
@@ -199,4 +199,4 @@ The matching files ending \`_example_DO_NOT_IMPORT.csv\` contain fictional rows 
 
 ## 11. Privacy, provenance and acceptance
 
-Keep the original source documents and approvals. The import staging tables preserve raw source rows; do not “clean” the only copy of a source workbook. Review every warning/exclusion and compare totals with the source before accepting. Never fabricate DTC names, kVA, feeder, activity approval, Kannada translation, employee leave or dated commitment. Filled office data belongs only in your local \`data/record_A/\` working copy and the application's local database, never in Git.
+Keep the original source documents and approvals. The import staging tables preserve raw source rows; do not “clean” the only copy of a source workbook. Review every warning/exclusion and compare totals with the source before accepting. Never fabricate DTC names, kVA, feeder, activity approval, Kannada translation, employee leave or dated commitment. Filled office data belongs only in your local `data/record_A/` working copy and the application's local database, never in Git.

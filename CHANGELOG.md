@@ -7,6 +7,10 @@ The repository policy in `CLAUDE.md` requires every change, however small, to ha
 ## [Unreleased]
 
 ### Fixed
+- **2026-11-16 — Align local-record instructions and README formatting with the individual-file template layout:** Removed the obsolete ZIP-extraction instruction from `data/record_A/README.md` and corrected literal Markdown escaping in the detailed `data/templates/README.md`. The template directory is now consistently documented as directly containing the CSVs and the data dictionary. No operational data or application behavior changed.
+
+
+### Fixed
 - **2026-11-16 — Store office templates as individual files, not a truncated archive:** The first template commit placed a ZIP in `data/templates/`, but the GitHub blob did not contain the complete locally validated archive. Removed that incomplete ZIP and committed all 24 CSV files individually beside the full data-dictionary README so the templates can be copied directly into `data/record_A/` without an extraction step. The files remain separated into the five importer-compatible templates, seeded/reference sheets, and clearly marked `DO_NOT_IMPORT` examples. No operational records or application behavior changed. This correction keeps the failed archive out of the working workflow; the original commit remains in history, and the new tree contains the complete individual files.
 
 
