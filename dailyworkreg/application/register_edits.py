@@ -265,17 +265,17 @@ def _require_editable(
     """
 
     from . import finalisation
-    from .revisions import register_of
 
     locked = revision_state.locks(connection, run_id)
-    closed = finalisation.finalised_months(connection, register_of(connection, run_id))
     for day in days:
         if day.isoformat() in locked:
             raise RevisionError(
                 C_DATE_LOCKED,
                 f"{day.isoformat()} is locked; unlock it before correcting that date",
             )
-        if day.isoformat()[:7] in closed:
+        if not finalisation.month_is_editable(
+            connection, run_id, day.isoformat()[:7]
+        ):
             raise finalisation.FinalisationError(
                 finalisation.C_MONTH_FINALISED,
                 (

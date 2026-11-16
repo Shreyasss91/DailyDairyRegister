@@ -25,6 +25,7 @@ from dailyworkreg.application.draft_generation import (
 from dailyworkreg.application.draft_requests import GenerationSpec, prepare_generation
 from dailyworkreg.application.regeneration import accept_candidate, regenerate_candidate
 from dailyworkreg.application.register_edits import add_entry, edit_entry
+from dailyworkreg.application.revisions import RevisionError
 from dailyworkreg.domain.cycle import MonthKey
 from dailyworkreg.infrastructure.sqlite import calendar_records as cal
 from dailyworkreg.infrastructure.sqlite import masters, revision_state
@@ -257,9 +258,13 @@ def test_a_revision_is_finalised_at_most_once(db):
 # --- the gates -------------------------------------------------------------
 
 
-def review_every_date(db: sqlite3.Connection, run_id: str) -> None:
+def review_every_date(
+    db: sqlite3.Connection, run_id: str, *, month: str | None = None
+) -> None:
     state = revisions.review_state(db, run_id)
     for item in state["dates"]:
+        if month is not None and not item["date"].startswith(month):
+            continue
         revisions.mark_reviewed(
             db, run_id, date.fromisoformat(item["date"]),
             expected_fingerprint=item["fingerprint"],
@@ -708,7 +713,7 @@ def test_working_on_an_open_month_leaves_a_closed_one_untouched(db):
     corrected = add_entry(
         db, run_id, day=date(2026, 12, 4), kind="activity", title_en="December work"
     )
-    review_every_date(db, corrected.run_id)
+    review_every_date(db, corrected.run_id, month="2026-12")
 
     assert revisions.current_run(db, register_id) == corrected.run_id
     closed = finalise.month_finalisations(db, register_id, "2026-11")[0]
@@ -732,8 +737,257 @@ def test_a_closed_month_blocks_wholesale_regeneration_of_its_register(db):
     run_id = stored(db, start=date(2026, 11, 1), end=date(2026, 12, 31), cycle_months=2)
     review_every_date(db, run_id)
     finalise.finalise_month(db, run_id, "2026-11")
-    register_id = revisions.register_of(db, run_id)
 
     with pytest.raises(finalise.FinalisationError) as error:
         regenerate_candidate(db, run_id)
     assert error.value.constraint == finalise.C_FINALISED_MONTHS_PRESENT
+
+
+# --- correction revisions ---------------------------------------------------
+
+
+def a_correction(db: sqlite3.Connection, *, reason: str = "the 12th was entered twice"):
+    run_id = stored(db)
+    review_every_date(db, run_id)
+    record = finalise.finalise_month(db, run_id, "2026-11")
+    correction = finalise.create_correction_revision(db, run_id, reason=reason)
+    return run_id, record, correction
+
+
+def test_a_correction_starts_from_the_issued_month_unchanged(db):
+    run_id, record, correction = a_correction(db)
+
+    assert correction["correction_of_run_id"] == run_id
+    assert correction["correction_of_finalisation_id"] == record["finalisation_id"]
+    assert correction["correction_of_revision"] == record["revision_number"]
+    assert correction["month"] == "2026-11"
+    assert correction["reason"] == "the 12th was entered twice"
+    # It starts as a draft, not as a version in force.
+    assert correction["next_sequence"] == 2
+    assert revisions.current_run(db, correction["register_id"]) == correction["correction_run_id"]
+    # The copy is the record, and the record is untouched.
+    assert finalise.month_fingerprint(db, correction["correction_run_id"], "2026-11") == (
+        record["fingerprint"]
+    )
+    assert finalise.finalisation_record(db, record["finalisation_id"])["fingerprint"] == (
+        record["fingerprint"]
+    )
+    # Review carried, because every date's content is provably unchanged.
+    assert len(correction["carried_reviews"]) == 30
+    assert correction["pending_dates"] == []
+
+
+def test_an_open_correction_is_not_the_version_in_force(db):
+    _, record, correction = a_correction(db)
+
+    lifecycle = {
+        item["month"]: item
+        for item in finalise.month_lifecycle(db, correction["register_id"])
+    }
+    assert lifecycle["2026-11"]["lifecycle"] == "correction_draft"
+    assert lifecycle["2026-11"]["finalised"] is True
+    assert lifecycle["2026-11"]["latest_finalisation_id"] == record["finalisation_id"]
+    assert lifecycle["2026-11"]["open_correction_run_id"] == correction["correction_run_id"]
+    # The record the office holds is still the one that was issued.
+    chain = finalise.correction_chain(db, correction["register_id"], "2026-11")
+    assert [item["finalisation_id"] for item in chain] == [record["finalisation_id"]]
+    assert chain[0]["is_latest"] is True
+
+
+def test_a_correction_needs_a_reason(db):
+    run_id = stored(db)
+    review_every_date(db, run_id)
+    finalise.finalise_month(db, run_id, "2026-11")
+
+    for reason in ("", "   \n\t "):
+        with pytest.raises(finalise.FinalisationError) as error:
+            finalise.create_correction_revision(db, run_id, reason=reason)
+        assert error.value.constraint == finalise.C_CORRECTION_REASON_REQUIRED
+
+
+def test_a_draft_cannot_be_corrected_as_a_finalised_month(db):
+    run_id = stored(db)
+    review_every_date(db, run_id)
+
+    with pytest.raises(finalise.FinalisationError) as error:
+        finalise.create_correction_revision(db, run_id, reason="too early")
+    assert error.value.constraint == finalise.C_SOURCE_NOT_FINALISED
+
+
+def test_only_one_correction_of_a_month_can_be_open(db):
+    _, _, correction = a_correction(db)
+
+    with pytest.raises(finalise.FinalisationError) as error:
+        finalise.create_correction_revision(
+            db, correction["correction_of_run_id"], reason="and again"
+        )
+    assert error.value.constraint == finalise.C_CORRECTION_ALREADY_OPEN
+
+
+def test_the_original_stays_exactly_as_issued_while_the_correction_changes(db):
+    run_id, record, correction = a_correction(db)
+    corrected_run = correction["correction_run_id"]
+
+    # The correction may now change the closed month, and only through itself.
+    edit = add_entry(
+        db, corrected_run, day=date(2026, 11, 12), kind="activity",
+        title_en="Corrected entry",
+    )
+    corrected_run = edit.run_id
+
+    assert finalise.month_fingerprint(db, corrected_run, "2026-11") != record["fingerprint"]
+    issued = finalise.finalisation_record(db, record["finalisation_id"])
+    assert issued["fingerprint"] == record["fingerprint"]
+    assert issued["content"] == record["content"]
+    assert len(issued["content"]["rows"]) == 30
+    # The original cannot be changed by any path.
+    with pytest.raises((finalise.FinalisationError, RevisionError)):
+        add_entry(
+            db, run_id, day=date(2026, 11, 12), kind="activity",
+            title_en="Straight into the record",
+        )
+
+
+def test_a_correction_carries_only_the_reviews_it_can_stand_behind(db):
+    run_id, _, correction = a_correction(db)
+    corrected_run = correction["correction_run_id"]
+
+    # Changing a date's content leaves that date pending again in the correction.
+    edit = add_entry(
+        db, corrected_run, day=date(2026, 11, 12), kind="activity",
+        title_en="Corrected entry",
+    )
+    state = revisions.review_state(db, edit.run_id)
+    by_date = {item["date"]: item for item in state["dates"]}
+    assert by_date["2026-11-12"]["state"] == "pending_review"
+    assert by_date["2026-11-11"]["state"] == "reviewed"
+
+    check = finalise.check_finalisation(db, edit.run_id, "2026-11")
+    blocker = next(
+        item for item in check.blockers if item.code == finalise.C_DATES_NOT_REVIEWED
+    )
+    assert blocker.dates == ("2026-11-12",)
+    with pytest.raises(finalise.FinalisationError):
+        finalise.finalise_month(db, edit.run_id, "2026-11")
+
+    revisions.mark_reviewed(
+        db, edit.run_id, date(2026, 11, 12),
+        expected_fingerprint=by_date["2026-11-12"]["fingerprint"],
+    )
+    successor = finalise.finalise_month(db, edit.run_id, "2026-11")
+
+    assert successor["sequence"] == 2
+    assert successor["parent_finalisation_id"] == correction["correction_of_finalisation_id"]
+    assert successor["correction_of_run_id"] == run_id
+    chain = finalise.correction_chain(db, correction["register_id"], "2026-11")
+    assert [item["sequence"] for item in chain] == [1, 2]
+    assert [item["is_latest"] for item in chain] == [False, True]
+    # Only the correction is open to further change; the original never is.
+    with pytest.raises((finalise.FinalisationError, RevisionError)):
+        add_entry(db, run_id, day=date(2026, 11, 12), kind="activity", title_en="No")
+
+
+def test_a_correction_of_a_superseded_version_is_refused(db):
+    run_id, record, correction = a_correction(db)
+    corrected_run = correction["correction_run_id"]
+    review_every_date(db, corrected_run)
+    finalise.finalise_month(db, corrected_run, "2026-11")
+
+    with pytest.raises(finalise.FinalisationError) as error:
+        finalise.create_correction_revision(db, run_id, reason="again on the old one")
+    assert error.value.constraint == finalise.C_SOURCE_SUPERSEDED
+
+    # The version in force can be corrected.
+    second = finalise.create_correction_revision(
+        db, corrected_run, reason="a second correction"
+    )
+    assert second["next_sequence"] == 3
+    assert second["correction_of_revision"] == 2
+
+
+def test_a_correction_preserves_the_original_locks(db):
+    run_id = stored(db)
+    revisions.lock_date(db, run_id, date(2026, 11, 9))
+    review_every_date(db, run_id)
+    finalise.finalise_month(db, run_id, "2026-11")
+
+    correction = finalise.create_correction_revision(db, run_id, reason="a lock matters")
+    corrected_run = correction["correction_run_id"]
+
+    assert correction["locked_dates"] == ["2026-11-09"]
+    assert set(revision_state.locks(db, corrected_run)) == {"2026-11-09"}
+    with pytest.raises(Exception) as error:
+        add_entry(
+            db, corrected_run, day=date(2026, 11, 9), kind="activity",
+            title_en="Straight through a lock",
+        )
+    assert "locked" in str(error.value)
+    # Unlocking is explicit, and only then may the date change.
+    revisions.unlock_date(db, corrected_run, date(2026, 11, 9))
+    add_entry(
+        db, corrected_run, day=date(2026, 11, 9), kind="activity",
+        title_en="Now allowed",
+    )
+
+
+def test_an_abandoned_correction_leaves_the_record_in_force(db):
+    run_id, record, correction = a_correction(db)
+
+    result = finalise.abandon_correction(db, correction["register_id"], "2026-11")
+
+    assert result["abandoned_run_id"] == correction["correction_run_id"]
+    assert result["current_run_id"] == run_id
+    assert revisions.current_run(db, correction["register_id"]) == run_id
+    lifecycle = {
+        item["month"]: item
+        for item in finalise.month_lifecycle(db, correction["register_id"])
+    }
+    assert lifecycle["2026-11"]["lifecycle"] == "finalised"
+    assert lifecycle["2026-11"]["open_correction_run_id"] is None
+    # The abandoned revision is still readable, and a fresh correction can be opened.
+    assert revision_state.revision(db, correction["correction_run_id"]) is not None
+    again = finalise.create_correction_revision(db, run_id, reason="opened afresh")
+    assert again["correction_run_id"] != correction["correction_run_id"]
+
+
+def test_a_correction_cannot_be_abandoned_twice(db):
+    _, _, correction = a_correction(db)
+    finalise.abandon_correction(db, correction["register_id"], "2026-11")
+
+    with pytest.raises(finalise.FinalisationError) as error:
+        finalise.abandon_correction(db, correction["register_id"], "2026-11")
+    assert error.value.constraint == finalise.C_NOT_A_CORRECTION
+
+
+def test_each_month_can_be_corrected_without_touching_the_other(db):
+    run_id = stored(db, start=date(2026, 11, 1), end=date(2026, 12, 31), cycle_months=2)
+    review_every_date(db, run_id)
+    november = finalise.finalise_month(db, run_id, "2026-11")
+    register_id = revisions.register_of(db, run_id)
+
+    correction = finalise.create_correction_revision(db, run_id, reason="November fix")
+    corrected_run = correction["correction_run_id"]
+    edit = add_entry(
+        db, corrected_run, day=date(2026, 11, 12), kind="activity",
+        title_en="November corrected",
+    )
+    corrected_run = edit.run_id
+    review_every_date(db, corrected_run, month="2026-11")
+    december = finalise.finalise_month(db, corrected_run, "2026-12")
+
+    # December closed from its own revision, with its own sequence.
+    assert december["sequence"] == 1
+    assert december["run_id"] == corrected_run
+    assert december["correction_of_run_id"] is None
+    assert november["fingerprint"] != finalise.month_fingerprint(
+        db, corrected_run, "2026-11"
+    )
+    # December was closed from the revision the correction produced, and its own copy of
+    # December is the one recorded: November's change did not reach it.
+    assert finalise.finalisation_record(db, december["finalisation_id"])["fingerprint"] == (
+        finalise.month_fingerprint(db, corrected_run, "2026-12")
+    )
+    assert december["run_id"] != november["run_id"]
+    assert revision_state.finalisations(db, register_id, "2026-12")[0].finalisation_id == (
+        december["finalisation_id"]
+    )

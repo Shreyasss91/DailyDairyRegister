@@ -242,14 +242,17 @@ def assert_month_not_finalised(
     neighbouring month impossible.
     """
 
-    record = revision_state.finalisation_for_run(connection, run_id)
-    if record is None or record.month != month:
+    if month_is_editable(connection, run_id, month):
         return
+    record = latest_finalisation_of(
+        connection, revisions.register_of(connection, run_id), month
+    )
+    when = "" if record is None else f" on {record.finalised_at[:10]}"
     raise FinalisationError(
         C_MONTH_FINALISED,
         (
-            f"{month} of this revision was finalised on {record.finalised_at[:10]} and "
-            "cannot be changed; create a correction revision for that month instead"
+            f"{month} was finalised{when} and cannot be changed in this revision; "
+            "create a correction revision for that month instead"
         ),
     )
 
@@ -747,6 +750,13 @@ def finalise_month(
             revisions.C_REVISION_UNKNOWN, f"unknown revision {run_id}"
         )
     correction_of = revision_state.correction_of(connection, run_id)
+    if correction_of is None:
+        # A correction is usually corrected again before it is finalised, and each of
+        # those revisions descends from the same issued month rather than being a
+        # correction of the revision that opened it.
+        root = open_correction_of(connection, register_id, month)
+        if root is not None and _descends_from(connection, run_id, root):
+            correction_of = revision_state.correction_of(connection, root)
     state = revision_state.month_state(connection, register_id, month)
     parent_finalisation_id = (
         None if state is None else state.latest_finalisation_id
@@ -991,3 +1001,303 @@ def month_breakdown(connection: sqlite3.Connection, run_id: str) -> list[str]:
     """The month labels of a revision, in order."""
 
     return [item.month_key for item in generation_store.read_run(connection, run_id).months]
+
+
+# --- correction revisions ---------------------------------------------------
+
+C_SOURCE_NOT_FINALISED = "source_revision_is_not_finalised"
+C_SOURCE_SUPERSEDED = "source_finalisation_is_not_the_latest"
+C_CORRECTION_REASON_REQUIRED = "correction_reason_required"
+C_CORRECTION_ALREADY_OPEN = "month_has_an_open_correction"
+C_CORRECTION_COPY_MISMATCH = "correction_does_not_start_from_the_record"
+C_NOT_A_CORRECTION = "revision_is_not_an_open_correction"
+
+
+def open_correction_of(
+    connection: sqlite3.Connection, register_id: str, month: str
+) -> str | None:
+    state = revision_state.month_state(connection, register_id, month)
+    return None if state is None else state.open_correction_run_id
+
+
+def month_is_editable(
+    connection: sqlite3.Connection, run_id: str, month: str
+) -> bool:
+    """Whether this month's dates may still be changed on this revision.
+
+    True when the month has never been closed, and true for the one revision that is
+    that month's open correction, because changing the month is what a correction is
+    for. False everywhere else, including a neighbouring month's revision that happens
+    to hold a copy of the closed month.
+    """
+
+    register_id = revisions.register_of(connection, run_id)
+    state = revision_state.month_state(connection, register_id, month)
+    if state is None or state.latest_finalisation_id is None:
+        return True
+    if state.open_correction_run_id is None:
+        return False
+    # Correcting that month creates further revisions, and each of them is still the
+    # correction in progress. Anything that descends from the open correction keeps the
+    # month open; anything else holding a copy of it does not.
+    return _descends_from(connection, run_id, state.open_correction_run_id)
+
+
+def _descends_from(
+    connection: sqlite3.Connection, run_id: str, ancestor_id: str
+) -> bool:
+    seen: set[str] = set()
+    current: str | None = run_id
+    while current is not None and current not in seen:
+        if current == ancestor_id:
+            return True
+        seen.add(current)
+        row = revision_state.revision(connection, current)
+        current = None if row is None else row.parent_run_id
+    return False
+
+
+def latest_finalisation_of(
+    connection: sqlite3.Connection, register_id: str, month: str
+) -> revision_state.FinalisationRow | None:
+    state = revision_state.month_state(connection, register_id, month)
+    if state is None or state.latest_finalisation_id is None:
+        return None
+    return revision_state.finalisation(connection, state.latest_finalisation_id)
+
+
+def create_correction_revision(
+    connection: sqlite3.Connection,
+    finalised_run_id: str,
+    *,
+    reason: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Start a reasoned correction of a finalised month, without changing the record.
+
+    The correction is a new revision that begins as an exact copy of the issued month,
+    which is what makes it a correction of a specific document rather than a fresh
+    draft: the operator starts from what was issued, not from what today's masters would
+    produce. It carries the review of every date whose content is provably unchanged and
+    leaves the rest pending, and it preserves the original's locks — the correction may
+    change a locked date only after unlocking it explicitly.
+
+    Nothing about the finalised record moves here. The month's latest-finalisation
+    pointer still names the record it will supersede until the correction is itself
+    finalised, so an open correction can never be mistaken for the version in force.
+    """
+
+    from .generation_runs import load_register
+    from .register_edits import save_revision
+
+    record = revision_state.finalisation_for_run(connection, finalised_run_id)
+    if record is None:
+        raise FinalisationError(
+            C_SOURCE_NOT_FINALISED,
+            (
+                "only a finalised month can be corrected; this revision has not been "
+                "finalised, so correct it as an ordinary revision instead"
+            ),
+        )
+    text = (reason or "").strip()
+    if not text:
+        raise FinalisationError(
+            C_CORRECTION_REASON_REQUIRED,
+            (
+                "a correction needs a reason it can be judged against; say why the "
+                "issued month is wrong"
+            ),
+        )
+
+    register_id = record.register_id
+    month = record.month
+    latest = latest_finalisation_of(connection, register_id, month)
+    if latest is not None and latest.finalisation_id != record.finalisation_id:
+        raise FinalisationError(
+            C_SOURCE_SUPERSEDED,
+            (
+                f"{month} has a later finalised version (sequence {latest.sequence}, "
+                "revision "
+                f"{latest.revision_number}); correct that one, because a correction of "
+                "a superseded version would branch the month's history"
+            ),
+        )
+    open_run = open_correction_of(connection, register_id, month)
+    if open_run is not None:
+        open_revision = revision_state.revision(connection, open_run)
+        raise FinalisationError(
+            C_CORRECTION_ALREADY_OPEN,
+            (
+                f"{month} already has an open correction"
+                + (
+                    ""
+                    if open_revision is None
+                    else f" (revision {open_revision.revision_number})"
+                )
+                + "; finalise it or abandon it before starting another"
+            ),
+        )
+
+    source = load_register(connection, finalised_run_id)
+    new_id = save_revision(
+        connection,
+        source,
+        base_run_id=finalised_run_id,
+        change_reason=text,
+        kind="correction",
+        correction_of_run_id=finalised_run_id,
+    )
+
+    copied = month_fingerprint(connection, new_id, month)
+    if copied != record.fingerprint:
+        raise FinalisationError(
+            C_CORRECTION_COPY_MISMATCH,
+            (
+                "the correction could not be started from the issued month exactly, so "
+                "nothing was opened; this is a defect in the copy and the record is "
+                "unchanged"
+            ),
+        )
+
+    # The month is marked as having an open correction before anything is carried into
+    # it: until that mark exists, this revision is a revision holding a closed month and
+    # reviewing its dates is refused, which is exactly right for every other revision.
+    with generation_store.transaction(connection):
+        revision_state.set_open_correction(connection, register_id, month, new_id)
+
+    carried, pending = _carry_reviews(connection, finalised_run_id, new_id, record)
+    locks = sorted(revision_state.locks(connection, finalised_run_id))
+    stamp = (now or datetime.now()).isoformat()
+
+    with generation_store.transaction(connection):
+        revision_state.record_change(
+            connection,
+            new_id,
+            ordinal=1,
+            action="correction_opened",
+            row_date=None,
+            entry_id=None,
+            asset_id=None,
+            detail_json=json.dumps(
+                {
+                    "reason": text,
+                    "correction_of_run_id": finalised_run_id,
+                    "correction_of_finalisation_id": record.finalisation_id,
+                    "correction_of_revision": record.revision_number,
+                    "opened_at": stamp,
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+            ),
+            created_at=stamp,
+        )
+
+    row = revision_state.revision(connection, new_id)
+    return {
+        "correction_run_id": new_id,
+        "register_id": register_id,
+        "month": month,
+        "reason": text,
+        "created_at": stamp,
+        "revision_number": 0 if row is None else row.revision_number,
+        "correction_of_run_id": finalised_run_id,
+        "correction_of_finalisation_id": record.finalisation_id,
+        "correction_of_revision": record.revision_number,
+        "correction_of_sequence": record.sequence,
+        "next_sequence": revision_state.next_finalisation_sequence(
+            connection, register_id, month
+        ),
+        "carried_reviews": carried,
+        "pending_dates": pending,
+        "locked_dates": locks,
+    }
+
+
+def _carry_reviews(
+    connection: sqlite3.Connection,
+    source_run_id: str,
+    new_run_id: str,
+    record: revision_state.FinalisationRow,
+) -> tuple[list[str], list[str]]:
+    """Carry a review only where the content it attested is provably unchanged."""
+
+    before = {
+        item["date"]: item for item in revisions.review_state(connection, source_run_id)["dates"]
+    }
+    carried: list[str] = []
+    pending: list[str] = []
+    for item in revisions.review_state(connection, new_run_id)["dates"]:
+        previous = before.get(item["date"])
+        if (
+            previous is not None
+            and previous["state"] == "reviewed"
+            and previous["fingerprint"] == item["fingerprint"]
+        ):
+            revisions.mark_reviewed(
+                connection,
+                new_run_id,
+                date.fromisoformat(item["date"]),
+                note=f"carried from the finalised revision {record.revision_number}",
+                expected_fingerprint=item["fingerprint"],
+            )
+            carried.append(item["date"])
+        else:
+            pending.append(item["date"])
+    for day in revision_state.locks(connection, source_run_id):
+        revisions.lock_date(connection, new_run_id, date.fromisoformat(day))
+    return carried, pending
+
+
+def abandon_correction(
+    connection: sqlite3.Connection, register_id: str, month: str, *, note: str | None = None
+) -> dict[str, Any]:
+    """Drop an open correction and put the register back on the record in force.
+
+    The abandoned revision stays readable — a revision is never deleted — but it no
+    longer holds the month open, so the month can be corrected again from the record.
+    """
+
+    state = revision_state.month_state(connection, register_id, month)
+    open_run = None if state is None else state.open_correction_run_id
+    if state is None or open_run is None:
+        raise FinalisationError(
+            C_NOT_A_CORRECTION, f"{month} has no open correction to abandon"
+        )
+    record = latest_finalisation_of(connection, register_id, month)
+    if record is None:
+        raise FinalisationError(
+            C_NOT_A_CORRECTION, f"{month} has no finalised record to return to"
+        )
+
+    with generation_store.transaction(connection):
+        revision_state.clear_open_correction(connection, register_id, month)
+        revision_state.set_current(connection, register_id, record.run_id)
+        revision_state.record_change(
+            connection,
+            open_run,
+            ordinal=0,
+            action="correction_abandoned",
+            row_date=None,
+            entry_id=None,
+            asset_id=None,
+            detail_json=json.dumps({"note": note}, sort_keys=True),
+            created_at=datetime.now().isoformat(),
+        )
+    return {
+        "register_id": register_id,
+        "month": month,
+        "abandoned_run_id": open_run,
+        "current_run_id": record.run_id,
+        "finalisation_id": record.finalisation_id,
+    }
+
+
+def correction_chain(
+    connection: sqlite3.Connection, register_id: str, month: str
+) -> list[dict[str, Any]]:
+    """Every version of a month, oldest first, with the one in force marked."""
+
+    return sorted(
+        month_finalisations(connection, register_id, month),
+        key=lambda item: item["sequence"],
+    )
