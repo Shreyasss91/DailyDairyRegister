@@ -185,6 +185,7 @@ def insert_run(
     parent_run_id: str | None = None,
     kind: str = "generation",
     change_reason: str | None = None,
+    correction_of_run_id: str | None = None,
 ) -> int | None:
     """Write one attempt and everything derived from it, or write nothing.
 
@@ -241,10 +242,18 @@ def insert_run(
         connection.execute(
             """
             UPDATE generation_run
-            SET register_id = ?, parent_run_id = ?, kind = ?, change_reason = ?
+            SET register_id = ?, parent_run_id = ?, kind = ?, change_reason = ?,
+                correction_of_run_id = ?
             WHERE run_id = ?
             """,
-            (register_id, parent_run_id, kind, change_reason, run.run_id),
+            (
+                register_id,
+                parent_run_id,
+                kind,
+                change_reason,
+                correction_of_run_id,
+                run.run_id,
+            ),
         )
 
         if entries:

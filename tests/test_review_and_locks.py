@@ -382,6 +382,7 @@ def test_a_database_left_at_schema_two_gains_registers_and_scoped_revisions(tmp_
     from dailyworkreg.infrastructure.sqlite.schema import (
         MIGRATIONS,
         SCHEMA_VERSION,
+        applied_versions,
         apply_migrations,
     )
 
@@ -428,7 +429,13 @@ def test_a_database_left_at_schema_two_gains_registers_and_scoped_revisions(tmp_
 
     apply_migrations(connection)
 
-    assert SCHEMA_VERSION == 3
+    # Every migration in the file has been applied, including the ones that arrived
+    # after this test was written: a database stuck at schema two must reach today's
+    # schema, not schema three.
+    assert applied_versions(connection) == tuple(
+        migration.version for migration in MIGRATIONS
+    )
+    assert SCHEMA_VERSION == max(migration.version for migration in MIGRATIONS)
     registers_found = connection.execute("SELECT * FROM register").fetchall()
     assert len(registers_found) == 1
     rows = connection.execute(

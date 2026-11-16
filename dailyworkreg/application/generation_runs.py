@@ -245,6 +245,7 @@ def save_run(
     parent_run_id: str | None = None,
     kind: str = "generation",
     change_reason: str | None = None,
+    correction_of_run_id: str | None = None,
 ) -> str:
     """Persist one attempt in full, including an attempt that produced no draft.
 
@@ -316,6 +317,7 @@ def save_run(
             parent_run_id=parent_run_id,
             kind=kind,
             change_reason=change_reason,
+            correction_of_run_id=correction_of_run_id,
         )
         if record.is_draft:
             from .revisions import adopt_revision

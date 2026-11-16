@@ -25,7 +25,7 @@ from dataclasses import dataclass
 #: Bumped when the schema below changes. Migrations are applied in order and each
 #: one is idempotent, so re-running is safe and a fresh database simply replays the
 #: list.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -547,6 +547,96 @@ def _backfill_registers(connection: sqlite3.Connection) -> None:
     connection.execute("ALTER TABLE draft_revision_scoped RENAME TO draft_revision")
 
 
+#: Tables whose rows are the content of a revision. A finalised revision is never
+#: mutated again, and these triggers are what makes that true below the application as
+#: well as inside it: no route, no script and no future refactor can rewrite a record the
+#: office approved.
+_FINALISED_CONTENT_TABLES = (
+    "generation_row",
+    "generation_visit",
+    "generation_entry",
+    "date_review",
+    "date_lock",
+)
+
+
+def _immutability_triggers() -> tuple[str, ...]:
+    statements: list[str] = []
+    for table in _FINALISED_CONTENT_TABLES:
+        for operation in ("UPDATE", "DELETE"):
+            statements.append(
+                f"""
+                CREATE TRIGGER IF NOT EXISTS trg_finalised_{table}_{operation.lower()}
+                BEFORE {operation} ON {table}
+                WHEN EXISTS (
+                    SELECT 1 FROM month_finalisation WHERE run_id = OLD.run_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'finalised_revision_is_immutable');
+                END
+                """
+            )
+    # A finalised record is itself the approved document, so it is not editable either.
+    for operation in ("UPDATE", "DELETE"):
+        statements.append(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS trg_finalisation_{operation.lower()}
+            BEFORE {operation} ON month_finalisation
+            BEGIN
+                SELECT RAISE(ABORT, 'finalised_record_is_immutable');
+            END
+            """
+        )
+    return tuple(statements)
+
+
+_MIGRATION_4_STATEMENTS = (
+    # Which finalised record a revision corrects. A revision is finalised at most once
+    # (UNIQUE run_id below), so this single column identifies the record being corrected
+    # without a second pointer that could disagree with it.
+    "ALTER TABLE generation_run ADD COLUMN correction_of_run_id TEXT",
+    # One row per finalised month of a register, forever. The content snapshot is stored
+    # rather than recomputed, because the record that was approved has to remain readable
+    # even if the code that renders it changes.
+    """
+    CREATE TABLE IF NOT EXISTS month_finalisation (
+        finalisation_id        TEXT PRIMARY KEY,
+        register_id            TEXT NOT NULL,
+        month                  TEXT NOT NULL,
+        run_id                 TEXT NOT NULL REFERENCES generation_run (run_id),
+        revision_number        INTEGER NOT NULL,
+        sequence               INTEGER NOT NULL,
+        parent_finalisation_id TEXT,
+        correction_of_run_id   TEXT,
+        finalised_at           TEXT NOT NULL,
+        fingerprint            TEXT NOT NULL,
+        content_json           TEXT NOT NULL,
+        acknowledged_json      TEXT NOT NULL DEFAULT '[]',
+        readiness_json         TEXT NOT NULL DEFAULT '[]',
+        master_version         INTEGER NOT NULL DEFAULT 0,
+        note                   TEXT,
+        UNIQUE (run_id),
+        UNIQUE (register_id, month, sequence)
+    )
+    """,
+    # The month's pointer: which finalised record is authoritative, and whether a
+    # correction branch is open for it. Per month, so finalising November does not make
+    # December final and correcting November cannot touch December.
+    """
+    CREATE TABLE IF NOT EXISTS month_state (
+        register_id          TEXT NOT NULL,
+        month                TEXT NOT NULL,
+        latest_finalisation_id TEXT,
+        open_correction_run_id TEXT,
+        PRIMARY KEY (register_id, month)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_finalisation_register_month "
+    "ON month_finalisation (register_id, month, sequence)",
+    "CREATE INDEX IF NOT EXISTS idx_finalisation_run ON month_finalisation (run_id)",
+) + _immutability_triggers()
+
+
 _MIGRATION_3 = Migration(
     version=3,
     name="register revisions, date review, date locks and revision lineage",
@@ -555,7 +645,19 @@ _MIGRATION_3 = Migration(
 )
 
 
-MIGRATIONS: tuple[Migration, ...] = (_MIGRATION_1, _MIGRATION_2, _MIGRATION_3)
+_MIGRATION_4 = Migration(
+    version=4,
+    name="monthly finalisation records and finalised-revision immutability",
+    statements=_MIGRATION_4_STATEMENTS,
+)
+
+
+MIGRATIONS: tuple[Migration, ...] = (
+    _MIGRATION_1,
+    _MIGRATION_2,
+    _MIGRATION_3,
+    _MIGRATION_4,
+)
 
 
 def ensure_migration_table(connection: sqlite3.Connection) -> None:

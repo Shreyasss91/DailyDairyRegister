@@ -56,6 +56,9 @@ class RevisionRow:
     outcome: str
     is_draft: int
     seed: int
+    #: The finalised revision this one corrects, or None. Read from the run, so a
+    #: revision cannot claim a correction relationship the run does not record.
+    correction_of_run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -222,7 +225,7 @@ def revision(connection: sqlite3.Connection, run_id: str) -> RevisionRow | None:
         """
         SELECT r.run_id, r.revision_number, r.created_at, r.register_id,
                g.parent_run_id, g.kind, g.change_reason, g.outcome, g.is_draft,
-               g.seed
+               g.seed, g.correction_of_run_id
         FROM draft_revision r JOIN generation_run g ON g.run_id = r.run_id
         WHERE r.run_id = ?
         """,
@@ -238,7 +241,7 @@ def revisions(
         """
         SELECT r.run_id, r.revision_number, r.created_at, r.register_id,
                g.parent_run_id, g.kind, g.change_reason, g.outcome, g.is_draft,
-               g.seed
+               g.seed, g.correction_of_run_id
         FROM draft_revision r JOIN generation_run g ON g.run_id = r.run_id
         WHERE r.register_id = ?
         ORDER BY r.revision_number
@@ -260,6 +263,7 @@ def _revision(row: sqlite3.Row) -> RevisionRow:
         outcome=row["outcome"],
         is_draft=int(row["is_draft"]),
         seed=int(row["seed"]),
+        correction_of_run_id=row["correction_of_run_id"],
     )
 
 
@@ -550,3 +554,229 @@ def copy_lineage(
             detail_json=row.detail_json,
             created_at=row.created_at,
         )
+
+
+# --- monthly finalisation ----------------------------------------------------
+#
+# A finalised month is one row that never changes, plus one pointer that says which row
+# is authoritative. The snapshot is stored rather than recomputed: the record the office
+# approved has to stay readable even after the code that renders it changes.
+
+
+@dataclass(frozen=True)
+class FinalisationRow:
+    finalisation_id: str
+    register_id: str
+    month: str
+    run_id: str
+    revision_number: int
+    sequence: int
+    parent_finalisation_id: str | None
+    correction_of_run_id: str | None
+    finalised_at: str
+    fingerprint: str
+    content_json: str
+    acknowledged_json: str
+    readiness_json: str
+    master_version: int
+    note: str | None
+
+
+@dataclass(frozen=True)
+class MonthStateRow:
+    register_id: str
+    month: str
+    latest_finalisation_id: str | None
+    open_correction_run_id: str | None
+
+
+def _finalisation(row: sqlite3.Row) -> FinalisationRow:
+    return FinalisationRow(
+        finalisation_id=row["finalisation_id"],
+        register_id=row["register_id"],
+        month=row["month"],
+        run_id=row["run_id"],
+        revision_number=int(row["revision_number"]),
+        sequence=int(row["sequence"]),
+        parent_finalisation_id=row["parent_finalisation_id"],
+        correction_of_run_id=row["correction_of_run_id"],
+        finalised_at=row["finalised_at"],
+        fingerprint=row["fingerprint"],
+        content_json=row["content_json"],
+        acknowledged_json=row["acknowledged_json"],
+        readiness_json=row["readiness_json"],
+        master_version=int(row["master_version"]),
+        note=row["note"],
+    )
+
+
+def insert_finalisation(connection: sqlite3.Connection, row: FinalisationRow) -> None:
+    connection.execute(
+        """
+        INSERT INTO month_finalisation
+            (finalisation_id, register_id, month, run_id, revision_number, sequence,
+             parent_finalisation_id, correction_of_run_id, finalised_at, fingerprint,
+             content_json, acknowledged_json, readiness_json, master_version, note)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            row.finalisation_id,
+            row.register_id,
+            row.month,
+            row.run_id,
+            row.revision_number,
+            row.sequence,
+            row.parent_finalisation_id,
+            row.correction_of_run_id,
+            row.finalised_at,
+            row.fingerprint,
+            row.content_json,
+            row.acknowledged_json,
+            row.readiness_json,
+            row.master_version,
+            row.note,
+        ),
+    )
+
+
+def finalisation(
+    connection: sqlite3.Connection, finalisation_id: str
+) -> FinalisationRow | None:
+    row = connection.execute(
+        "SELECT * FROM month_finalisation WHERE finalisation_id = ?",
+        (finalisation_id,),
+    ).fetchone()
+    return None if row is None else _finalisation(row)
+
+
+def finalisation_for_run(
+    connection: sqlite3.Connection, run_id: str
+) -> FinalisationRow | None:
+    row = connection.execute(
+        "SELECT * FROM month_finalisation WHERE run_id = ?", (run_id,)
+    ).fetchone()
+    return None if row is None else _finalisation(row)
+
+
+def finalisations(
+    connection: sqlite3.Connection, register_id: str, month: str
+) -> tuple[FinalisationRow, ...]:
+    rows = connection.execute(
+        """
+        SELECT * FROM month_finalisation
+        WHERE register_id = ? AND month = ?
+        ORDER BY sequence
+        """,
+        (register_id, month),
+    ).fetchall()
+    return tuple(_finalisation(row) for row in rows)
+
+
+def next_finalisation_sequence(
+    connection: sqlite3.Connection, register_id: str, month: str
+) -> int:
+    row = connection.execute(
+        """
+        SELECT COALESCE(MAX(sequence), 0) AS highest FROM month_finalisation
+        WHERE register_id = ? AND month = ?
+        """,
+        (register_id, month),
+    ).fetchone()
+    return int(row["highest"]) + 1
+
+
+def month_state(
+    connection: sqlite3.Connection, register_id: str, month: str
+) -> MonthStateRow | None:
+    row = connection.execute(
+        "SELECT * FROM month_state WHERE register_id = ? AND month = ?",
+        (register_id, month),
+    ).fetchone()
+    if row is None:
+        return None
+    return MonthStateRow(
+        register_id=row["register_id"],
+        month=row["month"],
+        latest_finalisation_id=row["latest_finalisation_id"],
+        open_correction_run_id=row["open_correction_run_id"],
+    )
+
+
+def month_states(
+    connection: sqlite3.Connection, register_id: str
+) -> tuple[MonthStateRow, ...]:
+    rows = connection.execute(
+        "SELECT * FROM month_state WHERE register_id = ? ORDER BY month",
+        (register_id,),
+    ).fetchall()
+    return tuple(
+        MonthStateRow(
+            register_id=row["register_id"],
+            month=row["month"],
+            latest_finalisation_id=row["latest_finalisation_id"],
+            open_correction_run_id=row["open_correction_run_id"],
+        )
+        for row in rows
+    )
+
+
+def set_latest_finalisation(
+    connection: sqlite3.Connection,
+    register_id: str,
+    month: str,
+    finalisation_id: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO month_state (register_id, month, latest_finalisation_id,
+            open_correction_run_id)
+        VALUES (?, ?, ?, NULL)
+        ON CONFLICT (register_id, month) DO UPDATE
+            SET latest_finalisation_id = excluded.latest_finalisation_id
+        """,
+        (register_id, month, finalisation_id),
+    )
+
+
+def set_open_correction(
+    connection: sqlite3.Connection, register_id: str, month: str, run_id: str
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO month_state (register_id, month, latest_finalisation_id,
+            open_correction_run_id)
+        VALUES (?, ?, NULL, ?)
+        ON CONFLICT (register_id, month) DO UPDATE
+            SET open_correction_run_id = excluded.open_correction_run_id
+        """,
+        (register_id, month, run_id),
+    )
+
+
+def clear_open_correction(
+    connection: sqlite3.Connection, register_id: str, month: str
+) -> None:
+    connection.execute(
+        """
+        UPDATE month_state SET open_correction_run_id = NULL
+        WHERE register_id = ? AND month = ?
+        """,
+        (register_id, month),
+    )
+
+
+def finalised_run_ids(
+    connection: sqlite3.Connection, register_id: str
+) -> tuple[str, ...]:
+    rows = connection.execute(
+        "SELECT run_id FROM month_finalisation WHERE register_id = ? ORDER BY sequence",
+        (register_id,),
+    ).fetchall()
+    return tuple(row["run_id"] for row in rows)
+
+
+def correction_of(connection: sqlite3.Connection, run_id: str) -> str | None:
+    row = connection.execute(
+        "SELECT correction_of_run_id FROM generation_run WHERE run_id = ?", (run_id,)
+    ).fetchone()
+    return None if row is None else row["correction_of_run_id"]

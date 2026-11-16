@@ -83,6 +83,7 @@ def save_revision(
     run_id: str | None = None,
     kind: str = "edit",
     request: Any = None,
+    correction_of_run_id: str | None = None,
 ) -> str:
     """Store a corrected copy of a revision as its own revision.
 
@@ -159,6 +160,7 @@ def save_revision(
             parent_run_id=base_run_id,
             kind=kind,
             change_reason=change_reason,
+            correction_of_run_id=correction_of_run_id,
         )
         # A candidate is stored but not accepted, so nothing about it is carried
         # forward yet: it starts entirely pending and carries no locks. Only the
