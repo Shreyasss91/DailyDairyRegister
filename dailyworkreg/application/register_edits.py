@@ -49,8 +49,8 @@ from .draft_generation import (
     VisitProvenance,
 )
 from .generation_runs import OUTCOME_BY_STATUS, load_register
-from .snapshot import encode_request
 from .revisions import C_DATE_NOT_IN_REVISION, RevisionError, require_current
+from .snapshot import encode_request
 
 C_ENTRY_UNKNOWN = "entry_not_on_this_revision"
 C_DATE_LOCKED = "date_is_locked"
@@ -206,6 +206,9 @@ def _revise(
     reason: str | None,
 ) -> EditResult:
     require_current(connection, run_id)
+    # The dates each operation touches are checked against closed months by
+    # _require_editable; a whole-revision refusal here would also forbid correcting a
+    # month that is still open beside one that is closed.
     base = load_register(connection, run_id)
     draft, change = transform(base)
     if draft == base:
@@ -251,15 +254,34 @@ def _require_date(draft: DraftRegister, day: date) -> None:
         )
 
 
-def _require_unlocked(
+def _require_editable(
     connection: sqlite3.Connection, run_id: str, *days: date
 ) -> None:
+    """Refuse a correction to a date that is locked, or to a month already closed.
+
+    The month check is what keeps a finalised month untouched while its neighbour is
+    being worked on: the revision in force may be newer than the one that was finalised,
+    and its copy of that month must still be the record the office holds.
+    """
+
+    from . import finalisation
+    from .revisions import register_of
+
     locked = revision_state.locks(connection, run_id)
+    closed = finalisation.finalised_months(connection, register_of(connection, run_id))
     for day in days:
         if day.isoformat() in locked:
             raise RevisionError(
                 C_DATE_LOCKED,
                 f"{day.isoformat()} is locked; unlock it before correcting that date",
+            )
+        if day.isoformat()[:7] in closed:
+            raise finalisation.FinalisationError(
+                finalisation.C_MONTH_FINALISED,
+                (
+                    f"{day.isoformat()[:7]} is finalised and cannot be changed; create "
+                    "a correction revision for that month instead"
+                ),
             )
 
 
@@ -323,7 +345,7 @@ def edit_entry(
 
     def transform(draft: DraftRegister) -> tuple[DraftRegister, dict[str, Any]]:
         row, entry = _find_entry(draft, entry_id)
-        _require_unlocked(connection, run_id, row.day)
+        _require_editable(connection, run_id, row.day)
         if title_en is not None and not title_en.strip():
             raise RevisionError(
                 C_ENTRY_TEXT_EMPTY, "an entry needs an English description"
@@ -379,7 +401,7 @@ def add_entry(
 
     def transform(draft: DraftRegister) -> tuple[DraftRegister, dict[str, Any]]:
         _require_date(draft, day)
-        _require_unlocked(connection, run_id, day)
+        _require_editable(connection, run_id, day)
         if not title_en.strip():
             raise RevisionError(
                 C_ENTRY_TEXT_EMPTY, "an entry needs an English description"
@@ -432,7 +454,7 @@ def remove_entry(
 
     def transform(draft: DraftRegister) -> tuple[DraftRegister, dict[str, Any]]:
         row, entry = _find_entry(draft, entry_id)
-        _require_unlocked(connection, run_id, row.day)
+        _require_editable(connection, run_id, row.day)
         entries = tuple(item for item in row.entries if item.entry_id != entry_id)
         change = {
             "date": row.day.isoformat(),
@@ -462,7 +484,7 @@ def move_entry(
     def transform(draft: DraftRegister) -> tuple[DraftRegister, dict[str, Any]]:
         from_day, entry = _find_entry(draft, entry_id)
         _require_date(draft, to_day)
-        _require_unlocked(connection, run_id, from_day.day, to_day)
+        _require_editable(connection, run_id, from_day.day, to_day)
         moved = dataclasses.replace(
             entry, day=to_day, provenance=DayEntryProvenance.MANUAL
         )
@@ -516,7 +538,7 @@ def move_visit(
 
     def transform(draft: DraftRegister) -> tuple[DraftRegister, dict[str, Any]]:
         _require_date(draft, to_day)
-        _require_unlocked(connection, run_id, from_day, to_day)
+        _require_editable(connection, run_id, from_day, to_day)
         source = next(item for item in draft.rows if item.day == from_day)
         held = [
             item

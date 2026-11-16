@@ -561,15 +561,21 @@ _FINALISED_CONTENT_TABLES = (
 
 
 def _immutability_triggers() -> tuple[str, ...]:
+    # Scoped to the row's own month: a revision may have closed November and still be
+    # worked on in December, and freezing the whole revision would make a neighbouring
+    # month's correction impossible.
     statements: list[str] = []
     for table in _FINALISED_CONTENT_TABLES:
+        column = "visit_date" if table == "generation_visit" else "row_date"
         for operation in ("UPDATE", "DELETE"):
             statements.append(
                 f"""
                 CREATE TRIGGER IF NOT EXISTS trg_finalised_{table}_{operation.lower()}
                 BEFORE {operation} ON {table}
                 WHEN EXISTS (
-                    SELECT 1 FROM month_finalisation WHERE run_id = OLD.run_id
+                    SELECT 1 FROM month_finalisation f
+                    WHERE f.run_id = OLD.run_id
+                      AND substr(OLD.{column}, 1, 7) = f.month
                 )
                 BEGIN
                     SELECT RAISE(ABORT, 'finalised_revision_is_immutable');

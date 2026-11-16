@@ -98,6 +98,13 @@ def regenerate_candidate(
     """
 
     require_current(connection, run_id)
+    from . import finalisation
+
+    # A register that has closed any month cannot be rearranged wholesale: a candidate
+    # could move that month's work. The closed month changes only by a correction.
+    finalisation.assert_no_finalised_months(
+        connection, register_of(connection, run_id), action="regeneration"
+    )
     base = load_register(connection, run_id)
     stored = generation_store.read_run(connection, run_id)
     request = decode_request(_loads(stored.run.request_snapshot_json))
@@ -555,8 +562,12 @@ def accept_candidate(
 ) -> dict[str, Any]:
     """Move the register onto a candidate, atomically and only if it is eligible."""
 
+    from . import finalisation
     from .revisions import reconcile_with_base
 
+    finalisation.assert_no_finalised_months(
+        connection, register_id, action="accepting a candidate"
+    )
     candidate = revision_state.revision(connection, candidate_run_id)
     if candidate is None:
         raise RevisionError(C_CANDIDATE_NOT_FOUND, f"unknown revision {candidate_run_id}")

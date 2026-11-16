@@ -173,6 +173,22 @@ def current_run(connection: sqlite3.Connection, register_id: str) -> str:
     return row.current_run_id
 
 
+def require_month_mutable(
+    connection: sqlite3.Connection, run_id: str, month: str
+) -> None:
+    """Reviewing or locking a date of a month that is not closed.
+
+    Scoped to the month, because a revision can have closed November and still be
+    worked on in December. Finalised content is frozen at the database as well; this is
+    the sentence an operator can act on instead of an integrity error.
+    """
+
+    require_current(connection, run_id)
+    from .finalisation import assert_month_not_finalised
+
+    assert_month_not_finalised(connection, run_id, month)
+
+
 def require_current(connection: sqlite3.Connection, run_id: str) -> None:
     """Refuse to change a revision that is not the register's accepted one.
 
@@ -396,7 +412,7 @@ def mark_reviewed(
 ) -> dict[str, Any]:
     """Record that one date was inspected, against the content inspected."""
 
-    require_current(connection, run_id)
+    require_month_mutable(connection, run_id, day.isoformat()[:7])
     content = fingerprints(connection, run_id)
     label = day.isoformat()
     if label not in content:
@@ -426,7 +442,7 @@ def clear_review(
 ) -> dict[str, Any]:
     """Withdraw a review, leaving the date present and pending."""
 
-    require_current(connection, run_id)
+    require_month_mutable(connection, run_id, day.isoformat()[:7])
     content = fingerprints(connection, run_id)
     label = day.isoformat()
     if label not in content:
@@ -458,7 +474,7 @@ def lock_date(
 ) -> dict[str, Any]:
     """Protect a date's content. Locking does not review it, and review does not lock."""
 
-    require_current(connection, run_id)
+    require_month_mutable(connection, run_id, day.isoformat()[:7])
     content = fingerprints(connection, run_id)
     label = day.isoformat()
     if label not in content:
@@ -471,7 +487,7 @@ def lock_date(
 
 
 def unlock_date(connection: sqlite3.Connection, run_id: str, day: date) -> dict[str, Any]:
-    require_current(connection, run_id)
+    require_month_mutable(connection, run_id, day.isoformat()[:7])
     label = day.isoformat()
     removed = revision_state.unlock(connection, run_id, label)
     if not removed:
