@@ -991,3 +991,88 @@ def test_each_month_can_be_corrected_without_touching_the_other(db):
     assert revision_state.finalisations(db, register_id, "2026-12")[0].finalisation_id == (
         december["finalisation_id"]
     )
+
+
+# --- a database that predates finalisation ---------------------------------
+
+
+def test_a_database_left_at_schema_three_gains_finalisation(tmp_path):
+    from dailyworkreg.infrastructure.sqlite.schema import (
+        MIGRATIONS,
+        SCHEMA_VERSION,
+        applied_versions,
+        apply_migrations,
+    )
+
+    connection = sqlite3.connect(tmp_path / "legacy.db")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migration (
+            version    INTEGER PRIMARY KEY,
+            name       TEXT NOT NULL,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+    for migration in MIGRATIONS:
+        if migration.version > 3:
+            continue
+        for statement in migration.statements:
+            connection.execute(statement)
+        if migration.apply is not None:
+            migration.apply(connection)
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migration (version, name, applied_at) "
+            "VALUES (?, ?, '2026-01-01T00:00:00')",
+            (migration.version, migration.name),
+        )
+    connection.execute(
+        """
+        INSERT INTO generation_run (run_id, created_at, mode, start_date, end_date,
+            months_json, seed, generator_version, allocator_version, outcome, is_draft,
+            master_version, request_schema_version, request_snapshot_json,
+            readiness_json, missing_content_json, register_id)
+        VALUES ('run-old', '2026-01-01T00:00:00', 'coverage_cycle', '2026-11-01',
+            '2026-11-30', '["2026-11"]', 7, 'g1', 'a1', 'allocation_complete', 1, 1, 1,
+            '{}', '[]', '[]', 'R-old')
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO generation_row (run_id, ordinal, row_date, weekday, kind,
+            is_working_day, reasons_en_json, reasons_kn_json, warnings_json)
+        VALUES ('run-old', 1, '2026-11-02', 0, 'working_day', 1, '[]', '[]', '[]')
+        """
+    )
+    connection.commit()
+
+    applied = apply_migrations(connection)
+
+    assert SCHEMA_VERSION == max(migration.version for migration in MIGRATIONS)
+    assert 4 in applied_versions(connection)
+    assert 4 in applied
+    columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(generation_run)").fetchall()
+    }
+    assert "correction_of_run_id" in columns
+    tables = {
+        row["name"]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    assert {"month_finalisation", "month_state"} <= tables
+    triggers = {
+        row["name"]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+        ).fetchall()
+    }
+    assert "trg_finalised_generation_row_update" in triggers
+    assert "trg_finalisation_update" in triggers
+    # The rows written before finalisation existed are untouched and readable.
+    assert connection.execute(
+        "SELECT COUNT(*) AS n FROM generation_row"
+    ).fetchone()["n"] == 1
