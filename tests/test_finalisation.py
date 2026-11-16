@@ -131,7 +131,7 @@ def a_finalisation(db: sqlite3.Connection, run_id: str, *, month: str = "2026-11
 
 
 def test_the_schema_carries_every_migration(db):
-    assert SCHEMA_VERSION == 4
+    assert SCHEMA_VERSION == 5
     assert applied_versions(db) == tuple(item.version for item in MIGRATIONS)
     tables = {
         row["name"]
@@ -142,8 +142,8 @@ def test_the_schema_carries_every_migration(db):
         row["name"]
         for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")
     }
-    # Ten content triggers plus two on the record itself.
-    assert len([name for name in triggers if name.startswith("trg_finalised_")]) == 10
+    # Fifteen content triggers (five tables, insertion included) plus two on the record.
+    assert len([name for name in triggers if name.startswith("trg_finalised_")]) == 15
     assert len([name for name in triggers if name.startswith("trg_finalisation_")]) == 2
 
 

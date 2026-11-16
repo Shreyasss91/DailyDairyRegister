@@ -25,7 +25,7 @@ from dataclasses import dataclass
 #: Bumped when the schema below changes. Migrations are applied in order and each
 #: one is idempotent, so re-running is safe and a fresh database simply replays the
 #: list.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -662,11 +662,214 @@ _MIGRATION_4 = Migration(
 )
 
 
+# --- migration 5: insertion is a change too, and the record is keyed properly --
+
+# Migration 4 was written once and reached databases in two shapes while it was being
+# developed: the final one, keyed by ``(run_id, month)`` with month-scoped triggers, and
+# an earlier one keyed by ``run_id`` alone, whose triggers froze a whole revision. A
+# migration is not re-applied because its source text later changed, so those databases
+# keep the earlier shape for ever unless a later migration corrects them. Migration 5 is
+# that correction, and it is written to be harmless on a database that already has the
+# final shape.
+
+#: The month_finalisation definition the corrected schema uses. Deliberately repeated here
+#: rather than shared with migration 4: an applied migration is history and must not
+#: change retroactively, so the copy in this file is the one migration 5 installs.
+_MONTH_FINALISATION_TABLE_SQL = """
+    CREATE TABLE IF NOT EXISTS month_finalisation (
+        finalisation_id        TEXT PRIMARY KEY,
+        register_id            TEXT NOT NULL,
+        month                  TEXT NOT NULL,
+        run_id                 TEXT NOT NULL REFERENCES generation_run (run_id),
+        revision_number        INTEGER NOT NULL,
+        sequence               INTEGER NOT NULL,
+        parent_finalisation_id TEXT,
+        correction_of_run_id   TEXT,
+        finalised_at           TEXT NOT NULL,
+        fingerprint            TEXT NOT NULL,
+        content_json           TEXT NOT NULL,
+        acknowledged_json      TEXT NOT NULL DEFAULT '[]',
+        readiness_json         TEXT NOT NULL DEFAULT '[]',
+        master_version         INTEGER NOT NULL DEFAULT 0,
+        note                   TEXT,
+        UNIQUE (run_id, month),
+        UNIQUE (register_id, month, sequence)
+    )
+    """
+
+#: Every column of the record, in one place, so the rebuild copies what is there rather
+#: than a list that can drift from the table.
+_FINALISATION_COLUMNS = (
+    "finalisation_id",
+    "register_id",
+    "month",
+    "run_id",
+    "revision_number",
+    "sequence",
+    "parent_finalisation_id",
+    "correction_of_run_id",
+    "finalised_at",
+    "fingerprint",
+    "content_json",
+    "acknowledged_json",
+    "readiness_json",
+    "master_version",
+    "note",
+)
+
+
+def _finalisation_trigger_names() -> tuple[str, ...]:
+    """Every trigger migration 4 or 5 can have installed over these tables."""
+
+    names: list[str] = []
+    for table in _FINALISED_CONTENT_TABLES:
+        for operation in ("insert", "update", "delete"):
+            names.append(f"trg_finalised_{table}_{operation}")
+    for operation in ("insert", "update", "delete"):
+        names.append(f"trg_finalisation_{operation}")
+    return tuple(names)
+
+
+def _finalised_content_triggers() -> tuple[str, ...]:
+    """The complete immutability set: insertion, update and deletion, month-scoped.
+
+    Insertion was the gap. ``UPDATE`` and ``DELETE`` triggers stop a closed month being
+    edited, but a new row appended to it is a change the record did not have, and a
+    revision that has been finalised must not acquire content afterwards. The predicate
+    names the month of the row being inserted and the revision it belongs to, so:
+
+    * an insertion into a closed month of that revision is refused;
+    * an insertion into an open month of the same revision is allowed;
+    * an insertion into a successor correction revision is allowed, because the revision
+      is different and that is how a correction changes the month at all.
+    """
+
+    statements: list[str] = []
+    for table in _FINALISED_CONTENT_TABLES:
+        column = "visit_date" if table == "generation_visit" else "row_date"
+        for operation in ("INSERT", "UPDATE", "DELETE"):
+            row = "NEW" if operation == "INSERT" else "OLD"
+            statements.append(
+                f"""
+                CREATE TRIGGER IF NOT EXISTS trg_finalised_{table}_{operation.lower()}
+                BEFORE {operation} ON {table}
+                WHEN EXISTS (
+                    SELECT 1 FROM month_finalisation f
+                    WHERE f.run_id = {row}.run_id
+                      AND substr({row}.{column}, 1, 7) = f.month
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'finalised_revision_is_immutable');
+                END
+                """
+            )
+    # The record itself stays readable and is still written once, at finalisation: a
+    # trigger on inserting one would forbid closing a month. Changing or deleting one is
+    # never allowed.
+    for operation in ("UPDATE", "DELETE"):
+        statements.append(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS trg_finalisation_{operation.lower()}
+            BEFORE {operation} ON month_finalisation
+            BEGIN
+                SELECT RAISE(ABORT, 'finalised_record_is_immutable');
+            END
+            """
+        )
+    return tuple(statements)
+
+
+def _month_finalisation_is_keyed_by_run_only(connection: sqlite3.Connection) -> bool:
+    """Whether the table still carries the earlier ``UNIQUE (run_id)`` index.
+
+    Asked of the database rather than of a version number, because the version says
+    migration 4 ran, not which text of it ran.
+    """
+
+    for index in connection.execute("PRAGMA index_list('month_finalisation')").fetchall():
+        if not index[2]:  # not unique
+            continue
+        columns = [
+            row[2]
+            for row in connection.execute(f"PRAGMA index_info('{index[1]}')").fetchall()
+        ]
+        if columns == ["run_id"]:
+            return True
+    return False
+
+
+def _rebuild_month_finalisation(connection: sqlite3.Connection) -> None:
+    """Replace ``UNIQUE (run_id)`` with ``UNIQUE (run_id, month)``, keeping every row.
+
+    SQLite cannot alter a constraint in place, so the table is rebuilt: the old one is
+    renamed, the corrected one created, every column copied across, and the old one
+    dropped. Row identity, sequence, acknowledgement, content snapshot and the month's
+    pointer are untouched — the pointer lives in ``month_state`` and names a
+    ``finalisation_id``, which the copy preserves because it copies the primary key.
+    """
+
+    before = connection.execute(
+        "SELECT COUNT(*) AS n FROM month_finalisation"
+    ).fetchone()[0]
+    connection.execute("ALTER TABLE month_finalisation RENAME TO month_finalisation_schema4")
+    connection.execute(_MONTH_FINALISATION_TABLE_SQL)
+    columns = ", ".join(_FINALISATION_COLUMNS)
+    connection.execute(
+        f"INSERT INTO month_finalisation ({columns})"
+        f" SELECT {columns} FROM month_finalisation_schema4"
+    )
+    connection.execute("DROP TABLE month_finalisation_schema4")
+    after = connection.execute(
+        "SELECT COUNT(*) AS n FROM month_finalisation"
+    ).fetchone()[0]
+    if after != before:
+        raise RuntimeError(
+            "the finalisation record did not survive the rebuild: "
+            f"{before} row(s) before, {after} after"
+        )
+
+
+def _apply_migration_5(connection: sqlite3.Connection) -> None:
+    """Correct an earlier schema 4 in place, and close the insertion gap.
+
+    Runs inside the migration transaction, so a failure leaves the database at schema 4
+    with its data intact rather than half-corrected.
+    """
+
+    for name in _finalisation_trigger_names():
+        connection.execute(f"DROP TRIGGER IF EXISTS {name}")
+    # The indexes belong to the table being replaced, and index names are global.
+    connection.execute("DROP INDEX IF EXISTS idx_finalisation_register_month")
+    connection.execute("DROP INDEX IF EXISTS idx_finalisation_run")
+
+    if _month_finalisation_is_keyed_by_run_only(connection):
+        _rebuild_month_finalisation(connection)
+
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_finalisation_register_month "
+        "ON month_finalisation (register_id, month, sequence)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_finalisation_run ON month_finalisation (run_id)"
+    )
+    for statement in _finalised_content_triggers():
+        connection.execute(statement)
+
+
+_MIGRATION_5 = Migration(
+    version=5,
+    name="finalised content refuses insertion, and the record is keyed by run and month",
+    statements=(),
+    apply=_apply_migration_5,
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     _MIGRATION_1,
     _MIGRATION_2,
     _MIGRATION_3,
     _MIGRATION_4,
+    _MIGRATION_5,
 )
 
 

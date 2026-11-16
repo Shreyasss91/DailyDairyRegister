@@ -1003,3 +1003,66 @@ revisions are never deleted.
 - An activity-selection scheduler. Entries on a date are rendered and corrected; which
   activity belongs on a date is still the operator's entry, not a computed choice.
 - Authentication or multi-operator attribution. The note is the only human record.
+
+## 25. Persistence guarantees beneath a finalised month (as built)
+
+The application layer refuses to change a closed month before any of it reaches SQLite.
+The database is also expected to refuse it, because a route can be changed, a script can
+be written and a future refactor can forget. Section 24.3 records the guarantees the
+application makes; this section records what the storage guarantees on its own.
+
+### 25.1 Three operations, not two
+
+Over each of `generation_row`, `generation_visit`, `generation_entry`, `date_review` and
+`date_lock`, an insertion is covered as well as an update and a deletion, because a row
+appended to a month that has already been closed leaves the approved record describing
+something other than what is stored. Each trigger names the month of the row being
+inserted — `visit_date` for a visit, `row_date` for the rest — and the revision it belongs
+to, and aborts with `finalised_revision_is_immutable` only when a `month_finalisation` row
+exists for that revision and that month. Consequently:
+
+- An insertion into a closed month of a revision that was finalised for it is refused.
+- An insertion into a month of the same revision that has not been closed is ordinary
+  work, which is the whole point of finalising a month at all.
+- An insertion into a successor correction revision is allowed, because it carries a
+  different revision and a correction is how a closed month is changed.
+
+`month_finalisation` itself is written once, at finalisation, so it carries the update and
+delete triggers and no insert trigger: closing a month is an insertion into it.
+
+### 25.2 A migration already applied is repaired by a new migration
+
+An applied migration is history. Migration 4 reached databases in two shapes while it was
+being written — keyed by `run_id` alone, and with the month in the trigger predicate in one
+version and out of it in another — and a database that applied the earlier text keeps that
+shape for ever, because a migration is not re-run when its source text later changes.
+Migration 5 corrects it in place and is written to be harmless on a database that is
+already correct.
+
+It asks the database which shape it holds rather than trusting the version number, which
+says migration 4 ran and not which text ran: the test is a unique index over exactly
+`run_id`. When that index is present the record table is rebuilt — renamed, recreated with
+`UNIQUE (run_id, month)` and `UNIQUE (register_id, month, sequence)`, every column of every
+row copied across, the old table dropped, the row count verified — because SQLite cannot
+alter a constraint in place. Identity, sequence, content snapshot, acknowledgements,
+readiness, master version and note survive because the primary key is copied rather than
+regenerated, and the month pointer survives because it names a `finalisation_id` that the
+copy preserves. The finalisation triggers are dropped and reinstalled in both cases, in the
+month-scoped form and covering insertion, so the earlier trigger shapes converge on one
+set.
+
+Migration 5 runs inside the existing migration transaction, so a failure leaves a database
+at schema 4 with its data intact rather than half-repaired, and it is repeatable: on a
+correct database it rewrites the triggers to identical text and changes nothing. Migration
+4 is untouched, so a fresh installation replays 4 and then 5 and reaches the same shape as
+an upgraded one. `SCHEMA_VERSION` is 5.
+
+### 25.3 What is still not guarded
+
+- A row deleted and reinserted elsewhere inside one statement is beyond a trigger's reach;
+  the guarantee is per row and per month.
+- A database opened with `PRAGMA writable_schema` or with triggers dropped by hand is
+  outside the guarantee, as with any SQLite trigger.
+- Nothing here detects a tampered record: the fingerprint stored with it identifies the
+  content that was issued and is compared by the application, but verifying a whole
+  database against its own records is a separate act.
