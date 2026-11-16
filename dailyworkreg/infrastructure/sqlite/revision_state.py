@@ -678,6 +678,19 @@ def finalisations_of_run(
     return tuple(_finalisation(row) for row in rows)
 
 
+def all_finalisations(connection: sqlite3.Connection) -> tuple[FinalisationRow, ...]:
+    """Every finalised record in the database, oldest month first.
+
+    Used where the question is about the whole store rather than about one register: a
+    backup's structure, and the verification that every issued version survived a restore.
+    """
+
+    rows = connection.execute(
+        "SELECT * FROM month_finalisation ORDER BY register_id, month, sequence"
+    ).fetchall()
+    return tuple(_finalisation(row) for row in rows)
+
+
 def finalisation_for_run_month(
     connection: sqlite3.Connection, run_id: str, month: str
 ) -> FinalisationRow | None:

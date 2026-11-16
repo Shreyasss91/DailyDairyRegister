@@ -87,6 +87,7 @@ function activate(view) {
     calendar: loadCalendar,
     generate: loadGenerateDefaults,
     history: loadHistory,
+    backup: loadBackup,
   };
   if (loaders[view]) loaders[view]();
 }
@@ -1333,6 +1334,229 @@ async function renderMonths(registerId, runId) {
   months.forEach((month) => target.append(monthCard(registerId, runId, month)));
 }
 
+// --- backup and restore ----------------------------------------------------
+
+// Every word on this panel comes from the server: which format the file is, what it
+// holds, which schema it came from and whether it was accepted. The browser decides
+// nothing about whether a file is restorable, and it never reads the file itself.
+
+const CONTENT_LABELS = {
+  registers: 'Registers',
+  revisions: 'Revisions',
+  finalisations: 'Issued versions',
+  finalised_months: 'Months closed',
+  rows: 'Dates in drafts',
+  visits: 'Visits',
+  entries: 'Other entries',
+  reviews: 'Dates reviewed',
+  locks: 'Dates locked',
+  dtcs: 'DTCs',
+  areas: 'Areas',
+  feeders: 'Feeders',
+  activities: 'Activities',
+  holidays: 'Holidays',
+  import_batches: 'Imports received',
+  staged_rows: 'Import rows staged',
+};
+
+const restoreState = { token: null };
+
+function contentList(contents) {
+  const items = Object.keys(contents || {})
+    .filter((key) => CONTENT_LABELS[key])
+    .map((key) => `${CONTENT_LABELS[key]}: ${contents[key]}`);
+  return el('ul', {}, items.map((text) => el('li', { text })));
+}
+
+function factsTable(pairs) {
+  return el('table', { class: 'table' }, [
+    el('tbody', {}, pairs
+      .filter(([, value]) => value !== null && value !== undefined && value !== '')
+      .map(([label, value]) => el('tr', {}, [
+        el('th', { text: label }),
+        el('td', { text: String(value) }),
+      ]))),
+  ]);
+}
+
+async function loadBackup() {
+  // Nothing is fetched on arrival: a backup is an action, and a restore must start from
+  // the operator choosing a file rather than from whatever the tool remembers.
+  document.getElementById('backup-status').textContent = '';
+}
+
+async function createBackup() {
+  const button = document.getElementById('backup-create');
+  const status = document.getElementById('backup-status');
+  const banner = document.getElementById('backup-banner');
+  const result = document.getElementById('backup-result');
+  hide(banner);
+  hide(result);
+  button.disabled = true;
+  status.textContent = 'Copying the database…';
+  try {
+    const held = await api('/api/backups', { method: 'POST' });
+    status.textContent = '';
+    showBanner(banner, 'ok', 'The backup was created and checked.');
+    result.hidden = false;
+    result.append(
+      el('h4', { text: 'Your backup' }),
+      el('p', {
+        class: 'muted',
+        text: 'Download it now. A backup is held only until this application is closed.',
+      }),
+      el('p', {}, [
+        el('a', {
+          class: 'button button-primary',
+          href: held.download,
+          download: held.filename,
+          text: `Download ${held.filename}`,
+        }),
+      ]),
+      factsTable([
+        ['File', held.filename],
+        ['Created', held.created_at],
+        ['Size', `${held.size_bytes} bytes`],
+        ['Backup format', `version ${held.format_version}`],
+        ['Schema', `version ${held.schema_version}`],
+        ['Integrity check', held.verified && held.verified.integrity],
+        ['Reference check', held.verified && held.verified.foreign_keys],
+      ]),
+      el('h4', { text: 'What it holds' }),
+      contentList(held.contents),
+    );
+  } catch (error) {
+    status.textContent = '';
+    showBanner(banner, 'error', 'The backup could not be created, so nothing was written.', [error.message]);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function validateRestore() {
+  const input = document.getElementById('restore-file');
+  const button = document.getElementById('restore-validate');
+  const status = document.getElementById('restore-status');
+  const banner = document.getElementById('restore-banner');
+  const preview = document.getElementById('restore-preview');
+  const confirm = document.getElementById('restore-confirm');
+  hide(banner);
+  hide(preview);
+  hide(confirm);
+  restoreState.token = null;
+  if (!input.files || !input.files.length) {
+    showBanner(banner, 'error', 'Choose a backup file first.', [
+      'A backup is the file the tool produced when you created one, ending in .zip.',
+    ]);
+    return;
+  }
+  button.disabled = true;
+  status.textContent = 'Checking the file…';
+  try {
+    const body = new FormData();
+    body.append('file', input.files[0]);
+    const pending = await api('/api/backup-validation', { method: 'POST', body });
+    status.textContent = '';
+    restoreState.token = pending.restore_token;
+    showBanner(banner, 'ok', 'This file is a backup this tool can restore.');
+    preview.hidden = false;
+    const brought = (pending.migrations_applied || []).length
+      ? `This backup was made by an earlier version of the tool and will be brought up to date as it is restored.`
+      : 'This backup was made by this version of the tool.';
+    preview.append(
+      el('h4', { text: 'What is in the file' }),
+      factsTable([
+        ['File', pending.filename],
+        ['Created', pending.created_at],
+        ['Schema in the file', pending.backup_schema_version],
+        ['Schema here', pending.this_tool_schema_version],
+        ['Integrity check', pending.verified && pending.verified.integrity],
+        ['Reference check', pending.verified && pending.verified.foreign_keys],
+      ]),
+      el('p', { class: 'muted', text: brought }),
+      contentList(pending.contents),
+    );
+    (pending.warnings || []).forEach((warning) => {
+      preview.append(el('p', { class: 'muted', text: warning }));
+    });
+    // The word to type is the one the server asked for, so the page cannot drift from
+    // the confirmation the restore actually requires.
+    document.getElementById('restore-word-label').textContent =
+      pending.confirmation_word || 'the word shown';
+    confirm.hidden = false;
+    document.getElementById('restore-word').value = '';
+  } catch (error) {
+    status.textContent = '';
+    showBanner(banner, 'error', 'This file cannot be restored, so nothing was changed.', [error.message]);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function runRestore() {
+  const button = document.getElementById('restore-run');
+  const word = document.getElementById('restore-word').value.trim();
+  const status = document.getElementById('restore-status');
+  const banner = document.getElementById('restore-banner');
+  const result = document.getElementById('restore-result');
+  hide(banner);
+  hide(result);
+  if (!restoreState.token) {
+    showBanner(banner, 'error', 'Check a backup file before restoring.', [
+      'A file has to be accepted before it can replace anything.',
+    ]);
+    return;
+  }
+  button.disabled = true;
+  status.textContent = 'Replacing the database. Leave this page open…';
+  try {
+    const answer = await api('/api/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ restore_token: restoreState.token, confirmation: word }),
+    });
+    status.textContent = '';
+    restoreState.token = null;
+    hide(document.getElementById('restore-confirm'));
+    showBanner(banner, 'ok', 'The database was replaced and checked.');
+    result.hidden = false;
+    result.append(
+      el('h4', { text: 'What was checked afterwards' }),
+      factsTable([
+        ['Integrity check', answer.verified && answer.verified.integrity],
+        ['Reference check', answer.verified && answer.verified.foreign_keys],
+        ['Schema', `version ${answer.verified && answer.verified.schema_version}`],
+        ['Issued versions readable', (answer.verified && answer.verified.issued_versions || []).length],
+        ['Registers readable', answer.verified && answer.verified.registers],
+      ]),
+      el('p', {
+        class: 'muted',
+        text: 'A copy of the database that was in use before the restore was kept beside it:',
+      }),
+      el('p', { text: answer.rollback_copy }),
+      el('p', {
+        class: 'muted',
+        text: 'Reload the page to work with the restored records. Delete that copy once you are satisfied.',
+      }),
+      el('button', { class: 'button', text: 'Reload', onclick: () => window.location.reload() }),
+    );
+  } catch (error) {
+    status.textContent = '';
+    showBanner(banner, 'error', 'The database was not replaced.', [error.message]);
+    if (error.constraint === 'restore_in_progress') {
+      banner.append(el('p', {
+        class: 'muted',
+        text: 'Another restore is in progress. Wait for it to finish, then check the file again.',
+      }));
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
+document.getElementById('backup-create').addEventListener('click', createBackup);
+document.getElementById('restore-validate').addEventListener('click', validateRestore);
+document.getElementById('restore-run').addEventListener('click', runRestore);
 // --- start -----------------------------------------------------------------
 
 activate('home');

@@ -1146,3 +1146,206 @@ answers is "what did the office approve", not "what would the platform arrange t
 - No watermark, signature block, digital signature, masthead logo, letterhead or
   pagination design beyond what the browser prints.
 - No bulk export of several months in one file, and no export history or download log.
+
+## 27. Implemented backup and restore contract (as built)
+
+This section records what the tool actually does, so a later change reads a decision rather
+than inferring one. It adds no policy. Requirements §13 is unchanged: a backup is not part
+of the register lifecycle, and restoring one does not reopen, un-finalise or re-issue any
+month.
+
+### 27.1 The database is the whole of the operational state
+
+The only operational state is the SQLite database resolved by
+`infrastructure/sqlite/database.py`: the `--db` argument, then `DAILYWORKREG_DB`, then
+`%LOCALAPPDATA%\DailyDairyRegister\dailyworkreg.db` (or the XDG directory, or the home
+directory, on other platforms). The only other filesystem write anywhere in
+`dailyworkreg/` is the creation of that directory.
+
+There is therefore no second store to back up: no cache file, no settings file, no export
+directory, no temporary draft. A backup of the one database is a backup of everything —
+masters and their revisions, staged imports and their provenance, every register, revision,
+row, visit, entry, review, lock and audit row, every issued finalisation with its stored
+snapshot, fingerprint, acknowledgements and readiness, every month pointer, and the
+`schema_migration` rows that say which shape the file is.
+
+Two consequences are recorded rather than implemented: a backup is not encrypted, and
+nothing is retained by the tool. Encryption, key management and retention are separate
+decisions and were not taken here.
+
+### 27.2 The package format
+
+One file, a DEFLATE archive, holding exactly two entries:
+
+| Entry | Content |
+| --- | --- |
+| `manifest.json` | UTF-8 JSON, `sort_keys`, describing the package |
+| `database.sqlite` | the consistent copy of the database |
+
+The manifest carries `format` (`dailyworkreg-backup`), `format_version` (1),
+`created_at` (UTC, ISO 8601 with microseconds), `application` (`name`,
+`schema_version`), `payload` (`name`, `bytes`, `sha256`, `journal_mode`) and `contents`
+(sixteen non-secret totals: registers, revisions, finalisations, finalised months, rows,
+visits, entries, reviews, locks, DTCs, areas, feeders, activities, holidays, import
+batches, staged rows).
+
+The format is versioned so a future change is a new version rather than a reinterpretation
+of this one. A reader refuses a `format_version` it does not know; it does not guess.
+
+The file name is derived from the tool's own facts — `daily-dairy-register-backup-<UTC
+timestamp>-schema-<n>.zip` — never from anything an operator typed, so no filename can
+carry a path separator, a control character or a claim about what is inside. The name is
+not trusted on the way back in: the manifest and the payload decide, and the entry names
+are matched against the format exactly.
+
+### 27.3 A consistent copy without disturbing the desk
+
+The copy is made with `sqlite3.Connection.backup` from the live connection. That API reads
+one consistent snapshot while other readers and a writer continue to work, which is why a
+backup can be taken from inside a request without stopping the tool. The result is
+detached from the write-ahead log: the snapshot is opened, `journal_mode = DELETE` is
+enforced and any sidecar left by an earlier attempt is removed, so the payload is a single
+self-contained file.
+
+What this guarantees, and what it does not:
+
+- Committed work is in the copy, including work committed before the backup request was
+  served.
+- A transaction that was still open when the copy was taken is not in the copy. It is not
+  half in it either: the snapshot sees a committed state.
+- The live database keeps working during and after the backup, and taking a backup writes
+  no row to it.
+- The payload is an ordinary SQLite database that other tools can open; it is not a
+  proprietary container.
+
+Before the package is offered, the snapshot is inspected: integrity, foreign keys, schema
+version, required tables, the immutability triggers, the structure of the issued records,
+readable snapshots and present fingerprints. A copy that fails any of these is not offered
+as a backup under a different name; the backup fails and says why.
+
+Everything happens in a private temporary directory that is removed whether the backup
+succeeds or fails, so no database, no archive and no leftover file is written into the
+source tree or beside the live database.
+
+### 27.4 Validation is a decision about a file, made before anything is replaced
+
+`POST /api/backup-validation` accepts one uploaded package and returns either the facts an
+operator needs to decide, or a refusal with a stable identifier. The order is deliberate:
+a newer schema is refused before the payload is examined, because reading it with an older
+build is exactly what must not happen; then the archive is read with a byte cap; then the
+manifest; then the entry names; then the checksum; then the payload is opened (read-only,
+`mode=ro`) and inspected.
+
+It checks, in this order: readable as an archive; manifest present and shaped; format name
+and version; payload present; no unexpected entry, no duplicate entry, no directory, no
+symlink, no absolute or climbing path; declared and actual sizes under the limits; payload
+SHA-256 against the manifest; the file is a SQLite database; `PRAGMA integrity_check`;
+`PRAGMA foreign_key_check`; schema version not newer than this build; required tables
+present; the immutability triggers present; the issued records structurally consistent
+(each finalisation names a run that exists, its parent exists, its correction names a run
+that exists, every month pointer names a record of that month, and only one correction
+branch is open per month); every `content_json` parses and every fingerprint is non-blank.
+
+An older supported schema is migrated **on the staged copy** with the existing migrations,
+and the migrations that ran are reported to the operator. The live database is not migrated
+and not touched, the backup file is not modified, and migration history is not edited.
+
+Limits are read from `DAILYWORKREG_BACKUP_MAX_BYTES` (256 MiB),
+`DAILYWORKREG_BACKUP_MAX_PAYLOAD_BYTES` (1 GiB) and a fixed 64 KiB manifest cap. Exceeding
+one is a refusal (`backup_package_too_large`), checked while streaming so an oversized
+upload is not written to disk in full.
+
+The staged copy is written to `<database>.restore-<token>.staged` in the same directory as
+the live database — same volume, therefore replaceable by rename — and its hash is
+recorded. Stale staged copies from an interrupted attempt are pruned, except the one an
+outstanding confirmation refers to.
+
+### 27.5 The replacement is gated, recoverable and verified
+
+`POST /api/restore` requires two things the validation did not supply: the word `REPLACE`
+and a token that is still outstanding in this process. Neither is derivable from the file,
+so selecting a file cannot replace a database.
+
+Then, with the exclusive side of `MaintenanceGate` held:
+
+1. The staged file's hash is re-checked against the hash recorded at validation, so a file
+   changed after it was accepted is refused (`restore_replacement_failed`, "the validated
+   copy is no longer on disk or has changed").
+2. Open connections are given up to 30 seconds to close; new requests are refused with
+   `restore_in_progress` meanwhile. A timeout releases the barrier and refuses the restore
+   rather than replacing a database somebody may still hold.
+3. `PRAGMA wal_checkpoint(TRUNCATE)` runs and the `-wal`, `-shm` and `-journal` sidecars
+   are removed. A sidecar that cannot be removed is a refusal, not a warning, because a
+   remaining log would be replayed onto the new file.
+4. A rollback copy is taken at `<database>.pre-restore-<UTC stamp>.db` and inspected; if it
+   is not a healthy database the restore stops there.
+5. The staged file is installed with `os.replace`, which is atomic on one volume and on
+   Windows refuses while a handle is open — the failure mode the barrier exists to avoid.
+6. The result is verified: schema version, integrity, foreign keys, all 17 triggers, the
+   structure of the issued records, and then the database is opened through the ordinary
+   `open_database` path to read every register, every issued version and the counters.
+7. On any verification failure the previous database is put back from the rollback copy and
+   the answer says so: `restored: false`, `restore_verification_failed`, and the name of
+   the recovery copy.
+
+A failed replacement leaves the live database as it was and reports the rollback copy. A
+restore that cannot be verified is never reported as a success. The rollback copy is left
+in place for the operator to delete; the tool has no retention policy and deletes nothing.
+
+### 27.6 What the operator sees
+
+The Backup tab is three steps, in the order they must happen:
+
+1. **Create a backup** — one button. The answer shows the file name, the creation time, the
+   size, the format and schema versions, the integrity and reference checks, the totals,
+   and a download link. The backup is held in memory by the running process, so the
+   download must happen before the application is closed; the page says so.
+2. **Check this file** — choose a file, then check it. The answer shows what the file is,
+   what it holds, whether it needs bringing forward, and any warning. Nothing is revealed
+   before the check succeeds.
+3. **Replace the database** — the confirmation block appears only after a file was
+   accepted, and the word to type is the one the server reported, not one printed in the
+   page. The result shows what was verified, the name of the recovery copy, and a reload
+   button, because the page is holding data from the database that has just been replaced.
+
+The client holds no rule: it does not compare schema versions, does not read the archive,
+does not decide whether a file is restorable, does not know a snapshot from a fingerprint,
+and does not parse a message to decide what happened. Refusals are shown as the server's
+sentence.
+
+### 27.7 What is preserved, proven
+
+The tests build the state an office has and compare whole rows and stored snapshots before
+and after a round trip, not counts:
+
+- masters (`dtc`, `area`, `feeder`, `activity`, `general_holiday`), staged imports with
+  their provenance (`import_batch`, `import_staging_row`), registers, revisions, rows,
+  visits, entries, reviews, locks, audit rows and decisions;
+- three issued finalisations across two months from one revision plus a correction, their
+  `content_json`, fingerprints, `acknowledged_json`, `readiness_json`, sequences, parent
+  and correction links, and the month pointers that name them;
+- the 17 triggers, still installed and still refusing an insertion into a closed month and
+  a change to a finalised record;
+- the exports: a superseded version still exports itself, the printed page is byte-identical
+  to what it was before the restore, and a correction made afterwards leaves both earlier
+  versions exactly as they were.
+
+The workbook is compared by what it holds rather than by its bytes, because the XLSX
+archive carries entry timestamps written at the moment of the export; byte identity between
+two writes of the same version therefore holds only within one timestamp tick. That
+limitation is recorded here as a known property of the XLSX writer rather than fixed in this
+change, which was authorised to export, not to alter the export.
+
+### 27.8 What is not modelled
+
+- No encryption at rest, no passphrase, no key management. A backup is a readable SQLite
+  file inside a zip, and the operator is responsible for where it is kept.
+- No retention or rotation: the tool keeps nothing, deletes nothing it did not write, and
+  has no schedule.
+- No incremental or partial backup, no table selection, no merge restore.
+- No restore on top of a running second copy of the tool, no remote or shared database, and
+  no restore from a file the tool did not produce.
+- No overwrite of the live database without the confirmation word, and no route that
+  accepts a filesystem path instead of an upload.
+- No audit trail of restores beyond the recovery copy's name in the answer and the server
+  log; there is no restore history table.

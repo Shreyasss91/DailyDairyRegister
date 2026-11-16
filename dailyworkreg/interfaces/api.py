@@ -12,9 +12,12 @@ protect.
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
+import tempfile
+import uuid
 from collections.abc import Iterator
-from datetime import date
+from datetime import UTC, date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
+from ..application import backup_restore
 from ..application import export as documents_source
 from ..application.calendar_projection import (
     WeeklyOffRules,
@@ -81,13 +85,20 @@ from ..application.revisions import (
 from ..application.snapshot import SnapshotError
 from ..domain.cycle import MonthKey
 from ..domain.validator import InputError, Visit
+from ..infrastructure.backup import Limits
 from ..infrastructure.imports.datasets import JUDGES
 from ..infrastructure.imports.tabular import SourceFormatError, read_source_bytes
 from ..infrastructure.sqlite import calendar_records as cal
 from ..infrastructure.sqlite import imports as staged
 from ..infrastructure.sqlite import masters, revision_state, seed
-from ..infrastructure.sqlite.database import open_database
+from ..infrastructure.sqlite.database import open_database, resolve_db_path
 from . import documents
+from .maintenance import (
+    BackupDesk,
+    MaintenanceBusy,
+    MaintenanceGate,
+    PendingRestore,
+)
 
 HERE = Path(__file__).parent
 STATIC = HERE / "static"
@@ -143,6 +154,14 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         openapi_url=None,
     )
     app.state.db_path = db_path
+    # Resolved once, here, because a restore replaces a named file rather than whichever
+    # file the environment happens to point at later.
+    target_db = resolve_db_path(db_path)
+    # Admission for ordinary requests, and the exclusive hold a replacement needs.
+    gate = MaintenanceGate()
+    desk = BackupDesk()
+    app.state.maintenance_gate = gate
+    app.state.backup_desk = desk
     # Autoescaping is on by default, which is what makes a stored activity title or a
     # holiday name safe to place in the page: nothing the record holds becomes markup.
     templates = Jinja2Templates(directory=str(TEMPLATES))
@@ -167,15 +186,28 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     prepare()
 
     def get_db() -> Iterator[sqlite3.Connection]:
-        existing = connection()
-        try:
-            yield existing
-        finally:
-            existing.close()
+        # Every route that touches the database passes the barrier first, so a replacement
+        # can rely on the connection count reaching zero rather than on good timing.
+        with gate.request():
+            existing = connection()
+            try:
+                yield existing
+            finally:
+                existing.close()
 
     @app.exception_handler(SurfaceError)
     async def surface_error(_: Request, error: SurfaceError) -> JSONResponse:
         return _error_payload(error)
+
+    @app.exception_handler(backup_restore.BackupError)
+    async def backup_refused(_: Request, error: backup_restore.BackupError) -> JSONResponse:
+        payload = {"error": {"constraint": error.constraint, "detail": error.detail}}
+        payload["error"].update(error.fields)
+        return JSONResponse(status_code=400, content=payload)
+
+    @app.exception_handler(MaintenanceBusy)
+    async def maintenance_busy(_: Request, error: MaintenanceBusy) -> JSONResponse:
+        return _fail(error.constraint, error, error.status)
 
     @app.exception_handler(InputError)
     async def domain_input_error(_: Request, error: InputError) -> JSONResponse:
@@ -1051,6 +1083,117 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 )
             },
         )
+
+    # --- backup and restore -------------------------------------------------
+    #
+    # A backup is made from the live connection and handed over as one file. A restore is
+    # two deliberate steps: validate a package into a staged database beside the live one,
+    # then replace — with the barrier held, a recovery copy taken and the result verified
+    # before it is called a success. No route decides whether a backup is trustworthy; the
+    # application layer does, and this surface only translates.
+
+    @app.post("/api/backups")
+    def create_backup(db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+        package = backup_restore.create_backup(db)
+        held = desk.remember(package, f"BK-{uuid.uuid4().hex[:12]}")
+        return held.as_payload()
+
+    @app.get("/api/backups/{backup_id}/download")
+    def download_backup(backup_id: str) -> Response:
+        held = desk.backup(backup_id)
+        if held is None:
+            raise SurfaceError(
+                "backup_not_held",
+                "that backup is no longer being held; make a new one and download it",
+            )
+        return Response(
+            content=held.package.content,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{held.package.filename}"'
+            },
+        )
+
+    @app.post("/api/backup-validation")
+    async def validate_backup(file: UploadFile) -> dict[str, Any]:
+        limits = Limits.from_environment()
+        token = uuid.uuid4().hex[:12]
+        workdir = Path(tempfile.mkdtemp(prefix="dailyworkreg-upload-"))
+        try:
+            upload = workdir / "package.zip"
+            written = 0
+            with upload.open("wb") as sink:
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > limits.max_package_bytes:
+                        raise SurfaceError(
+                            backup_restore.C_PACKAGE_TOO_LARGE,
+                            "the file is larger than this tool accepts as a backup",
+                        )
+                    sink.write(chunk)
+            if not written:
+                raise SurfaceError(
+                    backup_restore.C_PACKAGE_UNREADABLE, "no backup file was sent"
+                )
+            # A copy that is already validated is kept: a refused upload must not throw
+            # away the restore the operator had just been shown and confirmed.
+            waiting = desk.pending
+            backup_restore.prune_staging(
+                target_db,
+                keep=set()
+                if waiting is None
+                else {waiting.staged.staged.name},
+            )
+            staged = backup_restore.validate_package(
+                upload, target_db=target_db, token=token, limits=limits
+            )
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+        desk.hold(
+            PendingRestore(
+                token=token,
+                staged=staged,
+                validated_at=datetime.now(UTC),
+                upload_name=file.filename or "backup.zip",
+            )
+        )
+        return desk.outstanding(token).as_payload()
+
+    @app.post("/api/restore")
+    def perform_restore(payload: dict[str, Any]) -> dict[str, Any]:
+        token = str(payload.get("restore_token") or "")
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        if confirmation != backup_restore.CONFIRMATION_WORD:
+            raise SurfaceError(
+                backup_restore.C_RESTORE_CONFIRMATION_REQUIRED,
+                "restoring replaces every local record, including issued months. Type "
+                f"{backup_restore.CONFIRMATION_WORD} to confirm, or close this and keep "
+                "working.",
+            )
+        pending = desk.outstanding(token)
+        if pending is None:
+            raise SurfaceError(
+                backup_restore.C_RESTORE_TOKEN_UNKNOWN,
+                "that backup has not been validated in this session; validate it again "
+                "before restoring",
+            )
+        with gate.exclusive():
+            result = backup_restore.restore(pending.staged, target_db=target_db)
+            desk.clear()
+        return {
+            "restored": True,
+            "verified": result.verification,
+            "rollback_copy": result.rollback.name,
+            "migrations_applied": list(result.migrations_applied),
+            "summary": {
+                key: value
+                for key, value in result.summary.items()
+                if key in {"format", "format_version", "created_at", "schema_version"}
+            },
+        }
 
     @app.post("/api/finalisations/{finalisation_id}/corrections")
     def start_correction(

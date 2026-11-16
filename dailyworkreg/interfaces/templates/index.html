@@ -21,6 +21,7 @@
     <button class="tab" data-view="generate" role="tab">Generate</button>
     <button class="tab" data-view="draft" role="tab">Draft</button>
     <button class="tab" data-view="history" role="tab">History</button>
+    <button class="tab" data-view="backup" role="tab">Backup</button>
   </nav>
 
   <main id="panel" class="panel">
@@ -182,6 +183,54 @@
         because it is a finding about the month rather than a register.
       </p>
       <div id="history-groups"></div>
+    </section>
+
+    <section id="view-backup" class="view" hidden>
+      <h2>Backup and restore</h2>
+      <p class="muted">
+        A backup holds the whole database: the masters, the staged imports, every
+        revision, every review and lock, every closed month and every version issued
+        from it. Keep the downloaded file somewhere other than this computer as well.
+        Restoring replaces the database in use with the one inside the file.
+      </p>
+
+      <div class="detail">
+        <h3>Take a backup</h3>
+        <p class="muted">
+          The copy is taken while the tool keeps working, and it holds every change
+          that had been saved when it started.
+        </p>
+        <div class="row">
+          <button id="backup-create" class="button button-primary">Create a backup</button>
+          <span id="backup-status" class="muted"></span>
+        </div>
+        <div id="backup-banner" class="banner" hidden></div>
+        <div id="backup-result" class="detail" hidden></div>
+      </div>
+
+      <div class="detail">
+        <h3>Restore from a backup</h3>
+        <p class="muted">
+          Choose a backup file and check it first. Nothing is replaced until you confirm,
+          and a copy of the database in use is kept beside it before anything changes.
+        </p>
+        <div class="row">
+          <input id="restore-file" type="file" accept=".zip,application/zip" />
+          <button id="restore-validate" class="button">Check this file</button>
+          <span id="restore-status" class="muted"></span>
+        </div>
+        <div id="restore-banner" class="banner" hidden></div>
+        <div id="restore-preview" class="detail" hidden></div>
+        <div id="restore-confirm" class="detail" hidden>
+          <label for="restore-word">
+            Type <strong id="restore-word-label">the word shown</strong> to confirm that
+            the database in use may be replaced
+          </label>
+          <input id="restore-word" type="text" autocomplete="off" />
+          <button id="restore-run" class="button button-danger">Replace the database</button>
+        </div>
+        <div id="restore-result" class="detail" hidden></div>
+      </div>
     </section>
 
   </main>
