@@ -358,6 +358,32 @@ def test_contributing_assets_are_deduplicated_and_sorted():
     assert len(attribution) == len({a for a, _ in attribution})
 
 
+def test_repeated_visits_by_one_asset_name_it_once_and_still_count_each_visit():
+    # Three visits by one area asset on one date. The cap is exceeded by visits, not
+    # by identities: the count must stay three while the attribution names one asset.
+    context = _context(
+        _roster(),
+        {"A-01": 1},
+        FeasibilityConfig(area_daily_cap=2, combined_daily_cap=9),
+    )
+    day = date(2026, 11, 3)
+    result = validate_schedule(
+        ProposalContext(
+            period=context.period,
+            calendar=context.calendar,
+            roster=tuple(_roster()),
+            config=context.config,
+            proposed=(Visit("A-01", day),) * 3,
+            required_visits={},
+        )
+    )
+
+    cap = [item for item in result.violations if item.constraint == "area_daily_cap_exceeded"]
+    assert len(cap) == 1
+    assert cap[0].actual == 3
+    assert cap[0].contributing_assets == (("A-01", AssetType.AREA),)
+
+
 def test_an_unknown_asset_is_dropped_rather_than_guessed():
     roster = {a.asset_id: a for a in _roster()}
     assert attribute_assets(["A-01", "NOPE-9"], roster) == (

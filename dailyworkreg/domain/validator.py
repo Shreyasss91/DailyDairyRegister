@@ -750,34 +750,35 @@ def _daily_cap_violations(
 
     violations: list[Violation] = []
     for day, bucket in sorted(visits_by_date(visits).items()):
-        contributing = tuple(
-            sorted(
-                (
-                    (visit.asset_id, roster[visit.asset_id].asset_type)
-                    for visit in bucket
-                    if visit.asset_id in roster
-                ),
-                key=lambda pair: pair[0],
-            )
+        # Attribution is an identity set, so it is built by the one helper that
+        # decides that shape. The counts are visit counts, not identity counts: two
+        # visits by the same asset are two visits against the cap while still naming
+        # one asset, and deduplicating the attribution must never shrink the number
+        # the operator is being shown.
+        contributing = attribute_assets((visit.asset_id for visit in bucket), roster)
+        area_contributors = tuple(
+            pair for pair in contributing if pair[1] is AssetType.AREA
         )
-        area_ids = [asset_id for asset_id, kind in contributing
-                    if kind is AssetType.AREA]
+        area_visits = sum(
+            1
+            for visit in bucket
+            if visit.asset_id in roster
+            and roster[visit.asset_id].asset_type is AssetType.AREA
+        )
         combined = len(bucket)
-        if len(area_ids) > config.area_daily_cap:
+        if area_visits > config.area_daily_cap:
             violations.append(
                 Violation(
                     constraint=C_AREA_DAILY_CAP,
                     message=(
-                        f"{len(area_ids)} area visits on {day.isoformat()}; "
+                        f"{area_visits} area visits on {day.isoformat()}; "
                         f"the area limit is {config.area_daily_cap} per working day"
                     ),
                     visit_date=day,
                     offending_dates=(day,),
-                    contributing_assets=tuple(
-                        pair for pair in contributing if pair[1] is AssetType.AREA
-                    ),
+                    contributing_assets=area_contributors,
                     limit=config.area_daily_cap,
-                    actual=len(area_ids),
+                    actual=area_visits,
                 )
             )
         if combined > config.combined_daily_cap:
