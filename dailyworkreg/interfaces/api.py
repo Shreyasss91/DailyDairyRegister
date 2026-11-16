@@ -19,9 +19,11 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.templating import Jinja2Templates
 
+from ..application import export as documents_source
 from ..application.calendar_projection import (
     WeeklyOffRules,
     load_weekly_off_rules,
@@ -85,9 +87,11 @@ from ..infrastructure.sqlite import calendar_records as cal
 from ..infrastructure.sqlite import imports as staged
 from ..infrastructure.sqlite import masters, revision_state, seed
 from ..infrastructure.sqlite.database import open_database
+from . import documents
 
 HERE = Path(__file__).parent
 STATIC = HERE / "static"
+TEMPLATES = HERE / "templates"
 
 C_LOCAL_ONLY = "server_is_local_only"
 
@@ -139,6 +143,9 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         openapi_url=None,
     )
     app.state.db_path = db_path
+    # Autoescaping is on by default, which is what makes a stored activity title or a
+    # holiday name safe to place in the page: nothing the record holds becomes markup.
+    templates = Jinja2Templates(directory=str(TEMPLATES))
 
     def connection() -> sqlite3.Connection:
         return open_database(db_path)
@@ -1019,6 +1026,31 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         finalisation_id: str, db: sqlite3.Connection = Depends(get_db)
     ) -> dict[str, Any]:
         return finalisation_record(db, finalisation_id)
+
+    @app.get("/finalisations/{finalisation_id}/print", response_class=HTMLResponse)
+    def print_finalisation(
+        finalisation_id: str, request: Request, db: sqlite3.Connection = Depends(get_db)
+    ) -> HTMLResponse:
+        issued = documents_source.document(db, finalisation_id)
+        return templates.TemplateResponse(
+            request, "print_register.html", {"document": issued}
+        )
+
+    @app.get("/api/finalisations/{finalisation_id}/export.xlsx")
+    def export_finalisation(
+        finalisation_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> Response:
+        issued = documents_source.document(db, finalisation_id)
+        body = documents.workbook_bytes(issued)
+        return Response(
+            content=body,
+            media_type=documents.XLSX_MEDIA_TYPE,
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{documents.xlsx_filename(issued)}"'
+                )
+            },
+        )
 
     @app.post("/api/finalisations/{finalisation_id}/corrections")
     def start_correction(

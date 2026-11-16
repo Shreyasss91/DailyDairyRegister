@@ -132,3 +132,15 @@ def test_the_client_decides_no_finalisation_eligibility():
 def test_an_acknowledgement_is_sent_back_exactly_as_it_arrived():
     assert "value: item.token" in APP_JS
     assert "node.value" in APP_JS
+
+
+def test_an_issued_version_offers_its_own_exports():
+    # Each link names the version on screen, so viewing an older version downloads and
+    # prints that version rather than whatever is in force today.
+    assert "/api/finalisations/${record.finalisation_id}/export.xlsx" in APP_JS
+    assert "/finalisations/${record.finalisation_id}/print" in APP_JS
+    assert "Download Excel (.xlsx)" in APP_JS
+    assert "Print / Save as PDF" in APP_JS
+    # Exporting is a read: nothing about it writes, corrects or reopens anything.
+    lowered = APP_JS.lower()
+    assert "export" in lowered and "/corrections" not in APP_JS.split("export-actions")[1][:800]

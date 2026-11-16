@@ -155,3 +155,8 @@ input, select {
 .status-ok { color: #2f6b3a; }
 .status-correction_draft { background: #f3eef8; }
 .status-finalised { background: #eaf1ea; }
+
+/* Exporting an issued version. The two links name the same finalisation the read-only
+   document above them shows, so an older version exports itself rather than today's. */
+.export-actions { margin: 8px 0 4px; }
+.export-actions .button { text-decoration: none; display: inline-block; }

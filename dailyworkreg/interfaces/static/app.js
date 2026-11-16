@@ -1223,6 +1223,25 @@ function renderIssuedDocument(target, record, registerId, runId) {
       ])),
     ));
   }
+  // Both exports name this version's own finalisation id, so viewing an older version
+  // downloads and prints that version rather than whatever is in force today.
+  target.append(
+    el('div', { class: 'actions export-actions' }, [
+      el('a', {
+        class: 'button',
+        href: `/api/finalisations/${record.finalisation_id}/export.xlsx`,
+        download: '',
+        text: 'Download Excel (.xlsx)',
+      }),
+      el('a', {
+        class: 'button',
+        href: `/finalisations/${record.finalisation_id}/print`,
+        target: '_blank',
+        rel: 'noopener',
+        text: 'Print / Save as PDF',
+      }),
+    ]),
+  );
   const reason = el('input', { type: 'text', placeholder: 'Why does this version need correcting?' });
   const outcome = el('div', { class: 'detail' });
   target.append(

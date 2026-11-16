@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ document.month_label }} — Daily Dairy Register</title>
+  <style>
+    :root { --ink: #1e1e1c; --muted: #6b6b66; --rule: #c9c9c2; --accent: #1f5f8b; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: #ececea; color: var(--ink); }
+    body { font: 10.5pt/1.45 "Segoe UI", system-ui, sans-serif; }
+
+    .toolbar {
+      position: sticky; top: 0; z-index: 2;
+      display: flex; gap: 10px; align-items: center;
+      padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--rule);
+    }
+    .toolbar .hint { color: var(--muted); font-size: 9.5pt; }
+    .button {
+      font: inherit; padding: 6px 14px; border: 1px solid var(--accent);
+      border-radius: 3px; background: var(--accent); color: #fff; cursor: pointer;
+    }
+    .button-quiet { background: #fff; color: var(--accent); text-decoration: none; }
+
+    .sheet {
+      max-width: 820px; margin: 18px auto 40px; padding: 22px 24px 26px;
+      background: #fff; border: 1px solid var(--rule);
+    }
+
+    header.masthead {
+      display: flex; justify-content: space-between; align-items: flex-end;
+      gap: 16px; padding-bottom: 8px; border-bottom: 2px solid var(--ink);
+    }
+    header.masthead h1 { margin: 0; font-size: 15pt; letter-spacing: 0.2px; }
+    header.masthead .month { margin: 2px 0 0; font-size: 12.5pt; font-weight: 600; }
+    header.masthead .version { text-align: right; font-size: 9.5pt; color: var(--muted); }
+
+    table { border-collapse: collapse; width: 100%; }
+    table.ident { margin: 10px 0 14px; font-size: 9pt; }
+    table.ident th { text-align: left; width: 33%; padding: 2px 10px 2px 0; color: var(--muted); font-weight: 600; vertical-align: top; }
+    table.ident td { padding: 2px 0; vertical-align: top; word-break: break-word; }
+    table.ident tr + tr th, table.ident tr + tr td { border-top: 1px dotted var(--rule); }
+
+    .note { margin: 0 0 14px; padding: 6px 8px; border-left: 3px solid var(--accent); background: #f5f8fa; }
+
+    section.day { padding: 8px 0 10px; border-top: 1px solid var(--rule); }
+    section.day h2 {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline;
+      margin: 0 0 4px; font-size: 11pt;
+    }
+    section.day h2 .date { font-family: Consolas, "Courier New", monospace; font-size: 10.5pt; }
+    section.day h2 .weekday { color: var(--muted); font-weight: 400; }
+    .tag {
+      font-size: 8pt; font-weight: 600; padding: 1px 6px; border-radius: 3px;
+      background: #eeeeea; color: var(--muted);
+    }
+    .tag-nonworking { background: #f2ece0; color: #6b5b14; }
+    .tag-locked { background: #e4e8ef; color: #33415c; }
+    .reasons { margin: 0 0 5px; font-size: 9pt; color: var(--muted); }
+
+    table.items { margin: 2px 0 6px; font-size: 9pt; }
+    table.items thead th {
+      text-align: left; padding: 2px 8px 2px 0; font-weight: 600;
+      border-bottom: 1px solid var(--rule); color: var(--muted);
+    }
+    table.items td { padding: 2px 8px 2px 0; vertical-align: top; }
+    table.items td:last-child, table.items th:last-child { padding-right: 0; }
+    .empty { margin: 2px 0 6px; font-size: 9pt; color: var(--muted); font-style: italic; }
+    .warnings { margin: 2px 0 4px; padding-left: 16px; font-size: 9pt; }
+
+    footer.colophon {
+      margin-top: 16px; padding-top: 8px; border-top: 1px solid var(--rule);
+      font-size: 8.5pt; color: var(--muted); word-break: break-all;
+    }
+    footer.colophon p { margin: 2px 0; }
+
+    @page { size: A4 portrait; margin: 14mm 12mm; }
+
+    @media print {
+      html, body { background: #fff; }
+      .no-print { display: none !important; }
+      .sheet {
+        max-width: none; margin: 0; padding: 0;
+        border: none; box-shadow: none;
+      }
+      a { color: inherit; text-decoration: none; }
+      section.day { break-inside: avoid; page-break-inside: avoid; }
+      section.day h2 { break-after: avoid; page-break-after: avoid; }
+      table.items thead { display: table-header-group; }
+      table.items tr { break-inside: avoid; page-break-inside: avoid; }
+      header.masthead { break-after: avoid; page-break-after: avoid; }
+      footer.colophon { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar no-print">
+    <button class="button" id="print-register" type="button">Print / Save as PDF</button>
+    <a class="button button-quiet" href="/">Back to the tool</a>
+    <span class="hint">
+      {{ document.version_label }}. This is the document as approved; it cannot be changed.
+      Printing opens your browser's own print dialog, where you can save it as a PDF.
+    </span>
+  </div>
+
+  <article class="sheet">
+    <header class="masthead">
+      <div>
+        <h1>Daily Dairy Register</h1>
+        <p class="month">{{ document.month_label }}</p>
+      </div>
+      <div class="version">
+        {{ document.version_label }}<br />
+        {{ document.standing_label }}
+      </div>
+    </header>
+
+    <table class="ident">
+      <tbody>
+        <tr><th>Register</th><td>{{ document.register_id }}</td></tr>
+        <tr><th>Month</th><td>{{ document.month }}</td></tr>
+        <tr><th>Issued version</th><td>{{ document.sequence }}</td></tr>
+        <tr><th>Revision closed</th><td>{{ document.revision_number }}</td></tr>
+        <tr><th>Finalisation id</th><td>{{ document.finalisation_id }}</td></tr>
+        <tr><th>Closed at</th><td>{{ document.finalised_at }}</td></tr>
+        <tr><th>Month status</th><td>{{ document.status or "—" }}</td></tr>
+        <tr><th>Allocator status</th><td>{{ document.allocator_status or "—" }}</td></tr>
+        <tr><th>Master version at finalisation</th><td>{{ document.master_version }}</td></tr>
+        {% if document.correction_of_run_id %}
+        <tr><th>Corrects revision</th><td>{{ document.correction_of_run_id }}</td></tr>
+        {% endif %}
+        {% if document.parent_finalisation_id %}
+        <tr><th>Correction of</th><td>{{ document.parent_finalisation_id }}</td></tr>
+        {% endif %}
+        {% if document.locked_dates %}
+        <tr><th>Locked dates</th><td>{{ document.locked_dates | join(", ") }}</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+
+    {% if document.note %}
+    <p class="note">Note recorded when this version was issued: {{ document.note }}</p>
+    {% endif %}
+
+    {% for day in document.days %}
+    <section class="day">
+      <h2>
+        <span class="date">{{ day.day }}</span>
+        <span class="weekday">{{ day.weekday }}</span>
+        <span class="tag">{{ day.kind_label }}</span>
+        {% if not day.working %}<span class="tag tag-nonworking">Not a working day</span>{% endif %}
+        {% if day.locked %}<span class="tag tag-locked">Locked</span>{% endif %}
+      </h2>
+
+      {% if day.reasons_en or day.reasons_kn %}
+      <p class="reasons">
+        {% if day.reasons_en %}{{ day.reasons_en | join(" · ") }}{% endif %}
+        {% if day.reasons_en and day.reasons_kn %} — {% endif %}
+        {% if day.reasons_kn %}{{ day.reasons_kn | join(" · ") }}{% endif %}
+      </p>
+      {% endif %}
+
+      {% if day.visits %}
+      <table class="items">
+        <thead>
+          <tr><th>Field visit</th><th>Asset</th><th>Provenance</th><th>Name (Kannada)</th></tr>
+        </thead>
+        <tbody>
+          {% for visit in day.visits %}
+          <tr>
+            <td>{{ visit.name_en }}</td>
+            <td>{{ visit.asset_id }}</td>
+            <td>{{ visit.provenance_label }}</td>
+            <td>{{ visit.name_kn or "" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No field visits recorded.</p>
+      {% endif %}
+
+      {% if day.entries %}
+      <table class="items">
+        <thead>
+          <tr><th>Activity or entry</th><th>Kind</th><th>Entry id</th><th>Title (Kannada)</th></tr>
+        </thead>
+        <tbody>
+          {% for entry in day.entries %}
+          <tr>
+            <td>{{ entry.title_en }}</td>
+            <td>{{ entry.kind_label }}</td>
+            <td>{{ entry.entry_id }}</td>
+            <td>{{ entry.title_kn or "" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No activities or entries recorded.</p>
+      {% endif %}
+
+      {% if day.warnings %}
+      <ul class="warnings">
+        {% for constraint, detail in day.warnings %}
+        <li>{{ constraint }}: {{ detail }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+    {% endfor %}
+
+    {% if document.acknowledged %}
+    <section class="day">
+      <h2>Findings acknowledged when this version was issued</h2>
+      <table class="items">
+        <thead><tr><th>Finding</th><th>Detail</th></tr></thead>
+        <tbody>
+          {% for item in document.acknowledged %}
+          <tr>
+            <td>{{ item.get("constraint") or item.get("kind") or "Calendar conflict" }}</td>
+            <td>{{ item.get("detail") or "" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endif %}
+
+    <footer class="colophon">
+      <p>{{ document.version_label }} · register {{ document.register_id }} · finalisation {{ document.finalisation_id }}</p>
+      <p>Content fingerprint {{ document.fingerprint }}</p>
+      <p>Master version {{ document.master_version }} · closed {{ document.finalised_at }} · {{ document.standing_label }}</p>
+    </footer>
+  </article>
+
+  <script>
+    // Printing is started by the operator, never by opening the page: a document that
+    // opens a dialog on arrival is a document nobody can read first.
+    document.getElementById('print-register').addEventListener('click', function () {
+      window.print();
+    });
+  </script>
+</body>
+</html>

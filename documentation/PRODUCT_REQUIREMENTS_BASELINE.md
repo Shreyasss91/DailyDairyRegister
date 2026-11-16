@@ -1066,3 +1066,83 @@ an upgraded one. `SCHEMA_VERSION` is 5.
 - Nothing here detects a tampered record: the fingerprint stored with it identifies the
   content that was issued and is compared by the application, but verifying a whole
   database against its own records is a separate act.
+
+## 26. Implemented document export contract (as built)
+
+A finalised month can leave the tool as a spreadsheet and as a printed page. Both read the
+record that was issued and neither re-derives anything, because the question an export
+answers is "what did the office approve", not "what would the platform arrange today".
+
+### 26.1 The record is the only input
+
+- `dailyworkreg/application/export.py` is the single reading of a finalisation into a
+  presentable document, and both formats consume it. A second mapping would be a second
+  interpretation of what was approved.
+- It calls `finalisation.finalisation_record` and reads the stored `content_json`. It
+  reaches no master table, no calendar projection, no allocator and no generator. A test
+  asserts that the export path contains none of those calls, so a later change cannot
+  reintroduce the dependency quietly.
+- The identifier supplied names the version. An unknown identifier is refused under
+  `finalisation_unknown`; there is no fallback to the month's latest version, because a
+  fallback is how a download of one document delivers another.
+- Every stored date is present, in the stored order, including Sundays, General Holidays,
+  leave days and dates carrying nothing at all. A date with no visit reads blank rather
+  than disappearing, and a date with several visits or several entries keeps all of them,
+  in the order they were stored.
+- Labels are formatting, not content: a day kind, an entry kind and a visit provenance are
+  rendered through fixed label tables, and the stored token is never rewritten in the
+  record. Nothing is filled in where the record holds nothing, and no column is calculated
+  from another.
+
+### 26.2 The workbook
+
+- `GET /api/finalisations/{finalisation_id}/export.xlsx` returns a real XLSX file with the
+  OOXML media type and a filename built from the month and the issued sequence only, so
+  the header carries no user-supplied text and no path separator.
+- Two sheets. `Register` holds one row per stored date with its weekday, day kind,
+  working-day flag, both reason lists, its visits, its activities and entries, its
+  warnings and its lock state; heading rows repeat on every printed page, the date column
+  is frozen, and the sheet is set up for A4 landscape. `Issued version` identifies the
+  document: month, register, issued version, the revision it closed, the finalisation id,
+  when it was closed, whether it is in force or superseded, the content fingerprint, the
+  master version at finalisation, what it corrects or supersedes, the locked dates, the
+  operator's note, and the findings acknowledged when it was issued.
+- A stored string that begins with `=`, `+`, `-` or `@` is written as text rather than as a
+  formula, so an imported activity title or a note is data and never code.
+- The workbook's own metadata timestamps are taken from the record rather than from the
+  clock, so the same issued version downloads as the same file.
+
+### 26.3 The printed page
+
+- `GET /finalisations/{finalisation_id}/print` returns a standalone document, not a view
+  inside the application: it has no navigation, no tab bar and no application chrome, so
+  printing cannot carry the tool's interface into the register.
+- The operator starts printing with a button on the page. The page never opens the print
+  dialog on arrival, because a document that interrupts before it has been read is a
+  document nobody checks.
+- `@media print` hides the toolbar and the controls, drops the screen's page frame, keeps a
+  date's block from splitting across pages where the engine allows, and states A4 portrait
+  with print margins. The browser's own print dialog is what produces the PDF; the tool
+  writes no PDF itself.
+- Jinja autoescaping is left on and is the whole escaping story: a stored title, holiday
+  name, reason or note is data on this page, so no stored text can become markup.
+
+### 26.4 Standings and history
+
+- A version is exported as it stood when it was issued. If a later correction issues a new
+  version, the earlier one still exports its own snapshot and is labelled superseded, and
+  the newer one is labelled in force. Each is reached by its own identifier.
+- A change to the live master data after finalisation cannot reach an issued document; a
+  holiday added inside a closed month cannot either. Both are asserted by exporting the
+  same version before and after the change and requiring identical output.
+- Exporting is a read: it writes no row, moves no pointer and leaves the record, its
+  snapshot and its fingerprint exactly as they were.
+
+### 26.5 What is not modelled
+
+- No PDF is generated by the program; PDF exists only through the browser's print dialog.
+- No export of a draft or of an unfinalised revision: there is nothing approved to export,
+  and the identifier of a revision is refused as unknown.
+- No watermark, signature block, digital signature, masthead logo, letterhead or
+  pagination design beyond what the browser prints.
+- No bulk export of several months in one file, and no export history or download log.
