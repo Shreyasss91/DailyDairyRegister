@@ -655,7 +655,13 @@ def test_a_backup_from_a_supported_older_tool_is_migrated_on_the_staging_copy(
             connection.execute(f"DROP TRIGGER {name}")  # noqa: S608 - names read from the database
     finally:
         connection.close()
-    older = rebuild(content, mutate=lambda _: scratch.read_bytes())
+    # A backup written by the earlier tool declares the schema it was made at, so the
+    # manifest and the payload agree in the way a real older package would.
+    older = rebuild(
+        content,
+        mutate=lambda _: scratch.read_bytes(),
+        manifest_change=lambda document: document["application"].update({"schema_version": 4}),
+    )
     package = write(tmp_path, "older.zip", older)
 
     before = whole_database(office["path"])

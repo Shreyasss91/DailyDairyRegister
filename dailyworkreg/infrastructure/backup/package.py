@@ -35,6 +35,31 @@ FORMAT_VERSION = 1
 MANIFEST_NAME = "manifest.json"
 PAYLOAD_NAME = "database.sqlite"
 
+#: The application a manifest must name. A package from another tool is not this tool's
+#: backup, however plausible its archive looks.
+APPLICATION_NAME = "DailyDairyRegister"
+
+#: The count keys a manifest may carry. The payload may hold fewer when a table is absent,
+#: so a missing key is checked against the database itself rather than assumed here.
+CONTENT_KEYS = (
+    "registers",
+    "revisions",
+    "finalisations",
+    "finalised_months",
+    "rows",
+    "visits",
+    "entries",
+    "reviews",
+    "locks",
+    "dtcs",
+    "areas",
+    "feeders",
+    "activities",
+    "holidays",
+    "import_batches",
+    "staged_rows",
+)
+
 #: Ceilings, configurable through the environment so a larger installation can raise them
 #: without a code change. Sized for a register database rather than for a data warehouse.
 DEFAULT_MAX_PACKAGE_BYTES = 256 * 1024 * 1024
@@ -127,7 +152,7 @@ def build_manifest(
         "format_version": FORMAT_VERSION,
         "created_at": created_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "application": {
-            "name": "DailyDairyRegister",
+            "name": APPLICATION_NAME,
             "schema_version": int(schema_version),
         },
         "payload": {
@@ -182,14 +207,27 @@ def _manifest_from(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> dict:
     return manifest
 
 
+def _is_count(value) -> bool:
+    """A count is a plain non-negative integer. ``True`` is not a count."""
+
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def _validated_manifest(manifest: dict) -> dict:
+    """Everything the manifest claims, checked for shape before it is believed.
+
+    This checks what can be checked without the payload: names, types, ranges and the
+    presence of the count structure. Whether those claims agree with the database is
+    decided by the caller, which is the only layer holding both.
+    """
+
     if manifest.get("format") != FORMAT_NAME:
         raise PackageError(
             "format_unknown",
             "this file is not a DailyDairyRegister backup package",
         )
     version = manifest.get("format_version")
-    if not isinstance(version, int) or version != FORMAT_VERSION:
+    if not isinstance(version, int) or isinstance(version, bool) or version != FORMAT_VERSION:
         raise PackageError(
             "format_unsupported",
             f"backup format version {version!r} is not one this tool reads",
@@ -203,20 +241,47 @@ def _validated_manifest(manifest: dict) -> dict:
         raise PackageError("manifest_invalid", f"the creation time is not a timestamp: {error}") from error
 
     application = manifest.get("application")
-    if not isinstance(application, dict) or not isinstance(
-        application.get("schema_version"), int
-    ):
-        raise PackageError("manifest_invalid", "the manifest carries no schema version")
+    if not isinstance(application, dict):
+        raise PackageError("manifest_invalid", "the manifest carries no application description")
+    if application.get("name") != APPLICATION_NAME:
+        raise PackageError(
+            "manifest_invalid",
+            f"the manifest names the application {application.get('name')!r}, not "
+            f"{APPLICATION_NAME}",
+        )
+    schema_version = application.get("schema_version")
+    if not _is_count(schema_version) or schema_version < 1:
+        raise PackageError("manifest_invalid", "the manifest carries no usable schema version")
     payload = manifest.get("payload")
     if not isinstance(payload, dict):
         raise PackageError("manifest_invalid", "the manifest carries no payload description")
     if payload.get("name") != PAYLOAD_NAME:
         raise PackageError("manifest_invalid", "the manifest names a different payload entry")
-    if not isinstance(payload.get("bytes"), int) or payload["bytes"] < 0:
+    if not _is_count(payload.get("bytes")):
         raise PackageError("manifest_invalid", "the manifest carries no payload length")
     digest = payload.get("sha256")
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise PackageError("manifest_invalid", "the manifest carries no checksum of the payload")
+
+    contents = manifest.get("contents")
+    if not isinstance(contents, dict) or not contents:
+        raise PackageError(
+            "manifest_invalid",
+            "the manifest carries no description of what the backup holds",
+        )
+    unknown = set(contents) - set(CONTENT_KEYS)
+    if unknown:
+        raise PackageError(
+            "manifest_invalid",
+            "the manifest counts things this format does not define: "
+            + ", ".join(sorted(str(key) for key in unknown)),
+        )
+    for key, value in contents.items():
+        if not _is_count(value):
+            raise PackageError(
+                "manifest_invalid",
+                f"the manifest count for {key!r} is not a non-negative whole number",
+            )
     return manifest
 
 
@@ -339,10 +404,23 @@ def read_package(source: Path, *, workdir: Path, limits: Limits | None = None) -
 
 
 def manifest_summary(manifest: dict) -> dict:
-    """The non-secret facts an operator needs to recognise a backup before restoring it."""
+    """The non-secret facts an operator needs to recognise a backup before restoring it.
 
-    application = manifest.get("application") or {}
-    payload = manifest.get("payload") or {}
+    Defensive on purpose: a summary is also produced for archives this reader will refuse,
+    and a malformed count must reach the operator as a validation refusal rather than as a
+    conversion error inside a display helper.
+    """
+
+    application = manifest.get("application")
+    payload = manifest.get("payload")
+    application = application if isinstance(application, dict) else {}
+    payload = payload if isinstance(payload, dict) else {}
+    contents = manifest.get("contents")
+    counts = (
+        {key: value for key, value in contents.items() if _is_count(value)}
+        if isinstance(contents, dict)
+        else {}
+    )
     return {
         "format": manifest.get("format"),
         "format_version": manifest.get("format_version"),
@@ -351,7 +429,7 @@ def manifest_summary(manifest: dict) -> dict:
         "application": application.get("name"),
         "payload_bytes": payload.get("bytes"),
         "payload_sha256": payload.get("sha256"),
-        "contents": dict(manifest.get("contents") or {}),
+        "contents": counts,
     }
 
 

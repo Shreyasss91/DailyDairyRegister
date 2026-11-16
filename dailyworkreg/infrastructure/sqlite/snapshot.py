@@ -21,6 +21,11 @@ Two different questions live here, and keeping them apart is the point of the mo
 A copy is opened in ``DELETE`` journal mode so that no ``-wal`` or ``-shm`` sidecar
 travels with it: a backup that depends on two extra files is a backup that will be restored
 from one of them.
+
+Taking a copy never changes the caller's connection. It does not commit, roll back or
+otherwise move a transaction the caller began. When the supplied connection has an open
+transaction, SQLite's backup would read a state the caller has not yet decided to keep, so
+the copy refuses instead of deciding on the caller's behalf.
 """
 
 from __future__ import annotations
@@ -79,27 +84,61 @@ FINALISATION_TRIGGERS = frozenset(
 _HEX = re.compile(r"^[0-9a-f]{64}$")
 
 
-def snapshot_to(connection: sqlite3.Connection, target: Path) -> Path:
+class CopyRefused(Exception):
+    """A copy was not taken, and the caller's connection was left exactly as it was.
+
+    ``reason`` is a stable token so the layers above can map it to their own refusal
+    without reading the sentence.
+    """
+
+    def __init__(self, reason: str, detail: str):
+        self.reason = reason
+        self.detail = detail
+        super().__init__(detail)
+
+
+def snapshot_to(
+    connection: sqlite3.Connection, target: Path, *, overwrite: bool = False
+) -> Path:
     """Write one consistent copy of ``connection``'s database to ``target``.
 
     The copy is taken by SQLite, not by the filesystem, so committed data in WAL is
     included and a concurrent write cannot produce a torn file. The copy is then switched
     to ``DELETE`` journal mode so it stands alone, and the destination is left closed and
     flushed.
+
+    Two refusals, both chosen so that this function cannot change anything it was not asked
+to change:
+
+    *   An open transaction on the source is refused. SQLite's backup would read a
+        committed-only view, so taking the copy would describe a state the caller has not
+        committed; commuting it here would commit work on the caller's behalf, which is a
+        write this function has no business performing. The caller decides.
+    *   An existing destination is refused unless ``overwrite`` is set, so a copy can never
+        silently destroy a recovery file that is already there.
     """
 
+    if connection.in_transaction:
+        raise CopyRefused(
+            "source_transaction_open",
+            "the database connection has a change that has not been committed, so no copy "
+            "was taken and nothing was committed on its behalf",
+        )
+
     target = Path(target)
+    if target.exists() and not overwrite:
+        raise CopyRefused(
+            "destination_exists",
+            f"{target.name} already exists, so nothing was overwritten",
+        )
     target.parent.mkdir(parents=True, exist_ok=True)
     for suffix in ("-wal", "-shm", "-journal"):
         stale = target.with_name(target.name + suffix)
         if stale.exists():
             stale.unlink()
-    if target.exists():
-        target.unlink()
 
     destination = sqlite3.connect(str(target))
     try:
-        connection.commit() if connection.in_transaction else None
         connection.backup(destination)
         destination.execute("PRAGMA journal_mode = DELETE")
         destination.commit()
@@ -142,13 +181,22 @@ class DatabaseFacts:
 
     @property
     def healthy(self) -> bool:
-        """Whether this file is a complete, self-consistent operational register."""
+        """Whether this file is a complete, self-consistent operational register.
+
+        The immutability triggers are part of completeness rather than a nice-to-have: a
+        database without them holds every row and cannot keep a finalised month final, so
+        it is not a database this tool will hand back as a verified backup or keep as a
+        recovery copy. Readability alone is a weaker question and is asked separately
+        (``readable``), because an older payload is readable and is expected to be missing
+        the protections until it has been migrated.
+        """
 
         return (
             self.readable
             and self.integrity_ok
             and self.foreign_keys_ok
             and not self.missing_tables
+            and not self.missing_triggers
             and not self.structure
         )
 
@@ -250,6 +298,24 @@ def _structure(connection: sqlite3.Connection, tables: frozenset[str]) -> tuple[
     if orphan_pointers:
         problems.append(f"{orphan_pointers} month pointer(s) name a record that is absent")
 
+    # A pointer that names a record of another register or another month is present but
+    # wrong, which no foreign key can express: the reference is to a valid row. A month
+    # would then be shown the version that belongs to somebody else, so the relationship
+    # the pointer claims is checked here rather than assumed from the row's existence.
+    misplaced_pointers = _scalar(
+        connection,
+        """
+        SELECT count(*) FROM month_state s
+        JOIN month_finalisation f ON f.finalisation_id = s.latest_finalisation_id
+        WHERE f.register_id <> s.register_id OR f.month <> s.month
+        """,
+    )
+    if misplaced_pointers:
+        problems.append(
+            f"{misplaced_pointers} month pointer(s) name a finalised record of a different "
+            "register or month"
+        )
+
     orphan_correction_branches = _scalar(
         connection,
         """
@@ -264,6 +330,20 @@ def _structure(connection: sqlite3.Connection, tables: frozenset[str]) -> tuple[
         problems.append(
             f"{orphan_correction_branches} open correction(s) name a revision that is absent"
         )
+
+    if "draft_revision" in tables:
+        foreign_corrections = _scalar(
+            connection,
+            """
+            SELECT count(*) FROM month_state s
+            JOIN draft_revision r ON r.run_id = s.open_correction_run_id
+            WHERE r.register_id <> s.register_id
+            """,
+        )
+        if foreign_corrections:
+            problems.append(
+                f"{foreign_corrections} open correction(s) belong to a different register"
+            )
 
     unreadable_snapshots = 0
     for (content,) in _rows(

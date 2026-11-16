@@ -1198,6 +1198,29 @@ carry a path separator, a control character or a claim about what is inside. The
 not trusted on the way back in: the manifest and the payload decide, and the entry names
 are matched against the format exactly.
 
+A manifest is a claim, not a credential. The payload's SHA-256 proves the *database* is
+unaltered; it says nothing about the description beside it, and an archive can be rebuilt
+with the same payload and a different manifest. So every claim the manifest makes about
+the database is compared with the database before the file is called acceptable:
+
+- `application.name` must be this tool's, so another product's archive is not mistaken for
+  a backup of this office;
+- `application.schema_version` must be a whole number of at least 1, and must equal the
+  schema version actually read from the payload — a package that claims to have been made
+  at an older or newer shape than it holds is refused
+  (`backup_manifest_does_not_match_the_database`) rather than believed;
+- `contents` must be an object of counts, every key one this format defines, every value a
+  non-negative whole number (a boolean is not a count, and neither is a string or a list),
+  with no count missing and no count invented;
+- every declared total must equal what the database actually holds, and a disagreement
+  names the totals that differ, both declared and actual.
+
+A malformed description is a refusal with a stable identifier, never a conversion error:
+the summary an operator reads is produced defensively, so a boolean where a number belongs
+reaches them as "the description of this backup is not usable" rather than as a crash. The
+comparison happens after the payload has been read and before the staged copy is written,
+so a refused package leaves nothing beside the live database.
+
 ### 27.3 A consistent copy without disturbing the desk
 
 The copy is made with `sqlite3.Connection.backup` from the live connection. That API reads
@@ -1223,6 +1246,26 @@ version, required tables, the immutability triggers, the structure of the issued
 readable snapshots and present fingerprints. A copy that fails any of these is not offered
 as a backup under a different name; the backup fails and says why.
 
+The seventeen finalisation protections are part of that bar, not a nicety. A database that
+holds every row but has lost a trigger can no longer keep a finalised month final, so it is
+not handed back as a verified backup and is not accepted as a recovery copy: the refusal is
+`backup_protections_are_missing` and it names the triggers that are absent. Readability is a
+weaker question and is asked separately, which is what lets a payload written at an older
+schema reach its migration even though it cannot yet carry the protections of this one; the
+same bar is applied to the staged copy after migration, so nothing is installed without
+them.
+
+The copy helper itself is accountable for two things beyond the copy. It never commits,
+rolls back or otherwise moves a transaction the caller began: SQLite's backup reads a
+committed-only view, so taking one while a caller's change is open would describe a state
+nobody agreed to, and committing it there would be a write made on the caller's behalf. It
+refuses instead (`backup_database_has_an_open_change`, through `CopyRefused`), leaves the
+transaction exactly as it found it, and the backup fails closed — no package, no success. An
+ordinary request reaches this code with a fresh connection outside any transaction, so the
+everyday flow is unchanged. For the same reason the helper refuses to write over a file that
+already exists unless it is explicitly told to; a recovery copy can therefore never be
+destroyed by a later attempt reusing its name.
+
 Everything happens in a private temporary directory that is removed whether the backup
 succeeds or fails, so no database, no archive and no leftover file is written into the
 source tree or beside the live database.
@@ -1236,15 +1279,20 @@ build is exactly what must not happen; then the archive is read with a byte cap;
 manifest; then the entry names; then the checksum; then the payload is opened (read-only,
 `mode=ro`) and inspected.
 
-It checks, in this order: readable as an archive; manifest present and shaped; format name
-and version; payload present; no unexpected entry, no duplicate entry, no directory, no
-symlink, no absolute or climbing path; declared and actual sizes under the limits; payload
-SHA-256 against the manifest; the file is a SQLite database; `PRAGMA integrity_check`;
-`PRAGMA foreign_key_check`; schema version not newer than this build; required tables
-present; the immutability triggers present; the issued records structurally consistent
+It checks, in this order: readable as an archive; manifest present and shaped — including
+the application name, a whole-number schema version, and a `contents` map of non-negative
+whole numbers with no unknown key; format name and version; payload present; no unexpected
+entry, no duplicate entry, no directory, no symlink, no absolute or climbing path; declared
+and actual sizes under the limits; payload SHA-256 against the manifest; the file is a
+SQLite database; `PRAGMA integrity_check`; `PRAGMA foreign_key_check`; schema version not
+newer than this build; required tables present; the issued records structurally consistent
 (each finalisation names a run that exists, its parent exists, its correction names a run
-that exists, every month pointer names a record of that month, and only one correction
-branch is open per month); every `content_json` parses and every fingerprint is non-blank.
+that exists, every month pointer names a record **of that month and that register**, and
+only one correction branch is open per month); every declared total equal to what the
+database holds; every `content_json` parses and every fingerprint is non-blank. The
+immutability triggers are then required on the prepared copy, after migration, so an
+older payload is not rejected for the protections it never had, and nothing is installed
+without all seventeen (`backup_protections_are_missing`, naming them).
 
 An older supported schema is migrated **on the staged copy** with the existing migrations,
 and the migrations that ran are reported to the operator. The live database is not migrated
@@ -1258,7 +1306,9 @@ upload is not written to disk in full.
 The staged copy is written to `<database>.restore-<token>.staged` in the same directory as
 the live database — same volume, therefore replaceable by rename — and its hash is
 recorded. Stale staged copies from an interrupted attempt are pruned, except the one an
-outstanding confirmation refers to.
+outstanding confirmation refers to. A package refused after its staging copy was written is
+removed again, so a refused upload leaves nothing beside the live database for someone to be
+talked into installing later.
 
 ### 27.5 The replacement is gated, recoverable and verified
 
@@ -1277,8 +1327,13 @@ Then, with the exclusive side of `MaintenanceGate` held:
 3. `PRAGMA wal_checkpoint(TRUNCATE)` runs and the `-wal`, `-shm` and `-journal` sidecars
    are removed. A sidecar that cannot be removed is a refusal, not a warning, because a
    remaining log would be replayed onto the new file.
-4. A rollback copy is taken at `<database>.pre-restore-<UTC stamp>.db` and inspected; if it
-   is not a healthy database the restore stops there.
+4. A rollback copy is taken at `<database>.pre-restore-<UTC stamp to the microsecond>.db`
+   and inspected; if it is not a healthy database the restore stops there and the copy is
+   removed, because a file that failed its own checks is not a recovery copy. The name is
+   chosen before a byte is written and never reused: the timestamp carries microseconds and
+   a name already taken is pushed to the next free numeric suffix, so a second restore can
+   never overwrite the first one's copy. Both copies stay readable and the answer names the
+   one belonging to this restore.
 5. The staged file is installed with `os.replace`, which is atomic on one volume and on
    Windows refuses while a handle is open — the failure mode the barrier exists to avoid.
 6. The result is verified: schema version, integrity, foreign keys, all 17 triggers, the
@@ -1340,6 +1395,10 @@ change, which was authorised to export, not to alter the export.
 
 - No encryption at rest, no passphrase, no key management. A backup is a readable SQLite
   file inside a zip, and the operator is responsible for where it is kept.
+- No signing: the manifest is checked against the database it describes, which catches a
+description that disagrees with the payload, but nothing proves who produced either. A
+backup is trusted because it was produced here and kept by the office, not because it
+carries a credential; signing would need key management, which is a decision not taken.
 - No retention or rotation: the tool keeps nothing, deletes nothing it did not write, and
   has no schedule.
 - No incremental or partial backup, no table selection, no merge restore.

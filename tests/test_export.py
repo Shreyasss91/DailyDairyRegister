@@ -171,6 +171,14 @@ def register_rows(workbook) -> list[dict[str, object]]:
     return rows
 
 
+def head(book) -> list[tuple]:
+    """The header and the first rows, as values, for comparing two exports as documents."""
+
+    return list(
+        book["Register"].iter_rows(min_row=1, max_row=XLSX_HEADER_ROW, values_only=True)
+    )
+
+
 def stamped(row: dict[str, object]) -> str:
     """The date a row carries, back as the stored ISO day it came from."""
 
@@ -489,7 +497,7 @@ def test_a_revision_is_not_a_finalised_version_and_cannot_be_exported(client, db
 
 def test_a_master_change_cannot_reach_an_issued_document(client, db):
     _, record = issued(db, client)
-    before_book = workbook(client, record["finalisation_id"])[0].content
+    before_answer, before_book = workbook(client, record["finalisation_id"])
     before_markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
 
     # Rename every DTC and add a holiday: on a register rebuilt from masters, both would
@@ -511,10 +519,15 @@ def test_a_master_change_cannot_reach_an_issued_document(client, db):
         source="karnataka",
     )
 
-    after_book = workbook(client, record["finalisation_id"])[0].content
+    after_answer, after_book = workbook(client, record["finalisation_id"])
     after_markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
 
-    assert after_book == before_book
+    # Compared as documents rather than as bytes. Two exports made in different two-second
+    # windows carry different archive timestamps, which is packaging noise rather than a
+    # difference in the register, so the comparison is of every cell and every row.
+    assert register_rows(after_book) == register_rows(before_book)
+    assert head(after_book) == head(before_book)
+    assert len(after_answer.content) > 0 and len(before_answer.content) > 0
     assert after_markup == before_markup
     assert "Renamed after issue" not in after_markup
 

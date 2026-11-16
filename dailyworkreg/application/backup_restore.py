@@ -59,16 +59,24 @@ from ..infrastructure.backup import (
 from ..infrastructure.sqlite import revision_state
 from ..infrastructure.sqlite import schema as schema_module
 from ..infrastructure.sqlite.database import connect, open_database
-from ..infrastructure.sqlite.snapshot import DatabaseFacts, inspect, snapshot_to
+from ..infrastructure.sqlite.snapshot import (
+    CopyRefused,
+    DatabaseFacts,
+    inspect,
+    snapshot_to,
+)
 from . import finalisation
 
 # --- stable identifiers the surface and the tests share ---------------------
 
 C_BACKUP_FAILED = "backup_could_not_be_created"
+C_BACKUP_SOURCE_BUSY = "backup_database_has_an_open_change"
+C_BACKUP_PROTECTIONS = "backup_protections_are_missing"
 C_PACKAGE_UNREADABLE = "backup_package_unreadable"
 C_PACKAGE_FORMAT_UNKNOWN = "backup_format_not_recognised"
 C_PACKAGE_FORMAT_UNSUPPORTED = "backup_format_not_supported"
 C_PACKAGE_MANIFEST_INVALID = "backup_manifest_invalid"
+C_PACKAGE_MANIFEST_MISMATCH = "backup_manifest_does_not_match_the_database"
 C_PACKAGE_ENTRIES = "backup_entries_unexpected"
 C_PACKAGE_ENTRY_MISSING = "backup_entry_missing"
 C_PACKAGE_TOO_LARGE = "backup_package_too_large"
@@ -169,8 +177,26 @@ def create_backup(
     limits = limits or Limits.from_environment()
     workdir = Path(tempfile.mkdtemp(prefix="dailyworkreg-backup-"))
     try:
-        snapshot = snapshot_to(connection, workdir / "snapshot.db")
+        try:
+            snapshot = snapshot_to(connection, workdir / "snapshot.db")
+        except CopyRefused as error:
+            raise BackupError(
+                C_BACKUP_SOURCE_BUSY
+                if error.reason == "source_transaction_open"
+                else C_BACKUP_FAILED,
+                "no backup was made: " + error.detail,
+            ) from error
         facts = inspect(snapshot)
+        # A database that holds every row but has lost one of the protections that keep a
+        # finalised month final is not a database to hand back as verified. It is refused
+        # by name, so the operator can see which protection went missing.
+        if facts.missing_triggers:
+            raise BackupError(
+                C_BACKUP_PROTECTIONS,
+                "the database is missing the protections that keep a finalised month "
+                "final, so no backup was made: "
+                + ", ".join(sorted(facts.missing_triggers)),
+            )
         if not facts.healthy:
             raise BackupError(
                 C_BACKUP_FAILED,
@@ -314,15 +340,29 @@ def validate_package(
                 + "; ".join(payload_facts.structure[:3]),
             )
 
+        # The manifest is what the operator is shown before deciding, so every claim it
+        # makes about the database is compared with the database. A count changed without
+        # touching the payload leaves the payload's checksum intact, which is exactly why
+        # the checksum cannot be the whole story: it proves the database is unaltered, not
+        # that the manifest is honest.
+        _require_manifest_agrees(package.manifest, payload_facts)
+
         staged = staged_path(target_db, token)
         staged.parent.mkdir(parents=True, exist_ok=True)
         if staged.exists():
             staged.unlink()
         shutil.copy2(package.payload, staged)
 
-        applied = _migrate(staged)
-        facts = inspect(staged)
-        _require_restorable(facts, applied)
+        try:
+            applied = _migrate(staged)
+            facts = inspect(staged)
+            _require_restorable(facts, applied)
+        except BackupError:
+            # A refused package leaves nothing behind beside the live database: a staged
+            # copy that is still sitting there would be a copy somebody could later be
+            # talked into installing.
+            _discard(staged)
+            raise
         return StagedRestore(
             token=token,
             staged=staged,
@@ -335,6 +375,63 @@ def validate_package(
         )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _require_manifest_agrees(manifest: dict, facts: DatabaseFacts) -> None:
+    """Refuse a manifest whose claims the database inside it contradicts.
+
+    The manifest is not authenticated by anything: the payload checksum proves the
+    *database* is unaltered, and an archive can be rebuilt with a different manifest and
+    the same payload. So each claim is compared with the file it describes rather than
+    trusted, and a disagreement is a refusal rather than a warning. The comparisons are
+    typed, so a boolean or a string where a number belongs never reaches an operator's
+    screen as though it were a fact.
+    """
+
+    declared_schema = manifest["application"]["schema_version"]
+    if declared_schema != facts.schema_version:
+        raise BackupError(
+            C_PACKAGE_MANIFEST_MISMATCH,
+            f"the description says this backup was made at schema {declared_schema} while "
+            f"the database inside it is at schema {facts.schema_version}, so it cannot be "
+            "trusted as a description of what would be restored",
+            fields={"declared_schema": declared_schema, "database_schema": facts.schema_version},
+        )
+
+    declared = manifest.get("contents")
+    if not isinstance(declared, dict):
+        raise BackupError(
+            C_PACKAGE_MANIFEST_INVALID,
+            "the description of what the backup holds is not a set of counts",
+        )
+    actual = facts.counts
+    missing = sorted(set(actual) - set(declared))
+    if missing:
+        raise BackupError(
+            C_PACKAGE_MANIFEST_MISMATCH,
+            "the description is missing what the database holds: " + ", ".join(missing),
+            fields={"missing_counts": missing},
+        )
+    extra = sorted(set(declared) - set(actual))
+    if extra:
+        raise BackupError(
+            C_PACKAGE_MANIFEST_MISMATCH,
+            "the description counts things the database does not hold: " + ", ".join(extra),
+            fields={"unexpected_counts": extra},
+        )
+    differing = sorted(key for key in actual if declared[key] != actual[key])
+    if differing:
+        key = differing[0]
+        raise BackupError(
+            C_PACKAGE_MANIFEST_MISMATCH,
+            f"the description says the backup holds {declared[key]} {key.replace('_', ' ')} "
+            f"while the database holds {actual[key]}",
+            fields={
+                "differing_counts": differing,
+                "declared": {key: declared[key] for key in differing},
+                "actual": {key: actual[key] for key in differing},
+            },
+        )
 
 
 def _migrate(staged: Path) -> tuple[int, ...]:
@@ -354,6 +451,20 @@ def _migrate(staged: Path) -> tuple[int, ...]:
         ) from error
     finally:
         connection.close()
+
+
+def _discard(path: Path) -> None:
+    """Remove a staged copy and anything SQLite left beside it, never raising."""
+
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        leftover = path.with_name(path.name + suffix) if suffix else path
+        try:
+            if leftover.exists():
+                leftover.unlink()
+        except OSError:
+            # A copy that cannot be removed is reported by the walk below, not here: the
+            # refusal the caller is about to see matters more than the tidying.
+            continue
 
 
 def _require_restorable(facts: DatabaseFacts, applied: tuple[int, ...]) -> None:
@@ -418,6 +529,10 @@ def _problems(facts: DatabaseFacts) -> str:
         problems.extend(facts.foreign_key_findings[:3])
     if facts.missing_tables:
         problems.append("missing tables: " + ", ".join(sorted(facts.missing_tables)))
+    if facts.missing_triggers:
+        problems.append(
+            "missing protections: " + ", ".join(sorted(facts.missing_triggers))
+        )
     problems.extend(facts.structure[:3])
     return "; ".join(problems) or "the copy did not pass its checks"
 
