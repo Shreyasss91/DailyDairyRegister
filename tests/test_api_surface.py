@@ -14,6 +14,11 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from dailyworkreg.application.revisions import (
+    C_DATE_NOT_LOCKED,
+    C_REGISTER_UNKNOWN,
+    C_STALE_REVIEW,
+)
 from dailyworkreg.infrastructure.sqlite import masters
 from dailyworkreg.infrastructure.sqlite.database import open_database
 from dailyworkreg.interfaces.api import create_app
@@ -401,10 +406,12 @@ def test_history_keeps_every_attempt_in_its_own_group(stocked):
     history = stocked.get("/api/generations").json()
     ids = [run["run_id"] for run in history["allocation_complete"]]
     assert {first["run_id"], second["run_id"]} == set(ids)
-    revisions = sorted(
-        run["revision_number"] for run in history["allocation_complete"]
-    )
-    assert revisions == [1, 2]
+    # Each attempt is revision 1 of the register it started; two unrelated
+    # generations are not two revisions of one register.
+    revisions = [run["revision_number"] for run in history["allocation_complete"]]
+    assert revisions == [1, 1]
+    registers = {run["run_id"]: run["register_id"] for run in history["allocation_complete"]}
+    assert registers[first["run_id"]] != registers[second["run_id"]]
 
 
 def test_a_stored_run_replays_from_its_snapshot(stocked):
@@ -445,3 +452,97 @@ def test_an_unknown_run_is_refused_with_its_constraint(client):
     answer = client.get("/api/generations/nothing")
     assert answer.status_code == 400
     assert answer.json()["error"]["constraint"] == "generation_run_unknown"
+
+
+# --- review, locks and register history ----------------------------------
+
+
+def test_the_review_state_lists_every_date_of_the_revision(stocked):
+    made = generate(stocked)
+    state = stocked.get(f"/api/generations/{made['run_id']}/review").json()
+
+    assert state["run_id"] == made["run_id"]
+    assert state["is_current"] is True
+    assert state["total_dates"] == 30
+    assert state["reviewed_dates"] == 0
+    assert state["months"] == {"2026-11": "pending_review"}
+    assert {"date", "state", "locked", "fingerprint"} <= set(state["dates"][0])
+
+
+def test_reviewing_and_withdrawing_a_date_through_the_api(stocked):
+    made = generate(stocked)
+    run = made["run_id"]
+
+    answer = stocked.put(
+        f"/api/generations/{run}/review/2026-11-03", json={"note": "seen"}
+    )
+    assert answer.status_code == 200
+    assert answer.json()["state"] == "reviewed"
+
+    state = stocked.get(f"/api/generations/{run}/review").json()
+    day = {item["date"]: item for item in state["dates"]}["2026-11-03"]
+    assert day["state"] == "reviewed"
+    assert day["note"] == "seen"
+    assert state["reviewed_dates"] == 1
+
+    withdrawn = stocked.delete(f"/api/generations/{run}/review/2026-11-03")
+    assert withdrawn.status_code == 200
+    assert withdrawn.json()["state"] == "pending_review"
+
+
+def test_a_review_of_stale_content_is_refused_with_a_stable_constraint(stocked):
+    made = generate(stocked)
+    answer = stocked.put(
+        f"/api/generations/{made['run_id']}/review/2026-11-03",
+        json={"fingerprint": "from-an-older-screen"},
+    )
+    assert answer.status_code == 400
+    assert answer.json()["error"]["constraint"] == C_STALE_REVIEW
+
+
+def test_locking_and_unlocking_a_date_through_the_api(stocked):
+    made = generate(stocked)
+    run = made["run_id"]
+
+    locked = stocked.put(f"/api/generations/{run}/locks/2026-11-01", json={})
+    assert locked.status_code == 200
+    assert locked.json()["locked"] is True
+
+    state = stocked.get(f"/api/generations/{run}/review").json()
+    assert state["locked_dates"] == 1
+    assert state["reviewed_dates"] == 0
+
+    unlocked = stocked.delete(f"/api/generations/{run}/locks/2026-11-01")
+    assert unlocked.status_code == 200
+    assert unlocked.json()["locked"] is False
+
+    again = stocked.delete(f"/api/generations/{run}/locks/2026-11-01")
+    assert again.status_code == 400
+    assert again.json()["error"]["constraint"] == C_DATE_NOT_LOCKED
+
+
+def test_the_register_history_carries_each_revision_and_its_decision_state(stocked):
+    made = generate(stocked)
+    register_id = made["register_id"]
+
+    listing = stocked.get("/api/registers").json()
+    assert [item["register_id"] for item in listing] == [register_id]
+
+    detail = stocked.get(f"/api/registers/{register_id}").json()
+    assert detail["current_run_id"] == made["run_id"]
+    assert detail["revisions"][0]["run_id"] == made["run_id"]
+    assert detail["revisions"][0]["decision"] is None
+    assert detail["revisions"][0]["kind"] == "generation"
+
+    revisions = stocked.get(f"/api/registers/{register_id}/revisions").json()
+    assert revisions == detail["revisions"]
+
+    one = stocked.get(f"/api/revisions/{made['run_id']}").json()
+    assert one["revision_number"] == 1
+    assert one["register_id"] == register_id
+
+
+def test_an_unknown_register_is_a_stable_refusal(stocked):
+    answer = stocked.get("/api/registers/R-nope")
+    assert answer.status_code == 400
+    assert answer.json()["error"]["constraint"] == C_REGISTER_UNKNOWN

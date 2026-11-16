@@ -255,7 +255,7 @@ def test_a_stored_run_keeps_its_fixed_and_allocated_visits_apart(db):
     assert fixed + allocated == len(loaded.visits)
 
 
-def test_a_second_attempt_becomes_a_new_revision_and_leaves_the_first_alone(db):
+def test_a_second_generation_starts_its_own_register_and_leaves_the_first_alone(db):
     prepared, draft = generated(db, cycle_spec())
     first = generations.save_run(db, prepared, draft)
 
@@ -264,12 +264,17 @@ def test_a_second_attempt_becomes_a_new_revision_and_leaves_the_first_alone(db):
 
     assert first != second
     revisions = db.execute(
-        "SELECT run_id, revision_number FROM draft_revision ORDER BY revision_number"
+        """SELECT r.run_id, r.revision_number, g.register_id
+           FROM draft_revision r JOIN generation_run g ON g.run_id = r.run_id
+           ORDER BY r.created_at, r.run_id"""
     ).fetchall()
+    # Revision numbers are per register. An unrelated generation is not the second
+    # revision of the first one's register; it is revision 1 of its own.
     assert [(row["run_id"], row["revision_number"]) for row in revisions] == [
         (first, 1),
-        (second, 2),
+        (second, 1),
     ]
+    assert revisions[0]["register_id"] != revisions[1]["register_id"]
     # The first draft is unchanged by the arrival of the second.
     assert generations.load_register(db, first).seed == 7
     assert generations.load_register(db, second).seed == 11

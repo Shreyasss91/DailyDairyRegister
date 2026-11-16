@@ -18,12 +18,14 @@ Two rules shape the design:
 from __future__ import annotations
 
 import sqlite3
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 
 #: Bumped when the schema below changes. Migrations are applied in order and each
 #: one is idempotent, so re-running is safe and a fresh database simply replays the
 #: list.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,10 @@ class Migration:
     version: int
     name: str
     statements: tuple[str, ...]
+    #: Optional Python step run inside the same transaction, after the statements.
+    #: Needed where a change moves data rather than only shaping it, which plain
+    #: DDL cannot express. Must be idempotent, like the statements beside it.
+    apply: Callable[[sqlite3.Connection], None] | None = None
 
 
 # The master-version counter is a single row so that every canonical change can
@@ -372,7 +378,184 @@ _MIGRATION_2 = Migration(
 )
 
 
-MIGRATIONS: tuple[Migration, ...] = (_MIGRATION_1, _MIGRATION_2)
+# The review lifecycle. A generated register is inspected date by date, corrected,
+# partially locked and regenerated; none of that may rewrite what was generated. A
+# logical register therefore owns a chain of revisions, and each revision owns its
+# own review and lock state, because a review is a statement about one exact row of
+# one exact revision. Dates the operator locked are recorded here, not inferred from
+# the absence of a change.
+_MIGRATION_3_STATEMENTS = (
+    """
+    CREATE TABLE IF NOT EXISTS register (
+        register_id   TEXT PRIMARY KEY,
+        mode          TEXT NOT NULL,
+        start_date    TEXT NOT NULL,
+        end_date      TEXT NOT NULL,
+        created_at    TEXT NOT NULL,
+        current_run_id TEXT REFERENCES generation_run (run_id) ON DELETE SET NULL
+    )
+    """,
+    "ALTER TABLE generation_run ADD COLUMN register_id TEXT",
+    "ALTER TABLE generation_run ADD COLUMN parent_run_id TEXT",
+    "ALTER TABLE generation_run ADD COLUMN kind TEXT NOT NULL DEFAULT 'generation'",
+    "ALTER TABLE generation_run ADD COLUMN change_reason TEXT",
+    # One row per date per revision. A date with no visits still needs a row here:
+    # reviewing an empty Sunday is exactly as much part of the job as reviewing a
+    # busy Monday, and a register that only tracks busy dates cannot be reviewed.
+    """
+    CREATE TABLE IF NOT EXISTS date_review (
+        run_id            TEXT NOT NULL REFERENCES generation_run (run_id) ON DELETE CASCADE,
+        row_date          TEXT NOT NULL,
+        state             TEXT NOT NULL CHECK (state IN ('pending_review', 'reviewed')),
+        reviewed_at       TEXT,
+        note              TEXT,
+        content_fingerprint TEXT NOT NULL,
+        carried_from_run_id TEXT,
+        PRIMARY KEY (run_id, row_date)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS date_lock (
+        run_id    TEXT NOT NULL REFERENCES generation_run (run_id) ON DELETE CASCADE,
+        row_date  TEXT NOT NULL,
+        locked_at TEXT NOT NULL,
+        note      TEXT,
+        PRIMARY KEY (run_id, row_date)
+    )
+    """,
+    # Entries carry their own identity so a correction targets a record, not a
+    # sentence. English and Kannada are separate columns because one is not a
+    # rendering of the other.
+    """
+    CREATE TABLE IF NOT EXISTS generation_entry (
+        run_id     TEXT NOT NULL REFERENCES generation_run (run_id) ON DELETE CASCADE,
+        entry_id   TEXT NOT NULL,
+        row_date   TEXT NOT NULL,
+        kind       TEXT NOT NULL,
+        title_en   TEXT NOT NULL,
+        title_kn   TEXT,
+        provenance TEXT NOT NULL
+            CHECK (provenance IN ('calendar', 'manual', 'locked')),
+        PRIMARY KEY (run_id, entry_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS revision_decision (
+        run_id              TEXT PRIMARY KEY REFERENCES generation_run (run_id) ON DELETE CASCADE,
+        decision            TEXT NOT NULL CHECK (decision IN ('accepted', 'rejected')),
+        decided_at          TEXT NOT NULL,
+        compared_to_run_id  TEXT,
+        note                TEXT
+    )
+    """,
+    # Every manual mutation is an audit row. The stored rows are the outcome; this
+    # is the account of how they came to be that way.
+    """
+    CREATE TABLE IF NOT EXISTS revision_change (
+        run_id     TEXT NOT NULL REFERENCES generation_run (run_id) ON DELETE CASCADE,
+        ordinal    INTEGER NOT NULL,
+        action     TEXT NOT NULL,
+        row_date   TEXT,
+        entry_id   TEXT,
+        asset_id   TEXT,
+        detail_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, ordinal)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_run_register ON generation_run (register_id)",
+    "CREATE INDEX IF NOT EXISTS idx_entry_run_date ON generation_entry (run_id, row_date)",
+)
+
+
+def _backfill_registers(connection: sqlite3.Connection) -> None:
+    """Give every pre-existing draft a register, a lineage and scoped numbering.
+
+    Runs once, inside migration 3. An installation upgrading from schema 2 keeps
+    every stored generation and every attribution: each draft is attached to a
+    register, and drafts that shared a mode and date range are chained as revisions
+    of the same register in revision order, which is how they were produced.
+    """
+
+    rows = connection.execute(
+        """
+        SELECT r.run_id, r.revision_number, r.created_at, g.mode, g.start_date,
+               g.end_date
+        FROM draft_revision r JOIN generation_run g ON g.run_id = r.run_id
+        ORDER BY r.revision_number
+        """
+    ).fetchall()
+
+    groups: dict[tuple[str, str, str], str] = {}
+    for row in rows:
+        key = (row["mode"], row["start_date"], row["end_date"])
+        register_id = groups.get(key)
+        if register_id is None:
+            register_id = "R-" + uuid.uuid4().hex[:12]
+            groups[key] = register_id
+            connection.execute(
+                """
+                INSERT INTO register (register_id, mode, start_date, end_date,
+                    created_at, current_run_id)
+                VALUES (?, ?, ?, ?, ?, NULL)
+                """,
+                (register_id, row["mode"], row["start_date"], row["end_date"], row["created_at"]),
+            )
+        connection.execute(
+            """
+            UPDATE generation_run
+            SET register_id = ?, kind = 'generation'
+            WHERE run_id = ?
+            """,
+            (register_id, row["run_id"]),
+        )
+        connection.execute(
+            "UPDATE register SET current_run_id = ? WHERE register_id = ?",
+            (row["run_id"], register_id),
+        )
+
+    # Draft revisions are numbered within their register. SQLite cannot relax the
+    # original global UNIQUE constraint in place, so the table is rebuilt.
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS draft_revision_scoped (
+            run_id          TEXT PRIMARY KEY
+                REFERENCES generation_run (run_id) ON DELETE CASCADE,
+            register_id     TEXT,
+            revision_number INTEGER NOT NULL,
+            created_at      TEXT NOT NULL,
+            UNIQUE (register_id, revision_number)
+        )
+        """
+    )
+    numbered: dict[str, int] = {}
+    for row in rows:
+        register_id = connection.execute(
+            "SELECT register_id FROM generation_run WHERE run_id = ?",
+            (row["run_id"],),
+        ).fetchone()[0]
+        numbered[register_id] = numbered.get(register_id, 0) + 1
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO draft_revision_scoped
+                (run_id, register_id, revision_number, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (row["run_id"], register_id, numbered[register_id], row["created_at"]),
+        )
+    connection.execute("DROP TABLE draft_revision")
+    connection.execute("ALTER TABLE draft_revision_scoped RENAME TO draft_revision")
+
+
+_MIGRATION_3 = Migration(
+    version=3,
+    name="register revisions, date review, date locks and revision lineage",
+    statements=_MIGRATION_3_STATEMENTS,
+    apply=_backfill_registers,
+)
+
+
+MIGRATIONS: tuple[Migration, ...] = (_MIGRATION_1, _MIGRATION_2, _MIGRATION_3)
 
 
 def ensure_migration_table(connection: sqlite3.Connection) -> None:
@@ -415,6 +598,8 @@ def apply_migrations(connection: sqlite3.Connection) -> tuple[int, ...]:
         for migration in pending:
             for statement in migration.statements:
                 connection.execute(statement)
+            if migration.apply is not None:
+                migration.apply(connection)
             connection.execute(
                 """
                 INSERT INTO schema_migration (version, name, applied_at)

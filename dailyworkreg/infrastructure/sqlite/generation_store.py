@@ -14,8 +14,10 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 from .database import transaction
+from .revision_state import entries as _entries
 
 C_RUN_UNKNOWN = "generation_run_unknown"
 
@@ -112,6 +114,7 @@ class StoredRun:
     rows: tuple[RowRecord, ...] = field(default=())
     visits: tuple[VisitRecord, ...] = field(default=())
     exceptions: tuple[ExceptionRecord, ...] = field(default=())
+    entries: tuple[Any, ...] = field(default=())
     revision_number: int | None = None
 
 
@@ -131,6 +134,9 @@ class RunSummary:
     master_version: int
     revision_number: int | None
     missing_content: tuple[str, ...]
+    register_id: str | None = None
+    kind: str = "generation"
+    parent_run_id: str | None = None
 
 
 def _column(row: sqlite3.Row, name: str, default: str) -> str:
@@ -144,10 +150,25 @@ def _column(row: sqlite3.Row, name: str, default: str) -> str:
     return row[name] if name in row.keys() else default
 
 
-def next_revision_number(connection: sqlite3.Connection) -> int:
-    row = connection.execute(
-        "SELECT COALESCE(MAX(revision_number), 0) AS highest FROM draft_revision"
-    ).fetchone()
+def next_revision_number(
+    connection: sqlite3.Connection, register_id: str | None = None
+) -> int:
+    """The next revision number, within a register when one is named.
+
+    Revision numbers are per register: two registers are two different registers, and
+    their numbering has no reason to share a sequence.
+    """
+
+    if register_id is None:
+        row = connection.execute(
+            "SELECT COALESCE(MAX(revision_number), 0) AS highest FROM draft_revision"
+        ).fetchone()
+    else:
+        row = connection.execute(
+            "SELECT COALESCE(MAX(revision_number), 0) AS highest FROM draft_revision "
+            "WHERE register_id = ?",
+            (register_id,),
+        ).fetchone()
     return int(row["highest"]) + 1
 
 
@@ -159,6 +180,11 @@ def insert_run(
     rows: tuple[RowRecord, ...] = (),
     visits: tuple[VisitRecord, ...] = (),
     exceptions: tuple[ExceptionRecord, ...] = (),
+    entries: tuple[Any, ...] = (),
+    register_id: str | None = None,
+    parent_run_id: str | None = None,
+    kind: str = "generation",
+    change_reason: str | None = None,
 ) -> int | None:
     """Write one attempt and everything derived from it, or write nothing.
 
@@ -202,13 +228,44 @@ def insert_run(
 
         revision: int | None = None
         if run.is_draft:
-            revision = next_revision_number(connection)
+            revision = next_revision_number(connection, register_id)
             connection.execute(
                 """
-                INSERT INTO draft_revision (run_id, revision_number, created_at)
-                VALUES (?, ?, ?)
+                INSERT INTO draft_revision
+                    (run_id, register_id, revision_number, created_at)
+                VALUES (?, ?, ?, ?)
                 """,
-                (run.run_id, revision, run.created_at),
+                (run.run_id, register_id, revision, run.created_at),
+            )
+
+        connection.execute(
+            """
+            UPDATE generation_run
+            SET register_id = ?, parent_run_id = ?, kind = ?, change_reason = ?
+            WHERE run_id = ?
+            """,
+            (register_id, parent_run_id, kind, change_reason, run.run_id),
+        )
+
+        if entries:
+            connection.executemany(
+                """
+                INSERT INTO generation_entry
+                    (run_id, entry_id, row_date, kind, title_en, title_kn, provenance)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run.run_id,
+                        item.entry_id,
+                        item.row_date,
+                        item.kind,
+                        item.title_en,
+                        item.title_kn,
+                        item.provenance,
+                    )
+                    for item in entries
+                ],
             )
 
         connection.executemany(
@@ -410,6 +467,7 @@ def read_run(connection: sqlite3.Connection, run_id: str) -> StoredRun:
             )
             for item in exceptions
         ),
+        entries=_entries(connection, run_id),
         revision_number=None if revision is None else int(revision["revision_number"]),
     )
 
@@ -429,6 +487,9 @@ def _summary(row: sqlite3.Row, revision: int | None, months: tuple[str, ...],
         master_version=int(row["master_version"]),
         revision_number=revision,
         missing_content=missing,
+        register_id=row["register_id"],
+        kind=row["kind"],
+        parent_run_id=row["parent_run_id"],
     )
 
 

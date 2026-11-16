@@ -24,6 +24,8 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from ..domain.validator import AssetType, Evidence, Visit
+from ..infrastructure.sqlite import revision_state
+from ..infrastructure.sqlite.database import transaction
 from ..infrastructure.sqlite.generation_store import (
     ExceptionRecord,
     GenerationStorageError,
@@ -206,6 +208,30 @@ def _exception_records(draft: DraftRegister) -> tuple[ExceptionRecord, ...]:
     )
 
 
+def _entry_records(draft: DraftRegister) -> tuple[revision_state.EntryRow, ...]:
+    """Every non-visit entry, with the identity it will be edited by later.
+
+    Everything generated here comes from the calendar projection, so it is stored as
+    ``calendar``: an operator correction is a later revision and carries ``manual``.
+    """
+
+    records: list[revision_state.EntryRow] = []
+    for row in draft.rows:
+        for entry in row.entries:
+            records.append(
+                revision_state.EntryRow(
+                    run_id="",
+                    entry_id=entry.entry_id,
+                    row_date=row.day.isoformat(),
+                    kind=entry.kind.value,
+                    title_en=entry.title_en,
+                    title_kn=entry.title_kn,
+                    provenance="calendar",
+                )
+            )
+    return tuple(records)
+
+
 def save_run(
     connection: sqlite3.Connection,
     prepared: PreparedGeneration,
@@ -213,8 +239,21 @@ def save_run(
     *,
     run_id: str | None = None,
     created_at: str | None = None,
+    register_id: str | None = None,
+    parent_run_id: str | None = None,
+    kind: str = "generation",
+    change_reason: str | None = None,
 ) -> str:
-    """Persist one attempt in full, including an attempt that produced no draft."""
+    """Persist one attempt in full, including an attempt that produced no draft.
+
+    Every draft-producing attempt becomes a register revision. A plain generation
+    starts a register and is accepted immediately, because it is the first thing the
+    office has on screen. A correction (``kind="edit"``) becomes the accepted revision
+    because it was applied to the accepted one. A regenerated candidate
+    (``kind="candidate"``) is stored but *not* accepted: only an explicit decision
+    moves the register onto it, which is what keeps a surprising candidate from
+    silently replacing a draft somebody had already read.
+    """
 
     run_id = run_id or uuid.uuid4().hex
     created_at = created_at or _now()
@@ -249,14 +288,43 @@ def save_run(
         missing_content_json=_json(list(prepared.readiness.missing_content)),
     )
 
-    insert_run(
-        connection,
-        record,
-        months=_month_records(draft),
-        rows=_row_records(draft),
-        visits=_visit_records(draft),
-        exceptions=_exception_records(draft),
-    )
+    owns_register = register_id is None
+    if register_id is None:
+        register_id = "R-" + uuid.uuid4().hex[:12]
+
+    with transaction(connection):
+        if owns_register:
+            revision_state.insert_register(
+                connection,
+                register_id,
+                mode=record.mode,
+                start_date=record.start_date,
+                end_date=record.end_date,
+                created_at=created_at,
+            )
+        insert_run(
+            connection,
+            record,
+            months=_month_records(draft),
+            rows=_row_records(draft),
+            visits=_visit_records(draft),
+            exceptions=_exception_records(draft),
+            entries=_entry_records(draft),
+            register_id=register_id,
+            parent_run_id=parent_run_id,
+            kind=kind,
+            change_reason=change_reason,
+        )
+        if record.is_draft:
+            from .revisions import adopt_revision
+
+            adopt_revision(
+                connection,
+                run_id,
+                base_run_id=None if kind == "candidate" else parent_run_id,
+            )
+            if kind != "candidate":
+                revision_state.set_current(connection, register_id, run_id)
     return run_id
 
 

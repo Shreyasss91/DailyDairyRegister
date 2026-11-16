@@ -40,6 +40,18 @@ from ..application.generation_runs import (
     save_run,
 )
 from ..application.readiness import assess_readiness
+from ..application.revisions import (
+    RevisionError,
+    clear_review,
+    lock_date,
+    mark_reviewed,
+    review_state,
+    revision_summary,
+    unlock_date,
+)
+from ..application.revisions import (
+    registers as register_history,
+)
 from ..application.snapshot import SnapshotError
 from ..domain.cycle import MonthKey
 from ..domain.validator import InputError, Visit
@@ -47,7 +59,7 @@ from ..infrastructure.imports.datasets import JUDGES
 from ..infrastructure.imports.tabular import SourceFormatError, read_source_bytes
 from ..infrastructure.sqlite import calendar_records as cal
 from ..infrastructure.sqlite import imports as staged
-from ..infrastructure.sqlite import masters, seed
+from ..infrastructure.sqlite import masters, revision_state, seed
 from ..infrastructure.sqlite.database import open_database
 
 HERE = Path(__file__).parent
@@ -149,6 +161,13 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.exception_handler(SnapshotError)
     async def snapshot_error(_: Request, error: SnapshotError) -> JSONResponse:
         return _error_payload(error)
+
+    @app.exception_handler(RevisionError)
+    async def revision_error(_: Request, error: RevisionError) -> JSONResponse:
+        payload = {
+            "error": {"constraint": error.constraint, "detail": error.detail}
+        }
+        return JSONResponse(status_code=400, content=payload)
 
     # --- pages ---------------------------------------------------------
 
@@ -571,6 +590,18 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         run_id = save_run(db, prepared, draft)
         return {
             "run_id": run_id,
+            "register_id": (
+                revision_state.register_for_run(db, run_id)
+                if draft.is_allocation_complete
+                else None
+            ),
+            # An attempt that produced no draft is a finding, not a revision: it has
+            # no revision number to report and must not pretend to have one.
+            "revision_number": (
+                revision_summary(db, run_id)["revision_number"]
+                if draft.is_allocation_complete
+                else None
+            ),
             "status": draft.status.value,
             "is_draft": draft.is_allocation_complete,
             "months": len(draft.months),
@@ -596,6 +627,9 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                     "outcome": run.outcome,
                     "is_draft": run.is_draft,
                     "revision_number": run.revision_number,
+                    "register_id": run.register_id,
+                    "kind": run.kind,
+                    "parent_run_id": run.parent_run_id,
                     "missing_content": list(run.missing_content),
                 }
                 for run in runs
@@ -689,6 +723,74 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             for visit in stored.visits
         ]
         return {"identical": same, "visits": len(again.visits)}
+
+    # --- registers, revisions, review and locks --------------------------
+
+    @app.get("/api/registers")
+    def list_registers(db: sqlite3.Connection = Depends(get_db)) -> list[dict[str, Any]]:
+        return register_history(db)
+
+    @app.get("/api/registers/{register_id}")
+    def read_register(
+        register_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        from ..application.revisions import register_summary
+
+        return register_summary(db, register_id)
+
+    @app.get("/api/registers/{register_id}/revisions")
+    def read_register_revisions(
+        register_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> list[dict[str, Any]]:
+        from ..application.revisions import register_summary
+
+        return register_summary(db, register_id)["revisions"]
+
+    @app.get("/api/revisions/{run_id}")
+    def read_revision(
+        run_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        return revision_summary(db, run_id)
+
+    @app.get("/api/generations/{run_id}/review")
+    def read_review_state(
+        run_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        return review_state(db, run_id)
+
+    @app.put("/api/generations/{run_id}/review/{day}")
+    def review_date(
+        run_id: str, day: date, payload: dict[str, Any] | None = None,
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        body = payload or {}
+        return mark_reviewed(
+            db,
+            run_id,
+            day,
+            note=body.get("note"),
+            expected_fingerprint=body.get("fingerprint"),
+        )
+
+    @app.delete("/api/generations/{run_id}/review/{day}")
+    def withdraw_review(
+        run_id: str, day: date, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        return clear_review(db, run_id, day)
+
+    @app.put("/api/generations/{run_id}/locks/{day}")
+    def lock_a_date(
+        run_id: str, day: date, payload: dict[str, Any] | None = None,
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        body = payload or {}
+        return lock_date(db, run_id, day, note=body.get("note"))
+
+    @app.delete("/api/generations/{run_id}/locks/{day}")
+    def unlock_a_date(
+        run_id: str, day: date, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        return unlock_date(db, run_id, day)
 
     if STATIC.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
