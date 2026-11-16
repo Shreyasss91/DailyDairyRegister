@@ -17,14 +17,32 @@ month needs no such input, because its configured values already apply.
 This keeps the allocator honest: it can schedule full months today and partial
 months as soon as the rule is declared, and it never implies a proration rule it
 was not given.
+
+The rule *has* since been declared - nearest integer, exact halves upward, recorded in
+requirements §23 - and is implemented below as pure arithmetic. Declaring it does not
+enable a partial month: scheduling part of a month additionally needs completed-visit
+accounting outside the selected range and cycle-commitment continuity, so
+:func:`resolve_period_config` still refuses a partial period without explicit effective
+limits. The functions at the end of this module are the rule itself, available to the
+act that will wire it through the domain, the application and validation.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Iterable, Mapping
 
 from .validator import Asset, AssetLimits, DatePeriod, FeasibilityConfig, InputError
+
+#: Identifies the arithmetic implemented below, so a caller can state which rule it used.
+ROUNDING_RULE = "round_half_up"
+
+#: Raised when a month has no eligible working day at all, so nothing can be prorated.
+C_PRORATION_ZERO_DENOMINATOR = "proration_needs_a_non_zero_eligible_day_count"
+#: Raised when the selected range claims more eligible days than the whole month has.
+C_PRORATION_PERIOD_EXCEEDS_MONTH = "proration_period_exceeds_its_month"
+#: Raised for a negative count, which no eligibility rule can make meaningful.
+C_PRORATION_NEGATIVE_COUNT = "proration_needs_a_non_negative_count"
 
 #: Raised when a partial month has no explicit effective limits.
 C_PARTIAL_MONTH_UNRESOLVED = "partial_month_effective_limits_missing"
@@ -175,3 +193,165 @@ def resolve_period_config(
         len(month_days),
         period,
     )
+
+
+# --- the settled rule ------------------------------------------------------
+#
+# Requirements §23 fixes the arithmetic:
+#
+#     effective = floor((2 * L * W_selected + W_full) / (2 * W_full))
+#
+# with L the configured monthly count and W the eligible working dates in the selected
+# range and in the complete calendar month. Integer arithmetic only: Python's built-in
+# ``round()`` rounds ties to even, which is a different rule and would quietly disagree
+# with the one approved.
+
+
+def prorate(
+    count: int,
+    *,
+    eligible_days_in_period: int,
+    eligible_days_in_month: int,
+) -> int:
+    """Round ``count`` proportionally to eligible working days, exact halves upward.
+
+    Args:
+        count: The configured monthly integer count.
+        eligible_days_in_period: Eligible working dates inside the selected range.
+        eligible_days_in_month: Eligible working dates in the complete calendar month.
+
+    Returns:
+        The effective count for the selected range.
+
+    Raises:
+        InputError: If the count is negative, the month has no eligible working day,
+            or the range claims more eligible days than the month contains.
+    """
+
+    if count < 0:
+        raise InputError(
+            C_PRORATION_NEGATIVE_COUNT,
+            f"cannot prorate {count}: a monthly count is never negative",
+        )
+    if eligible_days_in_month <= 0:
+        raise InputError(
+            C_PRORATION_ZERO_DENOMINATOR,
+            (
+                "this month has no eligible working day, so nothing can be prorated "
+                "against it; check the weekly offs, General Holidays, leave and date "
+                "overrides that produced the calendar"
+            ),
+        )
+    if eligible_days_in_period < 0 or eligible_days_in_period > eligible_days_in_month:
+        raise InputError(
+            C_PRORATION_PERIOD_EXCEEDS_MONTH,
+            (
+                f"the selected range has {eligible_days_in_period} eligible working "
+                f"day(s) but its month has {eligible_days_in_month}; a period cannot "
+                "cover more of a month than the month contains"
+            ),
+        )
+
+    return (2 * count * eligible_days_in_period + eligible_days_in_month) // (
+        2 * eligible_days_in_month
+    )
+
+
+def eligible_working_days(days: Iterable) -> int:
+    """Count the dates the effective calendar makes eligible.
+
+    The calendar is the one the projection produced, so weekly offs, General Holidays,
+    leave and explicit date overrides are already applied and are not re-derived here. A
+    Restricted Holiday has no classification by contract, so it cannot reduce the count.
+
+    Accepts either projected calendar days (anything with ``is_working_day``) or plain
+    booleans, so a caller holding only the working-day set uses the same rule.
+    """
+
+    total = 0
+    for day in days:
+        working = day if isinstance(day, bool) else bool(day.is_working_day)
+        total += 1 if working else 0
+    return total
+
+
+@dataclass(frozen=True)
+class ProrationInputs:
+    """The two day counts a proration needs, and nothing else."""
+
+    eligible_days_in_period: int
+    eligible_days_in_month: int
+
+    def __post_init__(self) -> None:
+        if self.eligible_days_in_month <= 0:
+            raise InputError(
+                C_PRORATION_ZERO_DENOMINATOR,
+                (
+                    "this month has no eligible working day, so nothing can be "
+                    "prorated against it"
+                ),
+            )
+
+    def apply(self, count: int) -> int:
+        return prorate(
+            count,
+            eligible_days_in_period=self.eligible_days_in_period,
+            eligible_days_in_month=self.eligible_days_in_month,
+        )
+
+
+def prorated_limits(limits: AssetLimits, inputs: ProrationInputs) -> AssetLimits:
+    """Prorate an asset's monthly minimum and maximum by the settled rule.
+
+    The revisit interval is a policy gap in calendar days, not a monthly count, so it is
+    carried unchanged. A minimum and a maximum go through the same monotonic formula, so
+    a valid ``minimum <= maximum`` does not become contradictory by rounding.
+    """
+
+    return AssetLimits(
+        monthly_max=inputs.apply(limits.monthly_max),
+        monthly_min=inputs.apply(limits.monthly_min),
+        revisit_gap_days=limits.revisit_gap_days,
+    )
+
+
+def prorated_config(
+    config: FeasibilityConfig,
+    inputs: ProrationInputs,
+    *,
+    asset_ids: Iterable[str] = (),
+) -> FeasibilityConfig:
+    """A configuration whose per-asset monthly counts are prorated, caps untouched.
+
+    Only monthly frequency counts depend on how much of the month is selected. The
+    combined and area daily caps are per-date limits and are not reduced by a shorter
+    period; the search budget is a computational bound, not a policy count.
+
+    A DTC coverage-cycle obligation is not part of a ``FeasibilityConfig`` at all, which
+    is why it cannot be prorated here and must not be prorated anywhere else: it is
+    declared over a cycle and stays whole.
+    """
+
+    merged: dict[str, AssetLimits] = {
+        asset_id: prorated_limits(config.limits_for(asset_id), inputs)
+        for asset_id in asset_ids
+    }
+    return FeasibilityConfig(
+        combined_daily_cap=config.combined_daily_cap,
+        area_daily_cap=config.area_daily_cap,
+        default_asset_limits=prorated_limits(config.default_asset_limits, inputs),
+        asset_limits=merged,
+        search_node_limit=config.search_node_limit,
+    )
+
+
+def prorate_counts(counts: Mapping[str, int], inputs: ProrationInputs) -> dict[str, int]:
+    """Prorate a mapping of *monthly frequency counts* by the settled rule.
+
+    Present so an explicitly prorated monthly count target uses the same arithmetic. It
+    is not a cycle obligation: passing a cycle's declared per-asset visits here would be
+    the thing requirements §23 forbids, so a caller holding a cycle obligation must not
+    call it.
+    """
+
+    return {key: inputs.apply(value) for key, value in counts.items()}

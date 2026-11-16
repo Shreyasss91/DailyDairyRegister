@@ -68,10 +68,14 @@ class DtcClass(str, Enum):
 class ProratingBasis(str, Enum):
     """How a partial month's limits are derived from eligible working days.
 
-    Only ``NOT_REQUESTED`` is usable without owner input. The measured basis
-    itself is deliberately not implemented: the baseline requires prorating "by
-    eligible working days" but does not fix an integer rounding rule, and a
-    hidden rule would silently change every prorated minimum and maximum.
+    Only ``NOT_REQUESTED`` and caller-supplied limits are usable today. The owner has
+    since fixed the integer rule (requirements §23, ``round_half_up``, implemented in
+    :mod:`dailyworkreg.domain.prorating`), but no partial-month scheduling path exists
+    yet, so this enum still describes how a caller's limits were obtained rather than
+    promising that they were derived here.
+
+    A coverage-cycle *obligation* is never subject to this basis. It is declared over a
+    cycle, not per month, so no rounding of a part-month can reduce it.
     """
 
     #: The period is a full calendar month, so configured limits apply unchanged.

@@ -813,3 +813,63 @@ operational completeness as four separate things, because they answer four diffe
 questions and one badge cannot carry them. Every act sends what the operator entered and
 renders what the server decided; the client holds no date rule, no capacity rule and no
 fitness test, and it reads no diagnostic prose to recover an asset or a cause.
+
+## 23. Proration rounding rule (settled)
+
+The requirement to prorate a partial month "by eligible working days" left the integer
+rounding convention undeclared, and there is more than one defensible answer: rounding
+down never over-schedules, rounding up never under-schedules a minimum, and each gives a
+different number of visits to the same asset in the same part-month. The owner has now
+declared the rule. This section records it; it does not by itself enable a partial month
+(see the last paragraph).
+
+**The rule: nearest integer, exact halves rounded upward (round-half-up).** For a
+configured monthly integer count `L`:
+
+- `W_full` is the number of eligible working dates in the complete calendar month.
+- `W_selected` is the number of eligible working dates in the selected range within that
+  month.
+
+```
+effective = floor((2 * L * W_selected + W_full) / (2 * W_full))
+```
+
+The arithmetic is integer throughout. Python's built-in `round()` is not used, because it
+rounds exact halves to the nearest even integer, which is a different rule.
+
+**One formula for minimums and maximums.** The same monotonic expression is applied to a
+prorated minimum and to a prorated maximum, and to any explicitly prorated monthly count
+target. Applying different conventions to the two ends could turn a valid
+`minimum <= maximum` into a contradiction, so the rule is one rule.
+
+**Where the day counts come from.** `W_full` and `W_selected` are counted on the
+*effective* calendar: after weekly offs, General Holidays, leave records and explicit date
+overrides have been applied. They are read from the projection, never re-derived by the
+proration step.
+
+**Restricted Holidays are ignored entirely**, as §4.1 requires. A date that is only a
+Restricted Holiday carries no classification of its own and is counted by whatever
+independently applies to it, so it can neither reduce `W_full` nor `W_selected`.
+
+**A full calendar month keeps its configured counts.** The formula returns the configured
+count when `W_selected == W_full`, and a full month does not go through proration at all.
+
+**A zero eligible-working-day denominator is an input error**, not a zero limit: a month
+in which nothing is eligible cannot be prorated from, and the error names the calendar
+inputs to check.
+
+**DTC coverage-cycle obligations are not prorated.** A cycle obligation is declared over an
+owner-defined cycle, not as a monthly frequency limit, so a selected range covering part of
+a month does not reduce it. Reducing it would rewrite the cycle that produced it.
+
+**A measurement basis for proration remains unimplemented in the cycle planner.** The rule
+above is implemented as arithmetic; the application does not yet derive effective limits
+from it.
+
+**Partial-month generation remains unsupported.** A partial month is still refused. Using
+the rule to build a schedule for part of a month additionally requires completed-visit
+accounting for dates outside the selected range and cycle-commitment continuity across the
+boundary, and neither exists yet. Enabling proration without them would produce a shorter
+month that looks authoritative and is not. A later bounded act implements partial-month
+scheduling in full; until then the rule is arithmetic and tests, never a generated
+register.
