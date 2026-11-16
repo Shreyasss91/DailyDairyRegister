@@ -1,0 +1,52 @@
+﻿Suggested ID (not canonical),Category,Proposed English Description,Kannada (owner to supply),Example Weight,Example Monthly Min,Example Monthly Max,Example Repeat Gap,Weekdays,Approval Status
+PROPOSED-001,Technical O&M,Inspect 11 kV feeder route for visible defects and record observations,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-002,Technical O&M,Inspect distribution transformer installation and surrounding access/clearance,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-003,Technical O&M,Check oil level and visible leakage condition of oil-filled distribution transformers,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-004,Technical O&M,"Inspect transformer bushings for visible cracks, contamination or flashover marks",,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-005,Technical O&M,Verify visible condition of transformer body earthing connections,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-006,Technical O&M,"Inspect LT distribution box enclosure, door, locking and visible connections",,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-007,Technical O&M,Inspect HT/LT line isolator and dropout fuse assemblies for visible defects,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-008,Technical O&M,"Inspect poles, cross-arms, insulators and stay arrangements along selected stretches",,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-009,Technical O&M,Check conductor sag and statutory clearance concerns at identified locations,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-010,Technical O&M,Inspect tree and vegetation clearance requirements along distribution lines,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-011,Technical O&M,Inspect service-line condition at selected consumer premises where authorised,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-012,Technical O&M,Review DTC loading and phase-imbalance indicators from available readings,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-013,Technical O&M,Review feeder peak-load profile and identify abnormal loading periods,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-014,Technical O&M,"Review DTC failure, replacement and repair history for recurring patterns",,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-015,Technical O&M,Review pending distribution maintenance works and update their status,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-016,Technical O&M,Inspect capacitor bank or voltage-regulation equipment where installed,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-017,Technical O&M,Review shutdown and maintenance work completion records for selected feeder,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-018,Preventive Maintenance,Prepare a preventive maintenance plan for selected DTCs and feeder sections,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-019,Preventive Maintenance,Review overdue preventive-maintenance items and assign follow-up actions,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-020,Preventive Maintenance,Inspect distribution assets after reported severe weather or local disturbance,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-021,Preventive Maintenance,Review recurring fuse-operation locations and identify follow-up inspection needs,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-022,Preventive Maintenance,Verify completion evidence for previously identified line defects,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-023,Consumer Service,Review pending consumer supply complaints and ageing of unresolved cases,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-024,Consumer Service,Review low-voltage complaints and correlate with available feeder/DTC information,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-025,Consumer Service,Review repeated interruption complaints and identify affected localities,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-026,Consumer Service,Review high-bill and meter-reading complaints awaiting section action,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-027,Consumer Service,Review pending new service connection applications and field-inspection status,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-028,Consumer Service,Review meter replacement requests and pending field verification,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-029,Consumer Service,Review disconnection and reconnection requests awaiting authorised action,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-030,Consumer Service,Verify consumer complaint closure records and identify repeat complaints,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-031,Revenue & Energy Accounting,Review feeder-wise input energy and billed-energy data for anomalies,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-032,Revenue & Energy Accounting,Review DTC-wise consumption and loss indicators where data is available,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-033,Revenue & Energy Accounting,Identify abnormal consumption patterns for authorised field verification,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-034,Revenue & Energy Accounting,Review pending revenue collection and arrears follow-up cases,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-035,Revenue & Energy Accounting,Review energy-accounting discrepancies and assign data correction follow-up,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-036,Safety,Review worksite safety arrangements and compliance evidence for recent works,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-037,Safety,Verify availability and inspection status of approved personal protective equipment,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-038,Safety,"Review permit-to-work, isolation and safety-clearance documentation for planned works",,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-039,Safety,Review electrical accident and near-miss reports and track corrective actions,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-040,Safety,"Inspect public-safety concerns around damaged poles, exposed conductors or equipment",,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-041,Safety,Conduct a focused safety awareness discussion for field personnel,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-042,Inspection & Administration,Inspect subdivision complaint register and verify ageing/action tracking,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-043,Inspection & Administration,Review field staff work allocation and pending job reports,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-044,Inspection & Administration,"Review monthly O&M progress, work completion and pending items",,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-045,Inspection & Administration,Verify stock/issue records for essential O&M materials and fuse units,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-046,Inspection & Administration,Review shutdown requests and coordinate planned maintenance windows,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-047,Inspection & Administration,Review asset data corrections and feeder/DTC master discrepancies,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-048,Works,Inspect progress of approved distribution improvement works,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-049,Works,Review estimates and technical sanction status for pending improvement works,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-050,Works,Verify completion documentation and measurement records for closed works,,1,0,10,2,,PROPOSED — NOT APPROVED
+PROPOSED-051,Works,Review contractor work progress and pending rectification items under approved scope,,1,0,10,2,,PROPOSED — NOT APPROVED

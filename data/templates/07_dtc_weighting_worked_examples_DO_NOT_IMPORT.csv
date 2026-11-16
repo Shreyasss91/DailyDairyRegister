@@ -1,0 +1,5 @@
+﻿EXAMPLE ONLY — NOT REAL OFFICE DATA — DO NOT COPY WITHOUT REPLACING AND REVIEWING,,,,,,
+DTC ID (fictional),kVA,Canonical DTC Class,Class Multiplier,Individual Adjustment,Calculated Weight,Purpose
+EXAMPLE-SCD-DEPT,250,DEPT,1,1,250,250 × 1.00 × 1.00; illustrative only
+EXAMPLE-SCD-SELF,250,SELF_DTC,0.2,1,50,250 × 0.20 × 1.00; illustrative only
+EXAMPLE-SCD-ADJUSTED,250,DEPT,1,0.8,200,Example of a separately approved adjustment; not a recommendation

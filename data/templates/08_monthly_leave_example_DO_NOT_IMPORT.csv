@@ -1,0 +1,2 @@
+﻿Employee ID,Employee Name,Leave Type,From Date,To Date,Full Day (Y/N),Approval Status,Approved By,Approval Reference,Notes
+EMP-EXAMPLE,Example Employee,CL,2026-11-18,2026-11-18,Y,APPROVED,Example Approving Officer,EXAMPLE-LEAVE-001,FICTITIOUS EXAMPLE — REPLACE
