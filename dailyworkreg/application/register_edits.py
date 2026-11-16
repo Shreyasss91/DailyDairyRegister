@@ -49,6 +49,7 @@ from .draft_generation import (
     VisitProvenance,
 )
 from .generation_runs import OUTCOME_BY_STATUS, load_register
+from .snapshot import encode_request
 from .revisions import C_DATE_NOT_IN_REVISION, RevisionError, require_current
 
 C_ENTRY_UNKNOWN = "entry_not_on_this_revision"
@@ -80,6 +81,8 @@ def save_revision(
     base_run_id: str,
     change_reason: str | None,
     run_id: str | None = None,
+    kind: str = "edit",
+    request: Any = None,
 ) -> str:
     """Store a corrected copy of a revision as its own revision.
 
@@ -134,7 +137,11 @@ def save_revision(
         is_draft=draft.is_allocation_complete,
         master_version=_master_version(connection),
         request_schema_version=base.run.request_schema_version,
-        request_snapshot_json=base.run.request_snapshot_json,
+        request_snapshot_json=(
+            base.run.request_snapshot_json
+            if request is None
+            else _json(encode_request(request))
+        ),
         readiness_json=base.run.readiness_json,
         missing_content_json=base.run.missing_content_json,
     )
@@ -150,11 +157,19 @@ def save_revision(
             entries=tuple(entries),
             register_id=register_id,
             parent_run_id=base_run_id,
-            kind="edit",
+            kind=kind,
             change_reason=change_reason,
         )
-        adopt_revision(connection, new_id, base_run_id=base_run_id)
-        revision_state.set_current(connection, register_id, new_id)
+        # A candidate is stored but not accepted, so nothing about it is carried
+        # forward yet: it starts entirely pending and carries no locks. Only the
+        # operator's decision moves the register onto it.
+        adopt_revision(
+            connection,
+            new_id,
+            base_run_id=None if kind == "candidate" else base_run_id,
+        )
+        if kind != "candidate":
+            revision_state.set_current(connection, register_id, new_id)
     return new_id
 
 

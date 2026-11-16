@@ -264,6 +264,58 @@ def adopt_revision(
             )
 
 
+def reconcile_with_base(
+    connection: sqlite3.Connection, run_id: str, base_run_id: str
+) -> None:
+    """Bring a stored candidate up to the review and lock state it inherits.
+
+    Called at acceptance, not at creation: a candidate is a proposal until the
+    operator accepts it, and only then does the register's own review and lock state
+    belong to it. A review is carried only where the base revision had it reviewed and
+    the stored content is identical; a lock is carried only where the content it
+    protected is unchanged, which is checked again here because this is the moment the
+    guarantee has to hold.
+    """
+
+    base_fingerprints = fingerprints(connection, base_run_id)
+    new_fingerprints = fingerprints(connection, run_id)
+    base_reviews = revision_state.reviews(connection, base_run_id)
+    current_reviews = revision_state.reviews(connection, run_id)
+
+    for day, review in sorted(base_reviews.items()):
+        if review.state != revision_state.REVIEWED:
+            continue
+        if day not in new_fingerprints:
+            continue
+        if base_fingerprints.get(day) != new_fingerprints[day]:
+            continue
+        existing = current_reviews.get(day)
+        if existing is not None and existing.state == revision_state.REVIEWED:
+            continue
+        revision_state.set_review(
+            connection,
+            run_id,
+            day,
+            state=revision_state.REVIEWED,
+            reviewed_at=review.reviewed_at,
+            note=review.note,
+            content_fingerprint=new_fingerprints[day],
+        )
+        revision_state.set_carried_from(connection, run_id, day, base_run_id)
+
+    for day, lock in sorted(revision_state.locks(connection, base_run_id).items()):
+        if day not in new_fingerprints:
+            continue
+        if base_fingerprints.get(day) != new_fingerprints[day]:
+            raise RevisionError(
+                C_LOCKED_CONTENT_CHANGED,
+                f"locked date {day} would change; unlock it first",
+            )
+        revision_state.lock(
+            connection, run_id, day, locked_at=lock.locked_at, note=lock.note
+        )
+
+
 def carry_decision(
     connection: sqlite3.Connection, run_id: str, base_run_id: str
 ) -> None:

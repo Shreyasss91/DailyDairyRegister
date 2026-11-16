@@ -429,6 +429,18 @@ def set_review(
     )
 
 
+def set_carried_from(
+    connection: sqlite3.Connection, run_id: str, row_date: str, base_run_id: str
+) -> None:
+    """Record which revision a carried review came from."""
+
+    connection.execute(
+        "UPDATE date_review SET carried_from_run_id = ? "
+        "WHERE run_id = ? AND row_date = ?",
+        (base_run_id, run_id, row_date),
+    )
+
+
 # --- locks -------------------------------------------------------------------
 
 

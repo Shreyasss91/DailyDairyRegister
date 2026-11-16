@@ -40,6 +40,13 @@ from ..application.generation_runs import (
     save_run,
 )
 from ..application.readiness import assess_readiness
+from ..application.regeneration import (
+    accept_candidate,
+    awaiting_decision,
+    compare_revisions,
+    regenerate_candidate,
+    reject_candidate,
+)
 from ..application.register_edits import (
     add_entry,
     edit_entry,
@@ -818,6 +825,57 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         )
         return dict(outcome.__dict__)
 
+    # --- regeneration, comparison and acceptance -------------------------
+
+    @app.post("/api/registers/{register_id}/candidates")
+    def create_candidate(
+        register_id: str,
+        payload: dict[str, Any] | None = None,
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        body = payload or {}
+        outcome = regenerate_candidate(
+            db,
+            current_of(db, register_id),
+            seed=None if body.get("seed") is None else int(body["seed"]),
+            reason=body.get("reason"),
+        )
+        return dict(outcome.__dict__)
+
+    @app.get("/api/registers/{register_id}/candidates")
+    def list_candidates(
+        register_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> list[dict[str, Any]]:
+        return awaiting_decision(db, register_id)
+
+    @app.get("/api/revisions/{run_id}/compare/{other_run_id}")
+    def compare(
+        run_id: str, other_run_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        return compare_revisions(db, run_id, other_run_id)
+
+    @app.post("/api/registers/{register_id}/candidates/{run_id}/accept")
+    def accept(
+        register_id: str,
+        run_id: str,
+        payload: dict[str, Any] | None = None,
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        return accept_candidate(
+            db, register_id, run_id, note=(payload or {}).get("note")
+        )
+
+    @app.post("/api/registers/{register_id}/candidates/{run_id}/reject")
+    def reject(
+        register_id: str,
+        run_id: str,
+        payload: dict[str, Any] | None = None,
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        return reject_candidate(
+            db, register_id, run_id, note=(payload or {}).get("note")
+        )
+
     # --- registers, revisions, review and locks --------------------------
 
     @app.get("/api/registers")
@@ -890,6 +948,12 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
     return app
+
+
+def current_of(db: sqlite3.Connection, register_id: str) -> str:
+    from ..application.revisions import current_run
+
+    return current_run(db, register_id)
 
 
 def _applied(db: sqlite3.Connection) -> tuple[int, ...]:

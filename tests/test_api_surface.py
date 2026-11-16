@@ -628,3 +628,50 @@ def test_an_entry_on_a_locked_date_cannot_be_corrected_through_the_api(stocked):
 
     assert answer.status_code == 400
     assert answer.json()["error"]["constraint"] == C_DATE_LOCKED
+
+
+# --- regeneration, comparison and acceptance -----------------------------
+
+
+def test_a_candidate_is_compared_and_accepted_through_the_api(stocked):
+    made = generate(stocked)
+    register_id = made["register_id"]
+
+    candidate = stocked.post(f"/api/registers/{register_id}/candidates", json={}).json()
+    assert candidate["eligible"] is True
+    assert candidate["base_run_id"] == made["run_id"]
+
+    pending = stocked.get(f"/api/registers/{register_id}/candidates").json()
+    assert [item["run_id"] for item in pending] == [candidate["candidate_run_id"]]
+
+    compared = stocked.get(
+        f"/api/revisions/{made['run_id']}/compare/{candidate['candidate_run_id']}"
+    ).json()
+    assert compared["summary"]["unchanged"] == 30
+    assert compared["visits"] == {"added": [], "removed": [], "moved": []}
+
+    accepted = stocked.post(
+        f"/api/registers/{register_id}/candidates/{candidate['candidate_run_id']}/accept",
+        json={"note": "checked"},
+    ).json()
+    assert accepted["decision"] == "accepted"
+    assert stocked.get(f"/api/registers/{register_id}").json()["current_run_id"] == (
+        candidate["candidate_run_id"]
+    )
+
+
+def test_a_candidate_can_be_refused_through_the_api_and_the_register_stays(stocked):
+    made = generate(stocked)
+    register_id = made["register_id"]
+    candidate = stocked.post(
+        f"/api/registers/{register_id}/candidates", json={"seed": 404}
+    ).json()
+
+    refused = stocked.post(
+        f"/api/registers/{register_id}/candidates/{candidate['candidate_run_id']}/reject",
+        json={"note": "worse arrangement"},
+    ).json()
+
+    assert refused["decision"] == "rejected"
+    assert refused["current_run_id"] == made["run_id"]
+    assert stocked.get(f"/api/registers/{register_id}/candidates").json() == []
