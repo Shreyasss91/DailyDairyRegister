@@ -15,16 +15,18 @@ databases and backups remain unsuitable for this repository whatever approval th
 
 ## Validation record — 2026-11-17
 
-Each file was read in full, checked against the current importer contract, the seeded
-identities in `dailyworkreg/infrastructure/sqlite/seed.py`, the templates in
-`data/templates/`, `documentation/PRODUCT_REQUIREMENTS_BASELINE.md` §7–§8, and the evidence
-recorded in Acts 15–17.
+The original seven office files were read in full and checked against the current importer
+contract, seeded identities, templates and the evidence recorded in Acts 15–17. Their executed
+validation is the Act 21 rehearsal below. The approved activity catalogue and source crosswalk
+were added in this owner-approval follow-up; their separate static contract and traceability
+checks are recorded in the approval-basis file and this guide.
 
-The checks were executed, not inferred: `temp/dailyworkreg/act21_data_rehearsal.py` imports
-each importable file into a **throwaway database** (a temporary file that is deleted
-afterwards), accepts or refuses it through the real importer and records every assertion.
-Its result for this revision is **65 of 65 checks hold**. The operator's own database was
-never opened.
+The Act 21 checks were executed, not inferred: `temp/dailyworkreg/act21_data_rehearsal.py`
+imports each importable original file into a **throwaway database** (a temporary file that is
+deleted afterwards), accepts or refuses it through the real importer and records every
+assertion. Its result for those original files is **65 of 65 checks hold**. The operator's own
+database was never opened. The new activity catalogue has not yet been staged through the
+runtime importer or accepted in any database.
 
 ### Files, kinds and results
 
@@ -34,6 +36,8 @@ never opened.
 | `02_karnataka_general_holidays_2025_2026.csv` | importer dataset (`general_holiday`) | 39 | Staged with 0 errors; accepted as 39 holidays (19 in 2025, 20 in 2026); replacing with the same file is idempotent; 26 January 2026 classified as a general holiday and not a working day | **Notification transcription verified**, **matches the approved baseline**, ready for operator acceptance. Signed originals and Gazette copies are not held |
 | `03_activity_catalogue_review_worksheet_DO_NOT_IMPORT.csv` | worksheet, not an importer dataset | 81 | Offered to the activity importer it produces row errors on every row; it does not import | **Not approved.** Every scheduling field is blank and every row says `NOT APPROVED — worksheet only` |
 | `03_activity_proposed_examples_DO_NOT_IMPORT.csv` | proposal material, not an importer dataset | 51 | Refused at staging (`source_file_unmapped`) | **Not approved.** Byte-identical to the template's proposal file |
+| `03_approved_activity_catalogue.csv` | importer dataset (`activity`) | 60 | Static check against the current activity contract: required fields present, all numbers valid, 60 Kannada descriptions supplied; runtime staging/rehearsal not yet run | **Owner-approved** for application scheduling/diary-planning scope. Ready for operator staging; not staged, reviewed or accepted in the operational database |
+| `03_activity_catalogue_source_mapping.csv` | provenance crosswalk, not an importer dataset | 60 mapping rows / 81 source duties | Every ID from `SO-001` through `SO-081` mapped exactly once | Traceability only; not importable |
 | `04_area_master.csv` | importer dataset (`area`) | 16 | Staged with 0 errors; accepted as 0 inserts and 16 updates against the seeded identities | **Matches the approved baseline**, ready for staging. English names remain blank by decision |
 | `05_feeder_master.csv` | importer dataset (`feeder`) | 4 | Staged with 0 errors; accepted as 0 inserts and 4 updates against the seeded identities | **Matches the approved baseline**, ready for staging |
 | `06_dtc_classification_reference.csv` | reference only, not an importer dataset | 5 | Not offered to any importer; every row was compared with the importer's own class mapping | **Reference verified.** Not a dataset and not importable |
@@ -59,8 +63,11 @@ never opened.
   Kodagu-local holiday, and no date omitted by the notification for a weekly off was added.
 - **Area and feeder files.** Byte-identical to their templates, and identical to the seeded
   identities and defaults.
-- **Activity files.** Neither file can enter the activity master, and the master stayed empty
-  in the rehearsal.
+- **Activity catalogue.** The new 60-row `03_approved_activity_catalogue.csv` is owner-approved
+  for the application's scheduling/diary-planning scope. Its separate crosswalk maps all 81
+  source duty IDs exactly once. Static file/contract checks passed; the new file has not yet
+  been staged or accepted through the application. The original 81-row worksheet and 51-row
+  proposal file remain unchanged and explicitly not approved; neither is an import file.
 
 ### Reviewed and deliberately preserved
 
@@ -70,8 +77,12 @@ never opened.
   the supplied text. No name was normalised or retyped.
 - **No Feeder Code or MDM Code was invented.** The roster has no such columns.
 - **No SCF or SCE row was reconstructed.** The delivered roster contains only the 113 SCD rows.
-- **No activity wording, identifier, weight, frequency, repeat gap or weekday restriction was
-  invented**, and no BESCOM source-duty identifier was turned into an application activity ID.
+- **Original activity source material is preserved.** The 81-row worksheet and 51-row proposal
+  file remain unchanged and not approved. Under the owner's explicit instruction, a separate
+  60-row application catalogue was authored with IDs `ACT-001` through `ACT-060`; the
+  crosswalk preserves every original `SO-001` through `SO-081` source-duty identity exactly
+  once. The numeric scheduling values are owner-approved planning assumptions, not facts
+  supplied by the BESCOM source workbook.
 - **No English transliteration was invented** for the 16 areas.
 - **No holiday date, name or notification detail was edited**, because the file already matches
   the verified transcription.
@@ -84,8 +95,8 @@ never opened.
 
 The following states are distinct and are not used interchangeably: source data supplied;
 data quality validated; matches the approved product baseline; ready for staging; staged
-successfully; operator reviewed; accepted into the application database; approved for
-operational use.
+successfully; operator reviewed; accepted into the application database; owner-approved for
+the intended application use.
 
 | File | Supplied | Validated | Baseline | Ready to stage | Staged | Reviewed | Accepted | Approved |
 |---|---|---|---|---|---|---|---|---|
@@ -95,6 +106,8 @@ operational use.
 | Feeder master | yes | yes | yes | yes | rehearsal only | no | no | no |
 | Activity worksheet | yes | no | no | no | no | no | no | no |
 | Activity proposals | yes | no | no | no | no | no | no | no |
+| Approved activity catalogue | yes | yes (static contract) | n/a | yes | no | no | no | yes — owner-approved |
+| Source mapping crosswalk | yes | yes | n/a | not importable | n/a | n/a | n/a | provenance only |
 | Classification reference | yes | yes | yes | not importable | n/a | n/a | n/a | n/a |
 
 "Rehearsal only" means the file was accepted in a throwaway database to prove it works. No
@@ -103,12 +116,12 @@ explicitly authorised operation.
 
 ### What is still missing
 
-- **The approved activity catalogue.** The 40–60 activities with Kannada wording, weight,
-  monthly minimum and maximum, repeat gap and any weekday restriction are not supplied. This
-  folder holds a source-duty worksheet of blanks and a proposal list, neither of which is a
-  catalogue. Whether the BESCOM supervisory duty register describes this office's work at all
-  is an owner decision that has not been taken. **This is a data blocker, not an
-  implementation blocker.**
+- **Operational activity import and review.** The 60-row catalogue is now owner-approved and
+  committed, with all 81 source duties traceable in the crosswalk. The numeric values are
+  application-planning assumptions rather than source facts. Static contract checks have
+  passed, but the file has not yet been staged, reviewed or accepted through the application.
+  That runtime staging/review/acceptance remains the next validation and operational step.
+  The source BESCOM workbook is still a supervisory template, not a MESCOM-issued duty order.
 - **Monthly operational inputs** — leave records, special events, additional meetings, fixed
   DTC, area and feeder visit commitments, and date overrides. The templates for these exist in
   `data/templates/` and this folder contains none of them yet.
