@@ -264,7 +264,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     @app.get("/")
     def index() -> FileResponse:
-        return FileResponse(HERE / "templates" / "index.html")
+        return FileResponse(
+            HERE / "templates" / "index.html",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     @app.get("/api/health")
     def health(db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:

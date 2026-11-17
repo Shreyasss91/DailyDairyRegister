@@ -591,6 +591,7 @@ function attributionTable(items) {
 async function openDraft(runId) {
   state.runId = runId;
   const head = document.getElementById('draft-head');
+  const reviewActions = document.getElementById('draft-review-actions');
   const banner = document.getElementById('draft-banner');
   const exceptions = document.getElementById('draft-exceptions');
   const evidence = document.getElementById('draft-evidence');
@@ -600,6 +601,8 @@ async function openDraft(runId) {
   const months = document.getElementById('draft-months');
   const candidate = document.getElementById('candidate-panel');
   head.textContent = '';
+  reviewActions.textContent = '';
+  reviewActions.hidden = true;
   target.textContent = '';
   regeneration.textContent = '';
   revisions.textContent = '';
@@ -655,14 +658,14 @@ async function openDraft(runId) {
   const days = new Map(review.dates.map((day) => [day.date, day]));
   state.registerId = review.register_id;
 
-  const pendingDates = review.total_dates - review.reviewed_dates;
-  if (pendingDates > 0) {
+  const pendingDates = review.dates.filter((day) => day.state === 'pending_review');
+  if (pendingDates.length > 0) {
     const fingerprints = Object.fromEntries(
       review.dates.map((day) => [day.date, day.fingerprint]),
     );
     const bulkReview = el('button', {
       class: 'button button-primary',
-      text: `Mark all days reviewed (${pendingDates} pending)`,
+      text: `Mark all days reviewed (${pendingDates.length} pending)`,
       onclick: async () => {
         const answer = await act(
           `/api/generations/${runId}/review`,
@@ -682,9 +685,14 @@ async function openDraft(runId) {
         }
       },
     });
-    head.append(el('div', { class: 'actions' }, [bulkReview]));
+    reviewActions.hidden = false;
+    reviewActions.append(bulkReview);
   } else {
-    head.append(el('p', { class: 'muted', text: 'All days are reviewed.' }));
+    reviewActions.hidden = false;
+    reviewActions.append(el('span', {
+      class: 'muted',
+      text: 'All dates in this draft are already reviewed.',
+    }));
   }
 
   target.append(table(

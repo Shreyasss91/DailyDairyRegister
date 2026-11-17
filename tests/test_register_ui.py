@@ -31,12 +31,29 @@ def test_the_page_offers_a_place_for_review_correction_and_regeneration(client):
     assert answer.status_code == 200
     for marker in (
         'id="draft-banner"',
+        'id="draft-review-actions"',
         'id="draft-rows"',
         'id="draft-regenerate"',
         'id="candidate-panel"',
         'id="draft-revisions"',
     ):
         assert marker in answer.text
+
+
+
+
+def test_bulk_review_uses_date_states_and_a_dedicated_visible_container():
+    assert 'id="draft-review-actions"' in INDEX
+    assert "const pendingDates = review.dates.filter((day) => day.state === 'pending_review')" in APP_JS
+    assert "reviewActions.hidden = false" in APP_JS
+    assert "reviewActions.append(bulkReview)" in APP_JS
+    assert "review.total_dates - review.reviewed_dates" not in APP_JS
+
+
+def test_the_page_revalidates_html_and_uses_a_versioned_application_script(client):
+    response = client.get("/")
+    assert response.headers["cache-control"] == "no-cache"
+    assert '/static/app.js?v=review-bulk-ui-2' in response.text
 
 
 def test_the_page_sends_every_act_of_this_capability_to_the_server():

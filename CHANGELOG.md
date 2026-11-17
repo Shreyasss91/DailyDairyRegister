@@ -7,6 +7,9 @@ The repository policy in `CLAUDE.md` requires every change, however small, to ha
 ## [Unreleased]
 
 ### Fixed
+- **2026-11-17 — Make the bulk date-review action reliably visible after application updates:** The draft page now has a dedicated review-action row outside the muted register metadata. Its pending count is derived from the per-date review states returned by the server, rather than depending on aggregate counters. The document response revalidates instead of retaining stale HTML, and the application script URL carries a new cache-busting version. The existing per-date controls and the atomic fingerprint-checked bulk-review endpoint remain unchanged.
+
+### Fixed
 - **2026-11-17 — Failed generation attempts now open their allocator evidence instead of requesting a nonexistent accepted revision:** The draft view distinguishes an allocation-complete draft from a recorded infeasible or unresolved attempt before requesting review state. Failed attempts display the stored exception and month-level evidence, including when opened from History. They remain attempts, not revisions: no review, lock, correction, regeneration or finalisation controls are presented. This removes the misleading `register ... has no accepted revision` error without changing allocator outcomes or capacity constraints.
 - **2026-11-17 — Add an atomic one-click review action for all pending dates:** The draft view adds `Mark all days reviewed` alongside the existing per-date review/withdraw controls. The client submits the fingerprints for every displayed date; the application verifies the complete date set and every fingerprint, checks all affected months are still mutable, and records pending dates in one SQLite transaction. Already-reviewed dates retain their original review timestamp and note; a stale date or closed month refuses the whole operation without partial writes. Review remains distinct from locking and finalisation.
 
