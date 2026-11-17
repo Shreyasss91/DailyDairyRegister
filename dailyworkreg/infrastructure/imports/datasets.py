@@ -440,11 +440,29 @@ ACTIVITY_NUMBER_FIELDS = (
     ("repeat_gap_days", "repeat gap", True),
 )
 
+#: The range this register can store a whole number in. It is the database's signed
+#: 64-bit INTEGER range, not a scheduling limit: the contract judges what the catalogue
+#: may say, and this refuses only a value that could not be written at all. It is
+#: checked here rather than left to the INSERT, because a refusal from the contract
+#: names the row and the field while a driver error arrives after the batch was opened.
+SQLITE_INTEGER_MIN = -(2**63)
+SQLITE_INTEGER_MAX = 2**63 - 1
+
+#: A whole number written as text, read digit by digit instead of through `float()`.
+_WHOLE_DIGITS = re.compile(r"[+-]?\d+")
+
 
 def _shown(value: object) -> str:
     """A supplied value as a message should quote it back."""
 
     return f"'{value}'" if isinstance(value, str) else repr(value)
+
+
+def _given(value: object) -> str:
+    """A number as a message quotes it, without printing four hundred digits."""
+
+    text = value if isinstance(value, str) else repr(value)
+    return text if len(text) <= 24 else f"{text[:20]}..."
 
 
 def _contract_text(value: object) -> str | None:
@@ -457,32 +475,96 @@ def _contract_text(value: object) -> str | None:
     return str(value).strip() or None
 
 
+def _within_storage(value: int, field_name: str) -> tuple[int | None, list[str]]:
+    """A whole number, refused when this database could not store it."""
+
+    if SQLITE_INTEGER_MIN <= value <= SQLITE_INTEGER_MAX:
+        return value, []
+    return None, [
+        f"{field_name} {_given(value)} is outside the range this register stores whole "
+        f"numbers in, {SQLITE_INTEGER_MIN} to {SQLITE_INTEGER_MAX}"
+    ]
+
+
+def _contract_whole(value: object, *, field_name: str) -> tuple[int | None, list[str]]:
+    """A whole number, read exactly, never through a float on the way.
+
+    Converting an integer to a float to ask whether it is whole answers two questions
+    badly. It answers the wrong one, because a float cannot hold every integer: above
+    2**53 neighbours collapse onto the same value, so a minimum of 9007199254740993 and
+    a maximum of 9007199254740992 compare as equal and the inversion goes unnoticed. And
+    it answers it by changing the number, because the value returned is the rounded one.
+
+    So an integer is taken as it stands. A float is a float the source really wrote, and
+    is accepted only when it is finite and already whole - a fractional value is refused
+    rather than truncated. Text is read digit by digit when it is digits, because
+    `int(float(text))` rounds a long catalogue cell exactly as the float path does, and
+    anything else is handed to the float reader so that `2.0` written as text still
+    reads as two and `2.5` is refused instead of becoming two.
+    """
+
+    if isinstance(value, int):
+        return _within_storage(value, field_name)
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None, [f"{field_name} {_shown(value)} is not a whole number"]
+        return _within_storage(int(value), field_name)
+    if isinstance(value, str):
+        text = _text(value)
+        if text is None:
+            return None, []
+        if _WHOLE_DIGITS.fullmatch(text):
+            return _within_storage(int(text), field_name)
+        number, messages = coerce_float(value, field_name=field_name)
+        if messages:
+            return None, messages
+        if number is None:
+            return None, []
+        if not math.isfinite(number) or not number.is_integer():
+            return None, [f"{field_name} {_shown(value)} is not a whole number"]
+        return _within_storage(int(number), field_name)
+    return None, [f"{field_name} {_shown(value)} is not a number"]
+
+
+def _contract_share(value: object, *, field_name: str) -> tuple[float | None, list[str]]:
+    """A share, read as a float, with an integer too large to be one refused here.
+
+    `float(huge_int)` raises `OverflowError`, which is not a contract failure and would
+    have escaped the judge and the acceptance guard as an unhandled error. A weight has
+    to be a finite number regardless; this only makes sure that a value which cannot
+    even be represented says so in the same vocabulary as the rest of the contract.
+    """
+
+    if isinstance(value, (int, float)):
+        try:
+            return float(value), []
+        except OverflowError:
+            return None, [
+                f"{field_name} {_given(value)} is too large to be stored as a number"
+            ]
+    if isinstance(value, str):
+        return coerce_float(value, field_name=field_name)
+    return None, [f"{field_name} {_shown(value)} is not a number"]
+
+
 def _contract_number(
     value: object, *, field_name: str, whole: bool
 ) -> tuple[float | int | None, list[str]]:
     """One number, read from a source cell or from an already-stored payload.
 
     The same rules apply to both: a blank stays blank, a placeholder is named as a
-    placeholder, unreadable text is refused, and a value of the wrong shape is
-    refused rather than coerced into something plausible.
+    placeholder, unreadable text is refused, and a value of the wrong shape is refused
+    rather than coerced into something plausible. A boolean is refused by name, because
+    `True` is an `int` in Python and would otherwise pass as a whole number one.
     """
 
     if value is None:
         return None, []
     if isinstance(value, bool):
         return None, [f"{field_name} {_shown(value)} is not a number"]
-    if isinstance(value, (int, float)):
-        number = float(value)
-        if not whole:
-            return number, []
-        if not math.isfinite(number) or not number.is_integer():
-            return None, [f"{field_name} {_shown(value)} is not a whole number"]
-        return int(number), []
-    if isinstance(value, str):
-        if whole:
-            return coerce_int(value, field_name=field_name)
-        return coerce_float(value, field_name=field_name)
-    return None, [f"{field_name} {_shown(value)} is not a number"]
+    if whole:
+        return _contract_whole(value, field_name=field_name)
+    return _contract_share(value, field_name=field_name)
 
 
 def read_activity_fields(payload: Mapping[str, object]) -> tuple[ActivityFields, tuple[str, ...]]:

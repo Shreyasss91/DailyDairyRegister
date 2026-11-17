@@ -29,6 +29,7 @@ from ..imports.datasets import (
     SEVERITY_ERROR,
     SEVERITY_OK,
     SEVERITY_WARNING,
+    ActivityFields,
     DatasetVerdict,
     RowOutcome,
     judge_dataset,
@@ -440,7 +441,9 @@ def accept_batch(
             batch_id,
         )
     if batch.dataset == "activity":
-        _refuse_activities_that_break_the_contract(batch_id, importable)
+        settled = _refuse_activities_that_break_the_contract(batch_id, importable)
+    else:
+        settled = {}
 
     inserted = 0
     updated = 0
@@ -545,24 +548,23 @@ def accept_batch(
 
             elif batch.dataset == "activity":
                 # The numbers arrive from the catalogue, never from here. A payload
-                # reaching this point is complete, because the judge refused every row
-                # missing a weight, a frequency or a repeat gap, and the guard above
-                # covers a batch staged before that rule existed. Substituting a default
-                # here is how an invented weight would enter the register looking like an
-                # approved one.
-                activity_id = str(payload["activity_id"])
+                # reaching this point is complete, because the guard above read it and
+                # found nothing to complain about, and what it read is what is stored:
+                # an integer kept exact, rather than the raw payload re-converted.
+                read = settled[row.row_number]
+                activity_id = str(read.activity_id)
                 existed = masters.get_activity(connection, activity_id) is not None
                 masters.upsert_activity(
                     connection,
                     activity_id=activity_id,
-                    category=str(payload["category"]),
-                    description_en=str(payload["description_en"]),
-                    description_kn=payload.get("description_kn"),
-                    weight=float(payload["weight"]),
-                    monthly_min=int(payload["monthly_min"]),
-                    monthly_max=int(payload["monthly_max"]),
-                    repeat_gap_days=int(payload["repeat_gap_days"]),
-                    weekday_mask=payload.get("weekday_mask"),
+                    category=str(read.category),
+                    description_en=str(read.description_en),
+                    description_kn=read.description_kn,
+                    weight=float(read.weight),
+                    monthly_min=int(read.monthly_min),
+                    monthly_max=int(read.monthly_max),
+                    repeat_gap_days=int(read.repeat_gap_days),
+                    weekday_mask=read.weekday_mask,
                 )
                 inserted += 0 if existed else 1
                 updated += 1 if existed else 0
@@ -667,32 +669,40 @@ def _next_feeder_id(connection: sqlite3.Connection) -> str:
 
 def _refuse_activities_that_break_the_contract(
     batch_id: str, importable: list[StagingRowRow]
-) -> None:
+) -> dict[int, ActivityFields]:
     """Hold an already-staged activity batch to the contract in force now.
 
     Staging refuses such a row, so no new upload reaches acceptance carrying one. What
     this covers is the other direction of time: a batch staged under the earlier
     contract is still in the database with its payload already written, and that
     contract accepted a zero weight, a negative weight, a negative frequency, a
-    negative repeat gap, and an identifier invented at acceptance.
+    negative repeat gap, an inverted minimum and maximum whose difference is below the
+    precision of a float, and an identifier invented at acceptance.
 
     Checking only that the values were present was not enough, because those values
-    are not absent: they are present and wrong, and the write path below reads them
-    with `float()` and `int()` and would store them as though the catalogue had said
-    so. So every importable payload is read through the same `read_activity_fields`
-    the judge uses, and one row that fails refuses the whole batch. Refusing keeps the
-    batch staged, leaves the master exactly as it was, and names the rows and the
-    fields, because the operator's next step is to correct the file and upload it
-    again rather than to guess which row was meant.
+    are not absent: they are present and wrong. So every importable payload is read
+    through the same `read_activity_fields` the judge uses, and one row that fails
+    refuses the whole batch. Refusing keeps the batch staged, leaves the master exactly
+    as it was, and names the rows and the fields, because the operator's next step is
+    to correct the file and upload it again rather than to guess which row was meant.
+
+    The reading is returned rather than thrown away. It is what the contract actually
+    read from the payload - an integer kept exact, text read digit by digit - so the
+    write path stores these rather than re-deriving values from the raw payload with
+    `float()` and `int()`, which is where a legacy string like `"2.0"` would raise
+    instead of storing the two the contract accepted.
     """
 
     failures: list[tuple[int, tuple[str, ...]]] = []
+    settled: dict[int, ActivityFields] = {}
     for row in importable:
-        _fields, problems = read_activity_fields(row.payload or {})
+        fields, problems = read_activity_fields(row.payload or {})
         if problems:
             failures.append((row.row_number, problems))
+        else:
+            settled[row.row_number] = fields
     if not failures:
-        return
+        return settled
 
     naming = (
         "1 row in this batch does not meet"

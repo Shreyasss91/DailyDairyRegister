@@ -145,12 +145,21 @@ importer now requires each row to state:
 - a repeat gap of zero or more days.
 
 A number that is blank, a placeholder such as `#N/A`, or text that is not a number is
-refused and named, and nothing is defaulted. A Kannada description is required for the
-register output but its absence is reported as a warning on that row rather than a
-refusal: the importer never translates, and a row without Kannada is imported with its
-English text alone. A file whose columns do not match the import contract at all is
-refused at staging with the missing column named, instead of being recorded as a batch
-with no rows.
+refused and named, and nothing is defaulted. A whole number is read exactly rather than
+through a floating point, because a float cannot hold every integer: above 2**53 two
+different values compare as equal, so a minimum one above its maximum would pass the
+comparison and the value written would be the rounded one. A whole field accepts an
+integer as it stands and a float only when it is finite and already whole, so `2.0` is
+two and `2.5` is refused rather than truncated. Such a value is also checked against the
+range this register can store, the database's signed 64-bit integer range, and refused
+with the field named when it lies outside it; that is the storage boundary and not a
+scheduling limit, so no maximum frequency, repeat gap or visit count is imposed by it. A
+weight too large to be a finite number is refused in the same terms instead of raising.
+A Kannada description is required for the register output but its absence is reported as
+a warning on that row rather than a refusal: the importer never translates, and a row
+without Kannada is imported with its English text alone. A file whose columns do not
+match the import contract at all is refused at staging with the missing column named,
+instead of being recorded as a batch with no rows.
 
 **What the owner must supply, and no code may supply instead:** the approved activity
 list (or approval of named rows from the proposals), the Kannada wording for each, the
