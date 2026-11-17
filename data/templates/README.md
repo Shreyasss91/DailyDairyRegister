@@ -19,7 +19,7 @@
 5. Preserve original source spelling, blank values and literal markers such as `#N/A`. Do not replace blanks with zero or invented values.
 6. Keep source files, notification copies, approvals, source sheet names, extraction dates and issuing-office details available for provenance.
 7. The application import lifecycle is **read → judge → stage → operator review → accept/reject**. Uploading is not acceptance. Do not edit SQLite directly.
-8. Never put filled office data, personal/employee data, actual DTC roster rows, leave/events/commitments, local DBs or backups in Git. `data/record_A/**` is ignored by Git; its README is tracked.
+8. This repository is public and `data/record_A/` is **not** Git-ignored. Files there can be tracked when staged. Do not publish filled office data, employee/consumer personal data, actual DTC rosters, detailed feeder/station/asset mappings, leave/events/commitments, confidential source material, local databases or backups unless the relevant data owner and organization have explicitly authorized public disclosure. Import approval is not publication approval. Stage exact reviewed paths only; avoid unreviewed `git add .` or `git add data/record_A/`.
 
 ## 2. What the current application can import
 
