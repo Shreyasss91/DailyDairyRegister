@@ -192,7 +192,7 @@ For focused export and user-interface regression tests, see [Regression testing]
 
 ## 8. Troubleshooting
 
-- **`dailyworkreg.exe` is missing:** Run `\.venv\Scripts\python.exe -m pip install -e ".[test]"` from the repository root and check that `.venv\Scripts\dailyworkreg.exe` exists.
+- **`dailyworkreg.exe` is missing:** Run `.\.venv\Scripts\python.exe -m pip install -e ".[test]"` from the repository root and check that `.venv\Scripts\dailyworkreg.exe` exists.
 - **Python version is too old:** Check `py -0p` and create the environment with Python 3.11 or newer. Do not try to fix this by editing the project's `requires-python` declaration.
 - **Port 8010 is already in use:** Start with `--port 8011` and open `http://127.0.0.1:8011`.
 - **The application appears to use a different database:** Run `dailyworkreg.exe --print-db` and inspect `DAILYWORKREG_DB` and any `--db` argument.
