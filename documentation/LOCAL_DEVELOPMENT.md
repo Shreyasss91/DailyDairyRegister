@@ -42,7 +42,11 @@ py -3.11 -m venv .venv
 
 The editable install registers the `dailyworkreg` command in the virtual environment. The `.venv/` directory is ignored by Git; it is local tooling, not application source or operational data.
 
-For an application-only installation without test tools, use ` .\.venv\Scripts\python.exe -m pip install -e . ` (without the surrounding spaces) instead. Install the `test` extra before running pytest.
+For an application-only installation without test tools, run this from the repository root instead:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e .
+``` Install the `test` extra before running pytest.
 
 ## 3. Start the application — first and subsequent runs
 
@@ -188,7 +192,7 @@ For focused export and user-interface regression tests, see [Regression testing]
 
 ## 8. Troubleshooting
 
-- **`dailyworkreg.exe` is missing:** Re-run ` .\.venv\Scripts\python.exe -m pip install -e ".[test]" ` (without the surrounding spaces) from the repository root and check that `.venv\Scripts\dailyworkreg.exe` exists.
+- **`dailyworkreg.exe` is missing:** Run `\.venv\Scripts\python.exe -m pip install -e ".[test]"` from the repository root and check that `.venv\Scripts\dailyworkreg.exe` exists.
 - **Python version is too old:** Check `py -0p` and create the environment with Python 3.11 or newer. Do not try to fix this by editing the project's `requires-python` declaration.
 - **Port 8010 is already in use:** Start with `--port 8011` and open `http://127.0.0.1:8011`.
 - **The application appears to use a different database:** Run `dailyworkreg.exe --print-db` and inspect `DAILYWORKREG_DB` and any `--db` argument.
