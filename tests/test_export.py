@@ -232,6 +232,7 @@ def test_bulk_export_contains_each_month_workbook_and_one_combined_print_documen
         assert markup.count('<article class="sheet">') == 2
         assert "Issued version 1 of November 2026" in markup
         assert "Issued version 1 of December 2026" in markup
+        assert "Back to the tool" not in markup
         assert november["finalisation_id"] in markup
         assert december["finalisation_id"] in markup
         assert ".sheet + .sheet" in markup
@@ -455,6 +456,7 @@ def test_the_print_page_identifies_the_issued_version_it_shows(client, db):
     markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
 
     assert "Issued version 1 of November 2026" in markup
+    assert markup.count("Back to the tool") == 1
     assert record["finalisation_id"] in markup
     assert record["fingerprint"] in markup
     assert str(record["master_version"]) in markup
