@@ -3,6 +3,3 @@ __pycache__/
 .pytest_cache/
 temp/
 
-# Office-specific data is local and must never be committed.
-/data/record_A/**
-!/data/record_A/README.md
