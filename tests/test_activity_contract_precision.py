@@ -450,3 +450,272 @@ def test_a_catalogue_cell_above_the_float_boundary_is_no_longer_rounded_when_sta
 
     assert judged.error_count == 0, [outcome.messages for outcome in judged.outcomes]
     assert judged.outcomes[0].payload["monthly_max"] == UNREPRESENTABLE
+
+
+# --- Act 20: text in decimal and exponent form, read as an exact decimal ---------
+
+#: Decimal and exponent forms of one integer, each of which `float` turns into
+#: 9007199254740992 before anything can ask whether it is whole.
+EXACT_FORMS = ("9007199254740993", "9007199254740993.0", "9007199254740993e0",
+               "9.007199254740993e15")
+
+
+@pytest.mark.parametrize("written", EXACT_FORMS)
+def test_every_textual_form_of_a_long_integer_returns_that_integer(written):
+    fields, problems = read_activity_fields(payload(repeat_gap_days=written))
+
+    assert problems == ()
+    assert fields.repeat_gap_days == UNREPRESENTABLE
+
+
+@pytest.mark.parametrize("written", EXACT_FORMS[1:])
+def test_the_forms_float_alone_would_round_are_the_ones_being_tested(written):
+    """So the test above cannot pass because a float happened to be exact anyway."""
+
+    assert float(written) != UNREPRESENTABLE
+
+
+def test_a_decimal_text_pair_above_the_float_boundary_is_compared_exactly():
+    fields, problems = read_activity_fields(
+        payload(monthly_min="9007199254740993.0", monthly_max="9007199254740992.0")
+    )
+
+    assert problems == (
+        "monthly minimum 9007199254740993 is above maximum 9007199254740992",
+    )
+    assert fields.monthly_min == UNREPRESENTABLE
+    assert fields.monthly_max == ABOVE_THE_FLOAT_BOUNDARY
+
+
+def test_an_equal_decimal_text_pair_above_the_float_boundary_is_accepted_exactly():
+    fields, problems = read_activity_fields(
+        payload(monthly_min="9007199254740993.0", monthly_max="9007199254740993.0")
+    )
+
+    assert problems == ()
+    assert fields.monthly_min == UNREPRESENTABLE
+    assert fields.monthly_max == UNREPRESENTABLE
+
+
+@pytest.mark.parametrize(
+    "written",
+    (
+        "2.0000000000000000000000000000000000000000001",
+        "1.9999999999999999999999999999999999999999999",
+        "9007199254740993.0000000001",
+    ),
+)
+def test_a_fraction_that_a_float_would_hide_is_still_refused(written):
+    """Ordinary float conversion says each of these is a whole number."""
+
+    assert float(written).is_integer()
+
+    fields, problems = read_activity_fields(payload(repeat_gap_days=written))
+
+    assert fields.repeat_gap_days is None
+    assert problems == (f"repeat gap '{written}' is not a whole number",)
+
+
+def test_a_trailing_zero_run_is_still_the_integer_it_states():
+    fields, problems = read_activity_fields(
+        payload(repeat_gap_days="2.0000000000000000000000000000000000000000000")
+    )
+
+    assert problems == ()
+    assert fields.repeat_gap_days == 2
+
+
+@pytest.mark.parametrize(
+    ("written", "expected"),
+    (
+        ("2.0", 2),
+        ("2.000", 2),
+        ("2e0", 2),
+        ("+3.0", 3),
+        ("-0.0", 0),
+        ("0.000", 0),
+        ("1E+3", 1000),
+    ),
+)
+def test_legitimate_decimal_forms_keep_their_meaning(written, expected):
+    fields, problems = read_activity_fields(payload(repeat_gap_days=written))
+
+    assert problems == ()
+    assert fields.repeat_gap_days == expected
+
+
+def test_negative_zero_is_zero_and_not_a_negative_minimum():
+    """Mathematically zero is not negative, so the field rule must not fire."""
+
+    fields, problems = read_activity_fields(
+        payload(monthly_min="-0.0", monthly_max="-0.000")
+    )
+
+    assert problems == ()
+    assert fields.monthly_min == 0
+    assert fields.monthly_max == 0
+    assert fields.monthly_min < 1  # a plain int zero, never -0
+
+
+@pytest.mark.parametrize(
+    "written",
+    (
+        "",
+        "   ",
+        "1..2",
+        "1e",
+        "1e+",
+        "e5",
+        "0x10",
+        "--1",
+        "1 2",
+        "two",
+        "NaN",
+        "sNaN",
+        "Infinity",
+        "-Infinity",
+        "inf",
+    ),
+)
+def test_no_decimal_exception_escapes_and_every_bad_form_is_named(written):
+    fields, problems = read_activity_fields(payload(repeat_gap_days=written))
+
+    if not written.strip():
+        # blank and whitespace are "not supplied", which the caller words as such
+        assert fields.repeat_gap_days is None
+        assert problems
+        assert "no repeat gap was supplied" in " ".join(problems)
+        return
+    assert fields.repeat_gap_days is None
+    assert problems
+    assert problems[0].startswith("repeat gap")
+    assert "is not a whole number" in problems[0] or "is not a number" in problems[0]
+
+
+@pytest.mark.parametrize(
+    ("field", "written", "expected"),
+    (
+        ("repeat_gap_days", str(SQLITE_INTEGER_MAX), "accepted"),
+        ("monthly_min", str(SQLITE_INTEGER_MIN), "is negative"),
+        ("monthly_min", str(SQLITE_INTEGER_MAX + 1), "outside the range"),
+        ("monthly_min", str(SQLITE_INTEGER_MIN - 1), "outside the range"),
+        ("repeat_gap_days", "1e1000000000", "outside the range"),
+        ("repeat_gap_days", "1e-1000000000", "is not a whole number"),
+    ),
+)
+def test_the_storage_boundary_is_applied_to_decimal_text_before_conversion(
+    field, written, expected
+):
+    """`2**63` is refused before `int()` would be asked to build a huge number."""
+
+    fields, problems = read_activity_fields(payload(**{field: written}))
+
+    if expected == "accepted":
+        assert problems == ()
+        assert fields.repeat_gap_days == SQLITE_INTEGER_MAX
+        return
+    assert problems
+    assert expected in " ".join(problems)
+
+
+def test_a_large_exponent_is_refused_without_building_a_huge_integer():
+    import time
+
+    started = time.monotonic()
+    _fields, problems = read_activity_fields(payload(repeat_gap_days="1e1000000000"))
+    elapsed = time.monotonic() - started
+
+    assert problems
+    assert "outside the range" in problems[0]
+    assert elapsed < 1.0
+
+
+# --- Act 20: the legacy path and the two doors, for decimal text ---------------
+
+
+def test_a_legacy_decimal_text_pair_is_refused_with_both_exact_values_named(db):
+    batch = stage_one(db)
+    before = (tuple(masters.list_activities(db)), masters.current_version(db))
+    untouched = rewrite(
+        db, batch.batch_id, monthly_min="9007199254740993.0", monthly_max="9007199254740992.0"
+    )
+
+    with pytest.raises(StorageError) as refusal:
+        accept_batch(db, batch.batch_id)
+
+    assert refusal.value.constraint == C_ACTIVITY_CONTRACT_UNSATISFIED
+    assert "monthly minimum 9007199254740993 is above maximum 9007199254740992" in (
+        refusal.value.detail
+    )
+    assert get_batch(db, batch.batch_id).status == "staged"
+    row = db.execute(
+        "SELECT accepted_at, decision_note FROM import_batch WHERE batch_id = ?",
+        (batch.batch_id,),
+    ).fetchone()
+    assert row["accepted_at"] is None
+    assert row["decision_note"] is None
+    assert (tuple(masters.list_activities(db)), masters.current_version(db)) == before
+    assert masters.list_activities(db) == ()
+    assert stored_text(db, batch.batch_id) == untouched
+
+
+def test_a_valid_legacy_decimal_text_payload_is_stored_as_its_exact_value(db):
+    batch = stage_one(db)
+    rewrite(
+        db,
+        batch.batch_id,
+        monthly_min="9007199254740993.0",
+        monthly_max="9007199254740994.0",
+        repeat_gap_days="2.0",
+    )
+
+    accept_batch(db, batch.batch_id)
+
+    stored = masters.get_activity(db, "PRE-001")
+    assert stored.monthly_min == UNREPRESENTABLE
+    assert stored.monthly_max == UNREPRESENTABLE + 1
+    assert stored.repeat_gap_days == 2
+
+
+def test_a_catalogue_cell_in_decimal_form_and_the_same_stored_text_agree():
+    headers = HEADER.strip().split(",")
+    row = dict(
+        zip(
+            headers,
+            ["PRE-020", "Rehearsal", "Rehearsal activity", "", "1.0",
+             "9007199254740993.0", "9007199254740992.0", "2.0", ""],
+            strict=True,
+        )
+    )
+
+    judged = judge_dataset("activity", headers, [row])
+    _fields, problems = read_activity_fields(
+        payload(
+            activity_id="PRE-020",
+            monthly_min="9007199254740993.0",
+            monthly_max="9007199254740992.0",
+        )
+    )
+
+    expected = "monthly minimum 9007199254740993 is above maximum 9007199254740992"
+    assert judged.error_count == 1
+    assert expected in " ".join(judged.outcomes[0].messages)
+    assert expected in " ".join(problems)
+
+
+def test_a_catalogue_cell_in_decimal_form_is_staged_at_its_exact_value():
+    headers = HEADER.strip().split(",")
+    row = dict(
+        zip(
+            headers,
+            ["PRE-021", "Rehearsal", "Rehearsal activity", "", "1",
+             "0", "9007199254740993.0", "2", ""],
+            strict=True,
+        )
+    )
+
+    judged = judge_dataset("activity", headers, [row])
+
+    assert judged.error_count == 0, [outcome.messages for outcome in judged.outcomes]
+    assert judged.outcomes[0].payload["monthly_max"] == UNREPRESENTABLE
+    assert judged.outcomes[0].payload["weight"] == 1.0

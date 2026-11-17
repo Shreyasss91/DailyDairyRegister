@@ -18,6 +18,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal, InvalidOperation
 
 #: Auto-excluded source classes, from requirements §8: the 113 SCD records are
 #: included and the SCF and SCE records are not.
@@ -448,8 +449,56 @@ ACTIVITY_NUMBER_FIELDS = (
 SQLITE_INTEGER_MIN = -(2**63)
 SQLITE_INTEGER_MAX = 2**63 - 1
 
-#: A whole number written as text, read digit by digit instead of through `float()`.
-_WHOLE_DIGITS = re.compile(r"[+-]?\d+")
+#: A whole number written as text, read as an exact decimal rather than as a float.
+#: `float` is the wrong parser for this field twice over: it rounds a long integer to
+#: the nearest double, and it rounds a fractional value *towards* a whole one.
+
+
+def _is_whole_decimal(number: Decimal) -> bool:
+    """Whether the digits the source wrote sit exactly on an integer.
+
+    Read from the decimal's own digits and exponent, never from `to_integral_value()`,
+    which rounds and therefore cannot answer whether rounding was needed. A float has
+    no such digits left to inspect; that is why the text is parsed again here instead
+    of being read through one.
+    """
+
+    _sign, digits, exponent = number.as_tuple()
+    if exponent >= 0:
+        return True
+    fraction = -exponent
+    if fraction >= len(digits):
+        return not any(digits)
+    return not any(digits[-fraction:])
+
+
+def _contract_text_whole(text: str, *, field_name: str) -> tuple[int | None, list[str]]:
+    """A whole number written as text, read exactly, decimal and exponent forms too.
+
+    `Decimal(text)` keeps the digits the source wrote. Nothing here is arithmetic, so
+    the active decimal context cannot round what is read: the only operations are
+    `as_tuple()` over the digits the parser stored and comparisons against the storage
+    range, both exact. `"9007199254740993.0"` is that integer, `"2.5"` is not whole,
+    and `"2.000...0001"` stays fractional instead of arriving as two.
+    """
+
+    if _marker(text):
+        return None, [f"{field_name} is a placeholder ({text}), so no number was read"]
+    try:
+        number = Decimal(text)
+    except InvalidOperation:
+        return None, [f"{field_name} '{text}' is not a number"]
+    if not number.is_finite() or not _is_whole_decimal(number):
+        return None, [f"{field_name} '{text}' is not a whole number"]
+    # The range is compared exactly and *before* any conversion. `int(Decimal("1e1000000000"))`
+    # would try to build a number with a billion digits, which is not a refusal; a
+    # comparison against the boundary costs nothing and answers the same question.
+    if number < SQLITE_INTEGER_MIN or number > SQLITE_INTEGER_MAX:
+        return None, [
+            f"{field_name} {_given(text)} is outside the range this register stores whole "
+            f"numbers in, {SQLITE_INTEGER_MIN} to {SQLITE_INTEGER_MAX}"
+        ]
+    return int(number), []
 
 
 def _shown(value: object) -> str:
@@ -496,11 +545,9 @@ def _contract_whole(value: object, *, field_name: str) -> tuple[int | None, list
     it answers it by changing the number, because the value returned is the rounded one.
 
     So an integer is taken as it stands. A float is a float the source really wrote, and
-    is accepted only when it is finite and already whole - a fractional value is refused
-    rather than truncated. Text is read digit by digit when it is digits, because
-    `int(float(text))` rounds a long catalogue cell exactly as the float path does, and
-    anything else is handed to the float reader so that `2.0` written as text still
-    reads as two and `2.5` is refused instead of becoming two.
+    is accepted only when it is finite and already whole - nothing here claims to recover
+    precision the float lost before it arrived. Text is read as an exact decimal,
+    whichever form the catalogue wrote it in: digits, a decimal point, or an exponent.
     """
 
     if isinstance(value, int):
@@ -513,16 +560,7 @@ def _contract_whole(value: object, *, field_name: str) -> tuple[int | None, list
         text = _text(value)
         if text is None:
             return None, []
-        if _WHOLE_DIGITS.fullmatch(text):
-            return _within_storage(int(text), field_name)
-        number, messages = coerce_float(value, field_name=field_name)
-        if messages:
-            return None, messages
-        if number is None:
-            return None, []
-        if not math.isfinite(number) or not number.is_integer():
-            return None, [f"{field_name} {_shown(value)} is not a whole number"]
-        return _within_storage(int(number), field_name)
+        return _contract_text_whole(text, field_name=field_name)
     return None, [f"{field_name} {_shown(value)} is not a number"]
 
 
