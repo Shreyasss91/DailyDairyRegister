@@ -28,7 +28,7 @@ The current tabular importer registers exactly these five dataset keys:
 | Dataset key | File in this folder | Status |
 |---|---|---|
 | `dtc` | `01_dtc_master_roster.csv` | Blank import template |
-| `general_holiday` | `02_karnataka_general_holidays_2025_2026.csv` | Notification transcription; verify first |
+| `general_holiday` | `02_karnataka_general_holidays_2025_2026.csv` | Notification transcription, cross-checked; accept against your own copy |
 | `activity` | `03_activity_catalogue_blank_import.csv` | Blank import template |
 | `area` | `04_area_master.csv` | Seeded reference rows in import shape |
 | `feeder` | `05_feeder_master.csv` | Seeded reference rows in import shape |
@@ -69,9 +69,10 @@ Keep the supplied feeder string unchanged. The override sets the canonical feede
 ### File: `02_karnataka_general_holidays_2025_2026.csv`
 
 - Contains 19 dates for 2025 and 20 dates for 2026, transcribed from the Karnataka State General Holiday notification/circular references recorded in the source columns and below.
-- **Do not regard this transcription as finally verified.** The copies linked below are hosted by third parties, not official Karnataka government domains. Check the signed notification, Gazette or your office copy before importing/accepting. Check for subsequent Government corrigenda/orders, especially date changes or conditional alternate observance directions.
-- 2025: Government of Karnataka No.DPAR 16 HHL 2024 dated 21-11-2024; source copy: [KEA-hosted 2025 circular PDF](https://kea.co.in/wp-content/uploads/2024/12/Circular-No-68-2024-KARNATAKA-GOVERNMENT-HOLIDAYS-FOR-THE-YEAR-2025.pdf). The CSV transcribes the General Holiday table; it does not claim a Notification-I label for this source.
+- **This transcription has been cross-checked and is still not accepted on your behalf.** Every date, name and printed weekday was read against the Government of Karnataka General Holiday tables, and each of the two notifications was compared across two independent published transcriptions that agree on all 39 rows. The copies linked below are still hosted by third parties rather than an official Karnataka domain, so check the signed notification, Gazette or your office copy, and check for later corrigenda/orders, before you accept the batch. Both notifications carry a note listing the festivals they omit because the date falls on a Sunday or the second/fourth Saturday; those dates are deliberately absent here and must stay absent, because a weekly off is a calendar rule and not a holiday row.
+- 2025: Government of Karnataka No.DPAR 16 HHL 2024 dated 21-11-2024; source copy: [KEA-hosted 2025 circular PDF](https://kea.co.in/wp-content/uploads/2024/12/Circular-No-68-2024-KARNATAKA-GOVERNMENT-HOLIDAYS-FOR-THE-YEAR-2025.pdf). The CSV transcribes the General Holiday table; the copy read for this check was headed Notification-I, and the file does not rest on that label.
 - 2026: Government of Karnataka No.DPAR 16 HHL 2025 dated 17-11-2025, Notification-I; source copy: [2026 notification PDF mirror](https://comply4hr.com/noti/2016/KASAR2025Nov17.pdf).
+- Dates are ISO (`YYYY-MM-DD`). The importer also accepts `DD-MM-YYYY`, so an office copy in that layout imports unchanged, but keep one layout in a file: a mixed file invites a day/month misreading by whoever edits it next.
 - The importer reads `Date`, `Name`, and optional `Description`. The extra calendar-year/notification/source-document columns remain as raw provenance in the staged source row.
 - Description is blank because no owner-approved register wording was supplied. Do not invent Kannada translations or daily wording here.
 - Only General Holidays are included. Restricted Holidays are ordinary working days in this product and must be ignored entirely: do not import, display, classify or add their names/dates.

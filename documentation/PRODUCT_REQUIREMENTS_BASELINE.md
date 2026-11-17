@@ -64,6 +64,25 @@ Holiday register wording:
 - Other General Holidays: `Holiday – [Holiday name]`, unless the user supplies a specific description.
 - Restricted Jayanthis are ignored along with all other Restricted Holidays.
 
+### 4.1.1 The supplied holiday baseline, as checked
+
+The baseline is 39 rows for calendar years 2025 and 2026. It has been read against the Government of Karnataka's own General Holiday tables and holds their dates, weekdays and names, with what is still open named at the end of this section.
+
+What the two notifications say, and what this baseline therefore is:
+
+- 2025 is `No.DPAR 16 HHL 2024`, dated 21.11.2024: 19 dates. 2026 is `No.DPAR 16 HHL 2025`, dated 17.11.2025: 20 dates.
+- Both are headed as the General Holiday table, and both open by naming the weekly offs they stand on top of: all Second and Fourth Saturdays, and all Sundays. The weekly offs are calendar rules of their own, applied by §4, and are deliberately not rows in this file. A General Holiday that falls on a weekly off is not a second row either.
+- Both carry a note listing the festivals they leave out for exactly that reason, e.g. Republic Day and Ugadi in 2025, Maha Shivaratri and Kannada Rajyotsava in 2026. Those dates are absent from the file and must stay absent: adding one would turn a weekly off into a holiday and make the register explain the same closure twice.
+- The same notes name Kodagu-district local holidays and the Restricted Holiday list. Neither is imported, per §4.1. A third-party list that merges the two (Guru Nanak Jayanthi, Huthari Festival) is not the notification.
+- The 2026 notification carries a note on the date of observance for Muslim Government employees. It qualifies a notified date for some staff; it does not create a universal second closure, so it is not a row. The single notified date is what the calendar uses.
+- Every one of the 39 dates has been checked against the weekday its notification prints beside it, so a slip in either the date or the weekday would show as a disagreement rather than pass unnoticed.
+
+What is still open:
+
+- Neither notification was obtained as the signed original or the gazette copy inside this repository. The tables above were read from published copies of the two notifications and cross-checked against two independent transcriptions of each, which agree on every date, name and identifier. That is strong enough to stage and review, and it is not the same as having the original in hand.
+- No corrigendum or later order amending either year was found. A negative is the weakest kind of evidence: absence of a hit is not proof that no amendment exists.
+- Consequently the baseline is **ready for operator review and staging, and is not recorded as an approved baseline** until the operator accepts it against the original they hold. Staging it changes no calendar row; acceptance is the operator's act.
+
 ### 4.2 Monday safety meeting
 
 - Include the safety meeting every Monday, including a Monday that is a holiday or leave date.
@@ -177,7 +196,7 @@ The office roster has been read and reconciled through the import workflow. What
 - Two of the six owner-confirmed assignments disagree with the supplied feeder text: SCD-107 and SCD-108 arrive naming Mandli F-22 GANDHIBAZAAR and are assigned to MRS F-1 OLDTOWN. Both facts are kept and are stored apart; the register reads the canonical assignment. The remaining four agree with the supplied text.
 - A row whose canonical assignment differs from what its supplied text resolves to is announced before acceptance, naming the DTC, the assignment, the assignment's feeder id and the supplied text. The operator reviews the reassignment rather than discovering it afterwards.
 - A batch whose assignment names a feeder the master does not carry is refused, under the existing rule that an error blocks an import. Accepting it would store DTCs with no canonical feeder and leave every feeder's derived capacity short while reporting success. Import the feeder master first.
-- Because the combined cap allows at most three field visits per working day, and a cycle owes one visit per active DTC, one calendar month cannot hold this roster: 113 required against roughly 25 eligible dates. A one-month DTC coverage cycle is refused as `INFEASIBLE` with the capacity named, never truncated to fit. A cycle of two months or more allocates the whole roster.
+- Because the combined cap allows at most three field visits per working day, and a cycle owes one visit per active DTC, one calendar month cannot hold this roster: 113 required against roughly 25 eligible dates. A one-month DTC coverage cycle is refused as `INFEASIBLE` with the capacity named, never truncated to fit. A two-month cycle was then run over 2026-01-01 to 2026-02-28 and allocated the whole roster: 113 visits for 113 distinct DTCs, one each, across 59 day rows, with no visit on a non-working day. That is evidence for those two months, not a general claim about every longer cycle: what a cycle of three months or more allocates has not been run, and the paragraph above is the only reason to expect it to hold.
 
 ## 9. Feeder master, weighting and scheduling
 
