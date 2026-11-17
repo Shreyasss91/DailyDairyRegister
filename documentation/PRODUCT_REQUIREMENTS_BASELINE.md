@@ -1165,9 +1165,20 @@ answers is "what did the office approve", not "what would the platform arrange t
   `finalisation_unknown`; there is no fallback to the month's latest version, because a
   fallback is how a download of one document delivers another.
 - Every stored date is present, in the stored order, including Sundays, General Holidays,
-  leave days and dates carrying nothing at all. A date with no visit reads blank rather
-  than disappearing, and a date with several visits or several entries keeps all of them,
-  in the order they were stored.
+  leave days and dates carrying nothing at all. A date with no visit reads as the
+  register's own mark rather than disappearing, and a date with several visits or several
+  entries keeps all of them, in the order they were stored.
+- Each date is reduced to one Activity cell, built by `DocumentDay.activity_text` in
+  `application/export.py`, and that one value is what both the workbook and the page
+  render. The order is fixed: field visits, then activities and other entries, then the
+  calendar reasons, then the recorded warnings; each group keeps its stored order and the
+  separator is a comma and a space. A field visit is printed as its name and its asset
+  identifier, because a visit without the installation it names is not traceable; a stored
+  Kannada name or title is printed beside its English text and is never translated,
+  transliterated or dropped. A calendar reason is labelled `Calendar:` and a warning
+  `Warning:` so neither can be mistaken for work performed. A date with nothing recorded
+  reads `—`. Because the value is computed once and consumed twice, the two documents
+  cannot disagree about what a date says; a test compares them row by row.
 - Labels are formatting, not content: a day kind, an entry kind and a visit provenance are
   rendered through fixed label tables, and the stored token is never rewritten in the
   record. Nothing is filled in where the record holds nothing, and no column is calculated
@@ -1178,16 +1189,21 @@ answers is "what did the office approve", not "what would the platform arrange t
 - `GET /api/finalisations/{finalisation_id}/export.xlsx` returns a real XLSX file with the
   OOXML media type and a filename built from the month and the issued sequence only, so
   the header carries no user-supplied text and no path separator.
-- Two sheets. `Register` holds one row per stored date with its weekday, day kind,
-  working-day flag, both reason lists, its visits, its activities and entries, its
-  warnings and its lock state; heading rows repeat on every printed page, the date column
-  is frozen, and the sheet is set up for A4 landscape. `Issued version` identifies the
-  document: month, register, issued version, the revision it closed, the finalisation id,
-  when it was closed, whether it is in force or superseded, the content fingerprint, the
-  master version at finalisation, what it corrects or supersedes, the locked dates, the
-  operator's note, and the findings acknowledged when it was issued.
+- Two sheets. `Register` is the office's register: a centred heading, then exactly three
+  columns — `Sl No.`, `Date`, `Activity` — and one row per stored calendar date, with the
+  serial restarting at 1 in every monthly workbook. The `Activity` cell is the same value
+  the printed page shows, so the two documents never disagree; a date cell is a real date
+  value displayed `yyyy-mm-dd`, and an empty date keeps its row and reads `—`. Nothing is
+  placed beside those three columns. `Metadata` identifies the document: month, register,
+  issued version, the revision it closed, the finalisation id, when it was closed, whether
+  it is in force or superseded, the content fingerprint, the master version at
+  finalisation, what it corrects or supersedes, the locked dates, the operator's note, the
+  findings acknowledged when it was issued, the master readiness measured at finalisation,
+  the month's recorded and declared obligations, the stored evidence, and how many of its
+  visits were committed before generation rather than allocated.
 - A stored string that begins with `=`, `+`, `-` or `@` is written as text rather than as a
-  formula, so an imported activity title or a note is data and never code.
+  formula, so an imported activity title or a note is data and never code. The joined
+  Activity cell is subject to the same rule.
 - The workbook's own metadata timestamps are taken from the record rather than from the
   clock, so the same issued version downloads as the same file.
 
@@ -1196,15 +1212,26 @@ answers is "what did the office approve", not "what would the platform arrange t
 - `GET /finalisations/{finalisation_id}/print` returns a standalone document, not a view
   inside the application: it has no navigation, no tab bar and no application chrome, so
   printing cannot carry the tool's interface into the register.
-- The operator starts printing with a button on the page. The page never opens the print
-  dialog on arrival, because a document that interrupts before it has been read is a
-  document nobody checks.
-- `@media print` hides the toolbar and the controls, drops the screen's page frame, keeps a
-  date's block from splitting across pages where the engine allows, and states A4 portrait
-  with print margins. The browser's own print dialog is what produces the PDF; the tool
-  writes no PDF itself.
-- Jinja autoescaping is left on and is the whole escaping story: a stored title, holiday
-  name, reason or note is data on this page, so no stored text can become markup.
+- The register is headed the way an office file is headed: `DAILY DAIRY REGISTER`, then the
+  month and year in capitals, both centred, and nothing else. The identification of the
+  issued version is not in the masthead.
+- The register table has exactly three columns — `Sl No.`, `Date`, `Activity` — and exactly
+  one row per stored calendar date, in the stored order. There is no second table, no daily
+  section and no per-visit or per-entry heading: a date's items are joined into its one
+  cell. The column headings repeat on every content page, a row is kept off a page break
+  where the engine allows, and a long activity description wraps rather than being clipped.
+- The identification is one page of its own, started by an explicit page break after the
+  last date row, so it can never begin halfway down the final page of dates. It carries the
+  register, the month, the issued version and its standing, the revision closed, the
+  finalisation id, when it was closed, the content fingerprint, the master version at
+  finalisation, the month and allocator status, the correction relationship where one
+  exists, the locked dates, how many field visits were recorded and how they were placed,
+  the operator's note, the findings acknowledged when the version was issued, the master
+  readiness measured at finalisation, the recorded and declared obligations, and the stored
+  evidence. It is printed once; the metadata is not repeated under the last page of dates.
+- `@media print` hides the toolbar and the controls, drops the screen's page frame, and
+  states A4 portrait with print margins. The browser's own print dialog remains one way to
+  produce a PDF; §26.7 describes the PDF the tool now writes itself.
 
 ### 26.4 Bulk monthly package
 

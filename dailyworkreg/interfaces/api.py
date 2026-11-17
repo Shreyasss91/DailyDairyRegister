@@ -1130,10 +1130,15 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             "excel/: one XLSX workbook for each included month.",
             (
                 "print-ready/: one combined HTML document with a separate section "
-                "for every included month. Open it in a browser, click "
-                "'Print / Save as PDF', then choose 'Save as PDF'."
+                "for every included month. Open it in a browser and click "
+                "'Print / Save as PDF', which opens your browser's own print dialog; "
+                "choose 'Save as PDF' there."
             ),
-            "The application does not generate PDF files itself; PDF output uses browser printing.",
+            (
+                "The combined document is print-ready HTML rather than a generated PDF. "
+                "For a PDF of every issued month in one download, use "
+                "'Download PDFs — all months'."
+            ),
             "Only each month's latest issued version is included. Drafts and unfinalised months are never exported.",
             "",
             "Included issued versions:",

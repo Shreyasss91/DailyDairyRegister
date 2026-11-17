@@ -15,6 +15,9 @@ What it adds is presentation and nothing else:
     blanked or mapped onto a different one.
 *   Nothing is filled in. A blank name stays blank, an empty date stays an empty date, and
     a day with no visits keeps its place in the register.
+*   Each date is also reduced to the one Activity cell the register prints: every item
+    recorded against that date, joined in one fixed order. Both the workbook and the
+    printed page read that same cell, so the two cannot disagree about what a date says.
 
 Read-only in the strict sense: the functions here issue no statement that writes, and a
 test compares the whole finalisation record before and after an export.
@@ -56,6 +59,22 @@ PROVENANCE_LABELS = {
     "allocated": "Allocated",
 }
 
+#: What a date with nothing recorded shows in the register. An em dash is a full stop
+#: rather than a blank: a blank cell reads as an omission, and the register never omits a
+#: date.
+EMPTY_DAY_TEXT = "\u2014"
+
+#: The order in which one date's recorded items are written into its single Activity cell.
+#: Fixed rather than incidental, so the same issued version always reads the same way: the
+#: field visits that were scheduled first, then the activities and other entries recorded
+#: against the date, then the calendar reasons that explain the date, then the warnings the
+#: draft carried. Nothing is dropped for being unusual, and nothing is added for a date
+#: that recorded nothing.
+DISPLAY_ITEM_ORDER = ("visits", "entries", "reasons", "warnings")
+
+#: The separator between two items of one date, as the register prints them.
+ACTIVITY_SEPARATOR = ", "
+
 
 @dataclass(frozen=True)
 class DocumentVisit:
@@ -95,6 +114,43 @@ class DocumentDay:
     entries: tuple[DocumentEntry, ...]
     locked: bool
 
+    @property
+    def items(self) -> tuple[str, ...]:
+        """Everything this date recorded, as the register prints it, in one fixed order.
+
+        The order is :data:`DISPLAY_ITEM_ORDER`, and each kind keeps the order the record
+        stored it in, so the same issued version always renders identically. Identifiers
+        are kept beside a name because a field visit without the asset it names is not
+        traceable to an installation, and a stored Kannada name is printed beside its
+        English one rather than translated, transliterated or left out.
+        """
+
+        items: list[str] = []
+        for name in DISPLAY_ITEM_ORDER:
+            if name == "visits":
+                items.extend(_visit_item(visit) for visit in self.visits)
+            elif name == "entries":
+                items.extend(_entry_item(entry) for entry in self.entries)
+            elif name == "reasons":
+                items.extend(f"Calendar: {reason}" for reason in self.reasons_en)
+                items.extend(f"Calendar: {reason}" for reason in self.reasons_kn)
+            elif name == "warnings":
+                items.extend(_warning_item(*warning) for warning in self.warnings)
+        return tuple(item for item in items if item)
+
+    @property
+    def activity_text(self) -> str:
+        """The one Activity cell of this date: its items, or an em dash when it has none."""
+
+        items = self.items
+        return ACTIVITY_SEPARATOR.join(items) if items else EMPTY_DAY_TEXT
+
+    @property
+    def visit_provenance(self) -> tuple[str, ...]:
+        """The provenance of each visit on this date, for the document's own summary."""
+
+        return tuple(visit.provenance for visit in self.visits)
+
 
 @dataclass(frozen=True)
 class RegisterDocument:
@@ -132,6 +188,41 @@ class RegisterDocument:
     @property
     def standing_label(self) -> str:
         return "In force" if self.is_latest else "Superseded by a later version"
+
+    @property
+    def heading_line(self) -> str:
+        """The month and year a printed register is headed with, in capitals."""
+
+        return self.month_label.upper()
+
+    @property
+    def visit_count(self) -> int:
+        return sum(len(day.visits) for day in self.days)
+
+    @property
+    def recorded_provenance(self) -> tuple[tuple[str, int], ...]:
+        """How many of this month's visits carry each provenance, most frequent first.
+
+        A count of what the record stored, never a re-derivation: the register itself
+        prints only the asset a visit names, so the distinction between a visit that was
+        committed before generation and one the allocator placed is kept here. A
+        provenance the labels do not know is counted under its own stored word rather
+        than folded into a known one.
+        """
+
+        counts: dict[str, int] = {}
+        for day in self.days:
+            for provenance in day.visit_provenance:
+                counts[provenance] = counts.get(provenance, 0) + 1
+        return tuple(
+            sorted(
+                (
+                    (PROVENANCE_LABELS.get(word, word), count)
+                    for word, count in counts.items()
+                ),
+                key=lambda item: (-item[1], item[0]),
+            )
+        )
 
 
 def document(connection: sqlite3.Connection, finalisation_id: str) -> RegisterDocument:
@@ -235,6 +326,31 @@ def _four(item: Any) -> tuple[str, str, str, str | None]:
     head = [_text(parts[0]), _text(parts[1]), _text(parts[2])]
     tail = parts[3]
     return head[0], head[1], head[2], (None if tail in (None, "") else _text(tail))
+
+
+def _visit_item(visit: DocumentVisit) -> str:
+    """One field visit as the register prints it: the name, then the asset it names."""
+
+    text = f"{visit.name_en} [{visit.asset_id}]".strip()
+    return f"{text} ({visit.name_kn})" if visit.name_kn else text
+
+
+def _entry_item(entry: DocumentEntry) -> str:
+    """One activity or other entry, with its stored Kannada title kept beside it."""
+
+    text = entry.title_en.strip()
+    if entry.title_kn:
+        text = f"{text} ({entry.title_kn})"
+    return text
+
+
+def _warning_item(constraint: str, detail: str) -> str:
+    """A recorded warning, labelled so it cannot be mistaken for an activity."""
+
+    detail = detail.strip()
+    if not constraint:
+        return f"Warning: {detail}" if detail else ""
+    return f"Warning: {detail} [{constraint}]" if detail else f"Warning [{constraint}]"
 
 
 def _pairs(value: Any) -> tuple[tuple[str, Any], ...]:

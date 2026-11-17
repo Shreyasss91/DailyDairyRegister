@@ -1,18 +1,25 @@
-"""Exporting an issued month: the workbook and the print view read one stored record.
+"""Exporting an issued month: the workbook and the printed page read one stored record.
 
 Both exports are proved against the snapshot the finalisation wrote, not against a fresh
-generation: the tests build a register, close a month, then compare every cell and every
-day section with ``month_finalisation.content_json``. They then change the live master
-data, export again, and require the document to be unchanged, because a register issued in
+generation: the tests build a register, close a month, then compare every row of the
+register with ``month_finalisation.content_json``. They then change the live master data,
+export again, and require the document to be unchanged, because a register issued in
 November must still read as it was approved after the office has imported more masters.
 
-Nothing here asserts incidental formatting. A test that pinned a column width would fail
-on a change that made the document better, so widths, fonts and page setup are checked only
+The document itself is deliberately small: three columns, one row per calendar date, and
+the identification moved to a page of its own. So the tests are about exactly that — that
+a date is never dropped, that a date with several things on it stays one row, that the
+items of one date are joined in the one order the record states, and that nothing which
+identifies the issued version has been lost with the columns that used to hold it.
+
+Nothing here asserts incidental formatting. A test that pinned a column width would fail on
+a change that made the document better, so widths, fonts and page setup are checked only
 for being present.
 """
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import date
 from io import BytesIO
@@ -31,24 +38,18 @@ from dailyworkreg.infrastructure.sqlite import calendar_records as cal
 from dailyworkreg.infrastructure.sqlite import masters, revision_state
 from dailyworkreg.infrastructure.sqlite.database import open_database
 from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from dailyworkreg.interfaces import documents
 from dailyworkreg.interfaces.api import create_app
 from dailyworkreg.interfaces.documents import XLSX_MEDIA_TYPE
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
-XLSX_HEADER_ROW = 5
-XLSX_REGISTER_COLUMNS = {
-    "date": 1,
-    "weekday": 2,
-    "kind": 3,
-    "working": 4,
-    "reasons_en": 5,
-    "reasons_kn": 6,
-    "visits": 7,
-    "entries": 8,
-    "warnings": 9,
-    "locked": 10,
-}
+XLSX_HEADER_ROW = documents.REGISTER_HEADER_ROW
+XLSX_REGISTER_HEADERS = ("Sl No.", "Date", "Activity")
+
+#: What an empty date says. Spelled out in the tests rather than imported, so a change to
+#: the register's own choice of mark has to be a deliberate one.
+EMPTY = "\u2014"
 
 
 @pytest.fixture()
@@ -160,24 +161,25 @@ def workbook(client: TestClient, finalisation_id: str):
     return answer, load_workbook(BytesIO(answer.content))
 
 
-def register_rows(workbook) -> list[dict[str, object]]:
-    sheet = workbook["Register"]
+def register_rows(book) -> list[dict[str, object]]:
+    """The register sheet as rows, keyed by the headings it carries."""
+
+    sheet = book[documents.REGISTER_SHEET]
+    headings = [
+        sheet.cell(row=XLSX_HEADER_ROW, column=index).value
+        for index in range(1, 4)
+    ]
+    assert tuple(headings) == XLSX_REGISTER_HEADERS
     rows = []
-    for values in sheet.iter_rows(min_row=XLSX_HEADER_ROW + 1, values_only=True):
+    for values in sheet.iter_rows(
+        min_row=XLSX_HEADER_ROW + 1, max_col=3, values_only=True
+    ):
         if not any(value not in (None, "") for value in values):
             continue
         rows.append(
-            {name: values[column - 1] for name, column in XLSX_REGISTER_COLUMNS.items()}
+            {"serial": values[0], "date": values[1], "activity": values[2]}
         )
     return rows
-
-
-def head(book) -> list[tuple]:
-    """The header and the first rows, as values, for comparing two exports as documents."""
-
-    return list(
-        book["Register"].iter_rows(min_row=1, max_row=XLSX_HEADER_ROW, values_only=True)
-    )
 
 
 def stamped(row: dict[str, object]) -> str:
@@ -187,13 +189,70 @@ def stamped(row: dict[str, object]) -> str:
     return value if isinstance(value, str) else value.strftime("%Y-%m-%d")
 
 
-def day_sections(markup: str) -> list[str]:
-    """Each date's block of the print page, so a day can be examined on its own."""
+def printed_rows(markup: str) -> list[tuple[str, str, str]]:
+    """Every row of the printed register, as (serial, date, activity)."""
 
-    parts = markup.split('<section class="day">')
-    return parts[1:]
+    body = markup.split('<table class="register">')[1].split("</table>")[0]
+    body = body.split("<tbody>")[1]
+    rows = []
+    for block in body.split("<tr>")[1:]:
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", block, flags=re.S)
+        if len(cells) != 3:
+            continue
+        rows.append(tuple(cell.strip() for cell in cells))
+    return rows
 
 
+def printed_table(markup: str) -> str:
+    """The register table alone, so its columns can be examined without the rest."""
+
+    return markup.split('<table class="register">')[1].split("</table>")[0]
+
+
+def expected_activity(row: dict) -> str:
+    """What one stored date must read as, worked out from the record alone.
+
+    This mirrors the documented rule — visits, then entries, then calendar reasons, then
+    warnings, joined with a comma and a space, and an em dash when the date holds
+    nothing — rather than calling the code under test, so a change of order or separator
+    has to be made deliberately in two places.
+    """
+
+    items: list[str] = []
+    for visit in row["visits"]:
+        text = f"{visit[2]} [{visit[0]}]"
+        if len(visit) > 3 and visit[3]:
+            text += f" ({visit[3]})"
+        items.append(text)
+    for entry in row["entries"]:
+        text = entry[2]
+        if len(entry) > 3 and entry[3]:
+            text += f" ({entry[3]})"
+        items.append(text)
+    items.extend(f"Calendar: {reason}" for reason in row["reasons_en"])
+    items.extend(f"Calendar: {reason}" for reason in row["reasons_kn"])
+    for constraint, detail in row["warnings"]:
+        if constraint and detail:
+            items.append(f"Warning: {detail} [{constraint}]")
+        elif constraint:
+            items.append(f"Warning [{constraint}]")
+        elif detail:
+            items.append(f"Warning: {detail}")
+    items = [item for item in items if item]
+    return ", ".join(items) if items else EMPTY
+
+
+def head(book) -> list[tuple]:
+    """The heading rows, as values, for comparing two exports as documents."""
+
+    return list(
+        book[documents.REGISTER_SHEET].iter_rows(
+            min_row=1, max_row=XLSX_HEADER_ROW, max_col=3, values_only=True
+        )
+    )
+
+
+# --- the mixed register export, kept as it was -----------------------------
 
 
 def test_bulk_export_contains_each_month_workbook_and_one_combined_print_document(client, db):
@@ -225,7 +284,7 @@ def test_bulk_export_contains_each_month_workbook_and_one_combined_print_documen
 
         for path in (november_xlsx, december_xlsx):
             book = load_workbook(BytesIO(package.read(path)), read_only=True)
-            assert book.sheetnames == ["Register", "Issued version"]
+            assert book.sheetnames == ["Register", "Metadata"]
             book.close()
 
         markup = package.read(combined_html).decode("utf-8")
@@ -262,8 +321,8 @@ def test_bulk_export_uses_only_issued_months(client, db):
         markup_name = next(name for name in names if name.endswith("-combined.html"))
         markup = package.read(markup_name).decode("utf-8")
         assert markup.count('<article class="sheet">') == 1
-        assert "November 2026" in markup
-        assert "December 2026" not in markup
+        assert "NOVEMBER 2026" in markup
+        assert "DECEMBER 2026" not in markup
         instructions = package.read("README.txt").decode("utf-8")
         assert "2026-12" in instructions
         assert "omitted because they have no issued finalisation" in instructions
@@ -288,7 +347,20 @@ def test_the_workbook_is_a_real_xlsx_file_for_the_requested_version(client, db):
     assert answer.headers["content-type"].startswith(XLSX_MEDIA_TYPE)
     assert "attachment" in answer.headers["content-disposition"]
     assert answer.content[:2] == b"PK"  # a real zip container, not a placeholder
-    assert book.sheetnames == ["Register", "Issued version"]
+    assert book.sheetnames == ["Register", "Metadata"]
+
+
+def test_the_register_sheet_carries_exactly_three_columns(client, db):
+    _, record = issued(db, client)
+
+    _, book = workbook(client, record["finalisation_id"])
+    sheet = book[documents.REGISTER_SHEET]
+
+    headings = [sheet.cell(row=XLSX_HEADER_ROW, column=index).value for index in (1, 2, 3)]
+    assert headings == ["Sl No.", "Date", "Activity"]
+    # Nothing else was left beside them: the columns that used to hold weekday, kind,
+    # reasons, visits and warnings are gone, and their content moved into the one cell.
+    assert sheet.cell(row=XLSX_HEADER_ROW, column=4).value in (None, "")
 
 
 def test_every_stored_date_reaches_the_workbook_in_the_stored_order(client, db):
@@ -301,26 +373,35 @@ def test_every_stored_date_reaches_the_workbook_in_the_stored_order(client, db):
     assert len(stored_days) == 30  # a whole calendar month, not only the working days
 
 
-def test_a_date_with_nothing_on_it_keeps_its_place_in_the_workbook(client, db):
+def test_the_serial_numbers_run_from_one_without_a_gap(client, db):
+    _, record = issued(db, client)
+
+    _, book = workbook(client, record["finalisation_id"])
+    rows = register_rows(book)
+
+    assert [row["serial"] for row in rows] == list(
+        range(1, len(record["content"]["rows"]) + 1)
+    )
+
+
+def test_a_date_with_nothing_on_it_keeps_its_place_and_says_so(client, db):
     _, record = issued(db, client)
     stored_rows = record["content"]["rows"]
-    empty_day = next(day for day, row in stored_rows.items() if not row["visits"])
+    empty_day = next(
+        day
+        for day, row in stored_rows.items()
+        if not row["visits"] and not row["entries"] and not row["reasons_en"]
+    )
     _, book = workbook(client, record["finalisation_id"])
 
     row = next(item for item in register_rows(book) if stamped(item) == empty_day)
 
-    assert not row["visits"]  # blank, because the record holds no visits
-    assert row["kind"] == finalise_kind_label(stored_rows[empty_day]["kind"])
-    assert row["working"] == ("Yes" if stored_rows[empty_day]["working"] else "No")
+    # Present, in its place, and marked with the register's own em dash rather than left
+    # blank so that a reader cannot mistake the row for a printing fault.
+    assert row["activity"] == EMPTY
 
 
-def finalise_kind_label(kind: str) -> str:
-    from dailyworkreg.application.export import DAY_KIND_LABELS
-
-    return DAY_KIND_LABELS.get(kind, kind)
-
-
-def test_every_stored_value_is_what_the_workbook_shows(client, db):
+def test_every_stored_value_is_what_the_register_row_shows(client, db):
     _, record = issued(db, client)
     stored_rows = record["content"]["rows"]
 
@@ -328,28 +409,28 @@ def test_every_stored_value_is_what_the_workbook_shows(client, db):
     rows = {stamped(row): row for row in register_rows(book)}
 
     for day, stored_row in stored_rows.items():
-        row = rows[day]
-        assert row["weekday"] == date.fromisoformat(day).strftime("%A")
-        assert row["kind"] == finalise_kind_label(stored_row["kind"])
-        assert (row["reasons_en"] or "") == "\n".join(stored_row["reasons_en"])
-        assert (row["reasons_kn"] or "") == "\n".join(stored_row["reasons_kn"])
-        assert (row["warnings"] or "") == "\n".join(
-            f"{item[0]}: {item[1]}" for item in stored_row["warnings"]
-        )
-        visits = row["visits"].split("\n") if row["visits"] else []
-        assert len(visits) == len(stored_row["visits"])
-        for line, visit in zip(visits, stored_row["visits"], strict=True):
-            # The name, the id and the provenance all come from the record.
-            assert visit[2] in line
-            assert visit[0] in line
-            assert visit[1] in line.lower() or "Committed" in line or "Allocated" in line
-        entries = row["entries"].split("\n") if row["entries"] else []
-        assert len(entries) == len(stored_row["entries"])
-        for line, entry in zip(entries, stored_row["entries"], strict=True):
-            assert entry[2] in line
+        assert rows[day]["activity"] == expected_activity(stored_row)
 
 
-def test_several_activities_on_one_date_are_all_kept(client, db):
+def test_every_stored_visit_reaches_the_cell_with_its_identifier(client, db):
+    _, record = issued(db, client)
+    stored_rows = record["content"]["rows"]
+    visited = {day: row for day, row in stored_rows.items() if row["visits"]}
+    assert visited, "the fixture is meant to visit at least one DTC"
+
+    _, book = workbook(client, record["finalisation_id"])
+    rows = {stamped(row): row for row in register_rows(book)}
+
+    for day, stored_row in visited.items():
+        cell = rows[day]["activity"]
+        for visit in stored_row["visits"]:
+            # The name and the asset id both survive: a visit without its identifier is
+            # not traceable to an installation.
+            assert visit[2] in cell
+            assert f"[{visit[0]}]" in cell
+
+
+def test_several_activities_on_one_date_share_one_row_and_one_cell(client, db):
     run_id = stored(db)
     # Two entries on one date, so "one row per date" cannot silently drop the second.
     for title in ("Pole inspection", "Meter reading"):
@@ -362,22 +443,70 @@ def test_several_activities_on_one_date_are_all_kept(client, db):
     assert len(fifth["entries"]) >= 2
 
     _, book = workbook(client, record["finalisation_id"])
-    row = next(item for item in register_rows(book) if stamped(item) == "2026-11-05")
-    lines = row["entries"].split("\n")
+    rows = [item for item in register_rows(book) if stamped(item) == "2026-11-05"]
 
-    assert len(lines) == len(fifth["entries"])
-    assert "Pole inspection" in row["entries"]
-    assert "Meter reading" in row["entries"]
+    assert len(rows) == 1
+    assert "Pole inspection" in rows[0]["activity"]
+    assert "Meter reading" in rows[0]["activity"]
+    assert rows[0]["activity"] == expected_activity(fifth)
 
 
-def test_the_issued_version_sheet_identifies_this_version(client, db):
+def test_a_kannada_description_is_kept_beside_its_english_one(client, db):
+    run_id = stored(db)
+    edit = add_entry(
+        db,
+        run_id,
+        day=date(2026, 11, 6),
+        kind="activity",
+        title_en="Line inspection",
+        title_kn="ಲೈನ್ ಪರಿಶೀಲನೆ",
+    )
+    _, record = issued(db, client, run_id=edit.run_id)
+
+    _, book = workbook(client, record["finalisation_id"])
+    row = next(item for item in register_rows(book) if stamped(item) == "2026-11-06")
+
+    # Printed as stored and beside the English text, never translated or transliterated.
+    assert "Line inspection" in row["activity"]
+    assert "ಲೈನ್ ಪರಿಶೀಲನೆ" in row["activity"]
+    assert row["activity"] == expected_activity(record["content"]["rows"]["2026-11-06"])
+
+
+def test_a_calendar_reason_and_a_warning_stay_visible_in_the_cell(client, db):
+    _, record = issued(db, client)
+    stored_rows = record["content"]["rows"]
+    with_reasons = {
+        day: row for day, row in stored_rows.items() if row["reasons_en"]
+    }
+    assert with_reasons, "November 2026 is meant to carry at least one holiday"
+
+    _, book = workbook(client, record["finalisation_id"])
+    rows = {stamped(row): row for row in register_rows(book)}
+
+    for day, stored_row in with_reasons.items():
+        cell = rows[day]["activity"]
+        for reason in stored_row["reasons_en"]:
+            # Labelled, so a calendar reason cannot be misread as an activity performed.
+            assert f"Calendar: {reason}" in cell
+
+    warned = {
+        day: row for day, row in stored_rows.items() if row["warnings"]
+    }
+    for day, stored_row in warned.items():
+        cell = rows[day]["activity"]
+        for constraint, detail in stored_row["warnings"]:
+            assert detail in cell
+            assert f"[{constraint}]" in cell
+
+
+def test_the_metadata_sheet_identifies_this_version(client, db):
     _, record = issued(db, client, finalise={"note": "November closed"})
 
     _, book = workbook(client, record["finalisation_id"])
-    sheet = book["Issued version"]
+    sheet = book[documents.METADATA_SHEET]
     values = {
         sheet.cell(row=row, column=1).value: sheet.cell(row=row, column=2).value
-        for row in range(3, 20)
+        for row in range(3, 22)
     }
 
     assert values["Issued version"] == record["sequence"] == 1
@@ -388,17 +517,58 @@ def test_the_issued_version_sheet_identifies_this_version(client, db):
     assert values["Master version at finalisation"] == record["master_version"]
     assert values["Note"] == "November closed"
     assert values["Month"] == "November 2026"
+    assert values["Standing"] == "In force"
+
+
+def test_the_metadata_sheet_keeps_the_findings_and_readiness_of_the_issue(client, db):
+    _, record = issued(db, client)
+
+    _, book = workbook(client, record["finalisation_id"])
+    text = " ".join(
+        str(value)
+        for row in book[documents.METADATA_SHEET].iter_rows(values_only=True)
+        for value in row
+        if value is not None
+    )
+
+    assert "Master readiness measured at finalisation" in text
+    assert "Recorded obligations" in text
+    # Every readiness item the record holds is named on the sheet.
+    for item in record["readiness"]:
+        assert item["label"] in text
+
+
+def test_the_metadata_sheet_counts_how_the_visits_were_placed(client, db):
+    _, record = issued(db, client)
+
+    _, book = workbook(client, record["finalisation_id"])
+    values = {
+        (sheet_row[0], sheet_row[1])
+        for sheet_row in book[documents.METADATA_SHEET].iter_rows(
+            min_row=1, max_col=2, values_only=True
+        )
+    }
+    visits = sum(len(row["visits"]) for row in record["content"]["rows"].values())
+    allocated = sum(
+        1
+        for row in record["content"]["rows"].values()
+        for visit in row["visits"]
+        if visit[1] == "allocated"
+    )
+
+    assert ("Allocated", allocated) in values
+    assert allocated <= visits
 
 
 def test_the_workbook_is_set_up_to_print(client, db):
     _, record = issued(db, client)
 
     _, book = workbook(client, record["finalisation_id"])
-    sheet = book["Register"]
+    sheet = book[documents.REGISTER_SHEET]
 
     assert sheet.print_title_rows.replace("$", "") == f"{XLSX_HEADER_ROW}:{XLSX_HEADER_ROW}"
     assert sheet.freeze_panes  # the headings stay on screen while scrolling
-    assert sheet.page_setup.orientation == "landscape"
+    assert sheet.page_setup.orientation == "portrait"
     assert int(sheet.page_setup.paperSize) == 9  # A4
 
 
@@ -425,43 +595,129 @@ def test_the_filename_is_safe_and_says_which_version_it_is(client, db):
     assert "-v2.xlsx" in second_name
 
 
-# --- the print view --------------------------------------------------------
+# --- the printed register --------------------------------------------------
 
 
-def test_the_print_page_carries_every_stored_date_and_its_content(client, db):
+def test_the_printed_register_carries_exactly_three_columns(client, db):
     _, record = issued(db, client)
 
-    answer = client.get(f"/finalisations/{record['finalisation_id']}/print")
+    markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
+    table = printed_table(markup)
 
-    assert answer.status_code == 200
-    assert answer.headers["content-type"].startswith("text/html")
-    sections = day_sections(answer.text)
-    assert len(sections) == len(record["content"]["rows"]) == 30
+    head_block = table.split("<thead>")[1].split("</thead>")[0]
+    headings = re.findall("<th[^>]*>([^<]*)</th>", head_block)
+    assert [item.strip() for item in headings] == ["Sl No.", "Date", "Activity"]
+    # Exactly one column definition per heading, so nothing else can be printed beside
+    # them: no weekday, no status, no provenance and no asset type.
+    assert table.count("<col ") == 3
+
+
+def test_the_month_is_headed_centrally_and_named_in_capitals(client, db):
+    _, record = issued(db, client)
+
+    markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
+    head = markup.split('<header class="register-head">')[1].split("</header>")[0]
+
+    assert "Daily Dairy Register" in head
+    assert "NOVEMBER 2026" in head
+    # The heading is the whole of the masthead: the register identifies itself on its own
+    # page rather than in the corner of the first one.
+    assert "Issued version" not in head
+    assert record["finalisation_id"] not in head
+    assert "text-align: center" in markup.split("header.register-head {")[1].split("}")[0]
+
+
+def test_every_stored_date_is_printed_exactly_once_in_order(client, db):
+    _, record = issued(db, client)
+
+    markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
+    rows = printed_rows(markup)
+
+    stored_days = list(record["content"]["rows"])
+    assert [row[1] for row in rows] == stored_days
+    assert len(rows) == len(set(stored_days)) == 30
+    assert [row[0] for row in rows] == [str(index) for index in range(1, 31)]
+
+
+def test_each_printed_row_shows_what_its_date_recorded(client, db):
+    _, record = issued(db, client)
+
+    markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
+    rows = {row[1]: row[2] for row in printed_rows(markup)}
+
     for day, stored_row in record["content"]["rows"].items():
-        block = next(item for item in sections if f'class="date">{day}<' in item)
-        for visit in stored_row["visits"]:
-            assert visit[2] in block  # the stored English name
-            assert visit[0] in block  # the stored asset id
-        for entry in stored_row["entries"]:
-            assert entry[2] in block or entry[2] == ""
-        if not stored_row["visits"]:
-            assert "No field visits recorded." in block
-        if not stored_row["entries"]:
-            assert "No activities or entries recorded." in block
+        assert rows[day] == expected_activity(stored_row)
 
 
-def test_the_print_page_identifies_the_issued_version_it_shows(client, db):
+def test_a_date_with_several_things_on_it_is_still_one_printed_row(client, db):
+    run_id = stored(db)
+    for title in ("Pole inspection", "Meter reading"):
+        edit = add_entry(
+            db, run_id, day=date(2026, 11, 5), kind="activity", title_en=title
+        )
+        run_id = edit.run_id
+    _, record = issued(db, client, run_id=run_id)
+
+    markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
+    fifth = [row for row in printed_rows(markup) if row[1] == "2026-11-05"]
+
+    assert len(fifth) == 1
+    cell = fifth[0][2]
+    assert "Pole inspection" in cell
+    assert "Meter reading" in cell
+    assert ", " in cell
+
+
+def test_the_identification_page_starts_on_a_page_of_its_own(client, db):
+    _, record = issued(db, client, finalise={"note": "November closed"})
+
+    markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
+    after_table = markup.split('<table class="register">')[1].split("</table>")[1]
+    metadata = markup.split('<section class="metadata">')[1]
+    rules = markup.split("section.metadata {")
+
+    # The metadata follows the last date row rather than being mixed into the register,
+    # and the page break is explicit in both spellings the engines honour.
+    assert after_table.strip().startswith('<section class="metadata">')
+    assert metadata.index("Issued version identification") < metadata.index(
+        record["finalisation_id"]
+    )
+    assert any("break-before: page" in rule[: rule.find("}")] for rule in rules[1:])
+    assert any("page-break-before: always" in rule[: rule.find("}")] for rule in rules[1:])
+    # Metadata is on that page once, not repeated as a footer under the last dates.
+    assert markup.count(record["fingerprint"]) == 1
+    assert markup.count(record["finalisation_id"]) == 1
+
+
+def test_the_identification_page_keeps_every_recorded_identity(client, db):
     _, record = issued(db, client, finalise={"note": "November closed"})
 
     markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
 
-    assert "Issued version 1 of November 2026" in markup
-    assert markup.count("Back to the tool") == 1
-    assert record["finalisation_id"] in markup
+    assert "Issued version" in markup
     assert record["fingerprint"] in markup
     assert str(record["master_version"]) in markup
-    assert "Note recorded when this version was issued: November closed" in markup
+    assert "Revision closed" in markup
+    assert "Note recorded when this version was issued" in markup
+    assert "November closed" in markup
     assert "In force" in markup
+
+
+def test_a_long_description_is_wrapped_rather_than_cut_off(client, db):
+    run_id = stored(db)
+    long_title = "Inspection of the 11 kV feeder along the industrial estate road " * 3
+    edit = add_entry(
+        db, run_id, day=date(2026, 11, 7), kind="activity", title_en=long_title.strip()
+    )
+    _, record = issued(db, client, run_id=edit.run_id)
+
+    markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
+    cell = next(row[2] for row in printed_rows(markup) if row[1] == "2026-11-07")
+
+    # Nothing was truncated, shortened or replaced with an ellipsis on the way out.
+    assert long_title.strip() in cell
+    assert "\u2026" not in cell
+    assert "overflow-wrap: anywhere" in markup.split("td.activity {")[1].split("}")[0]
 
 
 def test_stored_text_is_escaped_in_the_print_page(client, db):
@@ -495,7 +751,8 @@ def test_the_print_page_hides_navigation_and_the_print_control_when_printed(clie
     assert "@media print" in markup
     assert ".no-print { display: none !important; }" in markup
     assert 'class="toolbar no-print"' in markup
-    # The day blocks survive printing and are kept off a page break where they can be.
+    # The heading repeats on every content page and a row is kept whole where it can be.
+    assert "display: table-header-group" in markup
     assert "break-inside: avoid" in markup
     assert "@page { size: A4 portrait;" in markup
     # None of the application's own chrome is on this page at all.
@@ -540,7 +797,7 @@ def test_an_earlier_version_still_exports_itself_after_a_correction(client, db):
     second_markup = client.get(f"/finalisations/{second['finalisation_id']}/print").text
 
     # Each export is the snapshot its own id names, not the month's newest version.
-    assert "2026-11-12" in second_markup and "Added during the correction" in second_markup
+    assert "Added during the correction" in second_markup
     assert "Added during the correction" not in first_markup
     assert [stamped(row) for row in register_rows(first_book)][0] == "2026-11-01"
     assert first["fingerprint"] != second["fingerprint"]
@@ -689,26 +946,26 @@ def test_stored_text_that_looks_like_a_formula_stays_text(client, db):
     )
 
     _, book = workbook(client, record["finalisation_id"])
+    metadata = book[documents.METADATA_SHEET]
     note_cell = next(
-        book["Issued version"].cell(row=row, column=2)
-        for row in range(3, 20)
-        if book["Issued version"].cell(row=row, column=1).value == "Note"
+        metadata.cell(row=row, column=2)
+        for row in range(3, 22)
+        if metadata.cell(row=row, column=1).value == "Note"
     )
-    entries_cell = next(
-        book["Register"].cell(
-            row=row, column=XLSX_REGISTER_COLUMNS["entries"]
-        )
-        for row in range(XLSX_HEADER_ROW + 1, 60)
-        if book["Register"].cell(row=row, column=1).value is not None
-        and getattr(book["Register"].cell(row=row, column=1).value, "day", None) == 5
+    sheet = book[documents.REGISTER_SHEET]
+    activity_cell = next(
+        sheet.cell(row=row, column=3)
+        for row in range(XLSX_HEADER_ROW + 1, XLSX_HEADER_ROW + 40)
+        if isinstance(sheet.cell(row=row, column=3).value, str)
+        and "HYPERLINK" in sheet.cell(row=row, column=3).value
     )
 
     # A leading "=" is stored as text, so a spreadsheet shows the characters and runs
     # nothing: an imported activity title is data, not code.
     assert note_cell.data_type == "s"
     assert note_cell.value == '=1+1+cmd|"/c calc"!A0'
-    assert entries_cell.data_type == "s"
-    assert '=HYPERLINK("http://example.invalid","click")' in entries_cell.value
+    assert activity_cell.data_type == "s"
+    assert '=HYPERLINK("http://example.invalid","click")' in activity_cell.value
 
 
 # --- the projection is the only interpretation -----------------------------
@@ -725,6 +982,19 @@ def test_the_projection_reads_the_record_and_sorts_nothing(db, client):
     assert document.finalisation_id == record["finalisation_id"]
     assert document.sequence == record["sequence"]
     assert document.version_label == f"Issued version {record['sequence']} of November 2026"
+
+
+def test_one_shared_cell_is_what_both_documents_render(db, client):
+    """The workbook and the page read the same value, so they cannot disagree."""
+
+    _, record = issued(db, client)
+
+    markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
+    _, book = workbook(client, record["finalisation_id"])
+
+    printed = {row[1]: row[2] for row in printed_rows(markup)}
+    exported = {stamped(row): row["activity"] for row in register_rows(book)}
+    assert printed == exported
 
 
 def test_the_export_path_holds_no_scheduling_or_generation():

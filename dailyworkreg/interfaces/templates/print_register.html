@@ -12,96 +12,98 @@
     {% endif %} — Daily Dairy Register
   </title>
   <style>
-    :root { --ink: #1e1e1c; --muted: #6b6b66; --rule: #c9c9c2; --accent: #1f5f8b; }
+    :root { --ink: #1e1e1c; --muted: #6b6b66; --rule: #c9c9c2; --line: #9a9a92; }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; background: #ececea; color: var(--ink); }
-    body { font: 10.5pt/1.45 "Segoe UI", system-ui, sans-serif; }
+    body { font: 10pt/1.4 "Segoe UI", system-ui, sans-serif; }
 
     .toolbar {
       position: sticky; top: 0; z-index: 2;
       display: flex; gap: 10px; align-items: center;
       padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--rule);
     }
-    .toolbar .hint { color: var(--muted); font-size: 9.5pt; }
+    .toolbar .hint { color: var(--muted); font-size: 9pt; }
     .button {
-      font: inherit; padding: 6px 14px; border: 1px solid var(--accent);
-      border-radius: 3px; background: var(--accent); color: #fff; cursor: pointer;
+      font: inherit; padding: 6px 14px; border: 1px solid var(--line);
+      border-radius: 3px; background: #fff; color: var(--ink); cursor: pointer;
+      text-decoration: none;
     }
-    .button-quiet { background: #fff; color: var(--accent); text-decoration: none; }
 
     .sheet {
-      max-width: 820px; margin: 18px auto 40px; padding: 22px 24px 26px;
+      max-width: 800px; margin: 18px auto 40px; padding: 18px 22px 26px;
       background: #fff; border: 1px solid var(--rule);
     }
     .sheet + .sheet { margin-top: 30px; }
 
-    header.masthead {
-      display: flex; justify-content: space-between; align-items: flex-end;
-      gap: 16px; padding-bottom: 8px; border-bottom: 2px solid var(--ink);
+    /* The register is headed the way an office file is headed: the office document,
+       then the month, both centred, and nothing else. */
+    header.register-head { text-align: center; margin: 0 0 10px; }
+    header.register-head h1 {
+      margin: 0; font-size: 13pt; letter-spacing: 1.2px; font-weight: 700;
+      text-transform: uppercase;
     }
-    header.masthead h1 { margin: 0; font-size: 15pt; letter-spacing: 0.2px; }
-    header.masthead .month { margin: 2px 0 0; font-size: 12.5pt; font-weight: 600; }
-    header.masthead .version { text-align: right; font-size: 9.5pt; color: var(--muted); }
-
-    table { border-collapse: collapse; width: 100%; }
-    table.ident { margin: 10px 0 14px; font-size: 9pt; }
-    table.ident th { text-align: left; width: 33%; padding: 2px 10px 2px 0; color: var(--muted); font-weight: 600; vertical-align: top; }
-    table.ident td { padding: 2px 0; vertical-align: top; word-break: break-word; }
-    table.ident tr + tr th, table.ident tr + tr td { border-top: 1px dotted var(--rule); }
-
-    .note { margin: 0 0 14px; padding: 6px 8px; border-left: 3px solid var(--accent); background: #f5f8fa; }
-
-    section.day { padding: 8px 0 10px; border-top: 1px solid var(--rule); }
-    section.day h2 {
-      display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline;
-      margin: 0 0 4px; font-size: 11pt;
+    header.register-head .month {
+      margin: 1px 0 0; font-size: 11.5pt; font-weight: 600; letter-spacing: 0.6px;
     }
-    section.day h2 .date { font-family: Consolas, "Courier New", monospace; font-size: 10.5pt; }
-    section.day h2 .weekday { color: var(--muted); font-weight: 400; }
-    .tag {
-      font-size: 8pt; font-weight: 600; padding: 1px 6px; border-radius: 3px;
-      background: #eeeeea; color: var(--muted);
-    }
-    .tag-nonworking { background: #f2ece0; color: #6b5b14; }
-    .tag-locked { background: #e4e8ef; color: #33415c; }
-    .reasons { margin: 0 0 5px; font-size: 9pt; color: var(--muted); }
 
-    table.items { margin: 2px 0 6px; font-size: 9pt; }
-    table.items thead th {
-      text-align: left; padding: 2px 8px 2px 0; font-weight: 600;
-      border-bottom: 1px solid var(--rule); color: var(--muted);
+    table.register {
+      width: 100%; border-collapse: collapse; font-size: 9.5pt;
+      table-layout: fixed;
     }
-    table.items td { padding: 2px 8px 2px 0; vertical-align: top; }
-    table.items td:last-child, table.items th:last-child { padding-right: 0; }
-    .empty { margin: 2px 0 6px; font-size: 9pt; color: var(--muted); font-style: italic; }
-    .warnings { margin: 2px 0 4px; padding-left: 16px; font-size: 9pt; }
+    table.register col.serial { width: 9%; }
+    table.register col.date { width: 16%; }
+    table.register col.activity { width: 75%; }
+    table.register thead th {
+      padding: 4px 6px; font-size: 9pt; font-weight: 700; text-align: left;
+      border-top: 1.5px solid var(--ink); border-bottom: 1px solid var(--ink);
+      background: #fff;
+    }
+    table.register thead th.serial { text-align: right; }
+    table.register tbody td {
+      padding: 3px 6px; vertical-align: top;
+      border-bottom: 0.5pt solid var(--rule);
+    }
+    table.register tbody td.serial { text-align: right; font-variant-numeric: tabular-nums; }
+    table.register tbody td.date { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    table.register tbody td.activity { overflow-wrap: anywhere; }
+    table.register tbody tr:last-child td { border-bottom: 1.5px solid var(--ink); }
 
-    footer.colophon {
-      margin-top: 16px; padding-top: 8px; border-top: 1px solid var(--rule);
-      font-size: 8.5pt; color: var(--muted); word-break: break-all;
+    /* The identification page. It is a page of its own, started deliberately: a register
+       that begins its audit trail halfway down the last page of dates is a register that
+       hides it. */
+    section.metadata { break-before: page; page-break-before: always; }
+    section.metadata h2 {
+      margin: 0 0 8px; font-size: 10.5pt; letter-spacing: 0.4px; text-transform: uppercase;
     }
-    footer.colophon p { margin: 2px 0; }
+    table.ident { width: 100%; border-collapse: collapse; font-size: 9pt; }
+    table.ident th {
+      width: 34%; padding: 2px 12px 2px 0; text-align: left; vertical-align: top;
+      color: var(--muted); font-weight: 600;
+    }
+    table.ident td { padding: 2px 0; vertical-align: top; overflow-wrap: anywhere; }
+    table.ident tr + tr th, table.ident tr + tr td { border-top: 0.5pt dotted var(--rule); }
+    table.ident.block { margin-top: 10px; }
+    table.ident.block thead th {
+      border-bottom: 1px solid var(--rule); color: var(--ink); padding-bottom: 3px;
+    }
+    table.ident.block th { width: auto; }
+    .note { margin: 8px 0 0; }
+    .ident-line { margin: 0 0 8px; font-size: 9.5pt; font-weight: 600; }
+    .section-title { margin: 12px 0 4px; font-size: 9pt; font-weight: 700; }
+    .muted { color: var(--muted); }
 
     @page { size: A4 portrait; margin: 14mm 12mm; }
 
     @media print {
       html, body { background: #fff; }
       .no-print { display: none !important; }
-      .sheet {
-        max-width: none; margin: 0; padding: 0;
-        border: none; box-shadow: none;
-      }
-      .sheet + .sheet {
-        break-before: page;
-        page-break-before: always;
-      }
+      .sheet { max-width: none; margin: 0; padding: 0; border: none; }
+      .sheet + .sheet { break-before: page; page-break-before: always; }
       a { color: inherit; text-decoration: none; }
-      section.day { break-inside: avoid; page-break-inside: avoid; }
-      section.day h2 { break-after: avoid; page-break-after: avoid; }
-      table.items thead { display: table-header-group; }
-      table.items tr { break-inside: avoid; page-break-inside: avoid; }
-      header.masthead { break-after: avoid; page-break-after: avoid; }
-      footer.colophon { break-inside: avoid; }
+      table.register thead { display: table-header-group; }
+      table.register tr { break-inside: avoid; page-break-inside: avoid; }
+      header.register-head { break-after: avoid; page-break-after: avoid; }
+      section.metadata { break-before: page; page-break-before: always; }
     }
   </style>
 </head>
@@ -118,122 +120,83 @@
       Printing opens your browser's own print dialog, where you can save the document as one PDF.
     </span>
     {% if documents|length == 1 %}
-    <a class="button button-quiet" href="/">Back to the tool</a>
+    <a class="button" href="/">Back to the tool</a>
     {% endif %}
   </div>
 
   {% for document in documents %}
   <article class="sheet">
-    <header class="masthead">
-      <div>
-        <h1>Daily Dairy Register</h1>
-        <p class="month">{{ document.month_label }}</p>
-      </div>
-      <div class="version">
-        {{ document.version_label }}<br />
-        {{ document.standing_label }}
-      </div>
+    <header class="register-head">
+      <h1>Daily Dairy Register</h1>
+      <p class="month">{{ document.heading_line }}</p>
     </header>
 
-    <table class="ident">
+    <table class="register">
+      <colgroup>
+        <col class="serial" /><col class="date" /><col class="activity" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th class="serial" scope="col">Sl No.</th>
+          <th class="date" scope="col">Date</th>
+          <th class="activity" scope="col">Activity</th>
+        </tr>
+      </thead>
       <tbody>
-        <tr><th>Register</th><td>{{ document.register_id }}</td></tr>
-        <tr><th>Month</th><td>{{ document.month }}</td></tr>
-        <tr><th>Issued version</th><td>{{ document.sequence }}</td></tr>
-        <tr><th>Revision closed</th><td>{{ document.revision_number }}</td></tr>
-        <tr><th>Finalisation id</th><td>{{ document.finalisation_id }}</td></tr>
-        <tr><th>Closed at</th><td>{{ document.finalised_at }}</td></tr>
-        <tr><th>Month status</th><td>{{ document.status or "—" }}</td></tr>
-        <tr><th>Allocator status</th><td>{{ document.allocator_status or "—" }}</td></tr>
-        <tr><th>Master version at finalisation</th><td>{{ document.master_version }}</td></tr>
-        {% if document.correction_of_run_id %}
-        <tr><th>Corrects revision</th><td>{{ document.correction_of_run_id }}</td></tr>
-        {% endif %}
-        {% if document.parent_finalisation_id %}
-        <tr><th>Correction of</th><td>{{ document.parent_finalisation_id }}</td></tr>
-        {% endif %}
-        {% if document.locked_dates %}
-        <tr><th>Locked dates</th><td>{{ document.locked_dates | join(", ") }}</td></tr>
-        {% endif %}
+        {% for day in document.days %}
+        <tr>
+          <td class="serial">{{ loop.index }}</td>
+          <td class="date">{{ day.day }}</td>
+          <td class="activity">{{ day.activity_text }}</td>
+        </tr>
+        {% endfor %}
       </tbody>
     </table>
 
-    {% if document.note %}
-    <p class="note">Note recorded when this version was issued: {{ document.note }}</p>
-    {% endif %}
-
-    {% for day in document.days %}
-    <section class="day">
-      <h2>
-        <span class="date">{{ day.day }}</span>
-        <span class="weekday">{{ day.weekday }}</span>
-        <span class="tag">{{ day.kind_label }}</span>
-        {% if not day.working %}<span class="tag tag-nonworking">Not a working day</span>{% endif %}
-        {% if day.locked %}<span class="tag tag-locked">Locked</span>{% endif %}
-      </h2>
-
-      {% if day.reasons_en or day.reasons_kn %}
-      <p class="reasons">
-        {% if day.reasons_en %}{{ day.reasons_en | join(" · ") }}{% endif %}
-        {% if day.reasons_en and day.reasons_kn %} — {% endif %}
-        {% if day.reasons_kn %}{{ day.reasons_kn | join(" · ") }}{% endif %}
-      </p>
-      {% endif %}
-
-      {% if day.visits %}
-      <table class="items">
-        <thead>
-          <tr><th>Field visit</th><th>Asset</th><th>Provenance</th><th>Name (Kannada)</th></tr>
-        </thead>
+    <section class="metadata">
+      <h2>Issued version identification</h2>
+      <p class="ident-line">{{ document.version_label }} — {{ document.standing_label }}</p>
+      <table class="ident">
         <tbody>
-          {% for visit in day.visits %}
+          <tr><th>Register</th><td>{{ document.register_id }}</td></tr>
+          <tr><th>Month</th><td>{{ document.month_label }} ({{ document.month }})</td></tr>
+          <tr><th>Issued version</th><td>{{ document.sequence }}</td></tr>
+          <tr><th>Revision closed</th><td>{{ document.revision_number }}</td></tr>
+          <tr><th>Finalisation id</th><td>{{ document.finalisation_id }}</td></tr>
+          <tr><th>Closed at</th><td>{{ document.finalised_at }}</td></tr>
+          <tr><th>Standing</th><td>{{ document.standing_label }}</td></tr>
+          <tr><th>Content fingerprint</th><td>{{ document.fingerprint }}</td></tr>
+          <tr><th>Master version at finalisation</th><td>{{ document.master_version }}</td></tr>
+          <tr><th>Month status</th><td>{{ document.status or "—" }}</td></tr>
+          <tr><th>Allocator status</th><td>{{ document.allocator_status or "—" }}</td></tr>
+          {% if document.correction_of_run_id %}
+          <tr><th>Corrects revision</th><td>{{ document.correction_of_run_id }}</td></tr>
+          {% endif %}
+          {% if document.parent_finalisation_id %}
+          <tr><th>Correction of</th><td>{{ document.parent_finalisation_id }}</td></tr>
+          {% endif %}
+          {% if document.locked_dates %}
+          <tr><th>Locked dates</th><td>{{ document.locked_dates | join(", ") }}</td></tr>
+          {% endif %}
+          {% if document.recorded_provenance %}
           <tr>
-            <td>{{ visit.name_en }}</td>
-            <td>{{ visit.asset_id }}</td>
-            <td>{{ visit.provenance_label }}</td>
-            <td>{{ visit.name_kn or "" }}</td>
+            <th>Field visits recorded</th>
+            <td>
+              {{ document.visit_count }} in total —
+              {% for label, count in document.recorded_provenance %}{{ count }} {{ label | lower }}{% if not loop.last %}, {% endif %}{% endfor %}
+            </td>
           </tr>
-          {% endfor %}
+          {% endif %}
         </tbody>
       </table>
-      {% else %}
-      <p class="empty">No field visits recorded.</p>
+
+      {% if document.note %}
+      <p class="note"><strong>Note recorded when this version was issued:</strong> {{ document.note }}</p>
       {% endif %}
 
-      {% if day.entries %}
-      <table class="items">
-        <thead>
-          <tr><th>Activity or entry</th><th>Kind</th><th>Entry id</th><th>Title (Kannada)</th></tr>
-        </thead>
-        <tbody>
-          {% for entry in day.entries %}
-          <tr>
-            <td>{{ entry.title_en }}</td>
-            <td>{{ entry.kind_label }}</td>
-            <td>{{ entry.entry_id }}</td>
-            <td>{{ entry.title_kn or "" }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <p class="empty">No activities or entries recorded.</p>
-      {% endif %}
-
-      {% if day.warnings %}
-      <ul class="warnings">
-        {% for constraint, detail in day.warnings %}
-        <li>{{ constraint }}: {{ detail }}</li>
-        {% endfor %}
-      </ul>
-      {% endif %}
-    </section>
-    {% endfor %}
-
-    {% if document.acknowledged %}
-    <section class="day">
-      <h2>Findings acknowledged when this version was issued</h2>
-      <table class="items">
+      {% if document.acknowledged %}
+      <p class="section-title">Findings acknowledged when this version was issued</p>
+      <table class="ident block">
         <thead><tr><th>Finding</th><th>Detail</th></tr></thead>
         <tbody>
           {% for item in document.acknowledged %}
@@ -244,14 +207,50 @@
           {% endfor %}
         </tbody>
       </table>
-    </section>
-    {% endif %}
+      {% endif %}
 
-    <footer class="colophon">
-      <p>{{ document.version_label }} · register {{ document.register_id }} · finalisation {{ document.finalisation_id }}</p>
-      <p>Content fingerprint {{ document.fingerprint }}</p>
-      <p>Master version {{ document.master_version }} · closed {{ document.finalised_at }} · {{ document.standing_label }}</p>
-    </footer>
+      {% if document.readiness %}
+      <p class="section-title">Master readiness measured at finalisation</p>
+      <table class="ident block">
+        <thead><tr><th>What was measured</th><th>Detail</th><th>Satisfied</th></tr></thead>
+        <tbody>
+          {% for item in document.readiness %}
+          <tr>
+            <td>{{ item.get("label") or item.get("key") or "" }}</td>
+            <td>{{ item.get("detail") or "" }}</td>
+            <td>{{ "Yes" if item.get("satisfied") else "No" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      {% if document.obligations or document.declared_obligations %}
+      <p class="section-title">Recorded obligations</p>
+      <table class="ident block">
+        <thead><tr><th>Asset</th><th>Visits recorded as owed</th><th>Visits declared</th></tr></thead>
+        <tbody>
+          {% for asset_id, count in document.obligations %}
+          <tr>
+            <td>{{ asset_id }}</td>
+            <td>{{ count }}</td>
+            <td>{{ dict(document.declared_obligations).get(asset_id, "") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      {% if document.evidence %}
+      <p class="section-title">Stored evidence</p>
+      <table class="ident block">
+        <thead><tr><th>Finding</th></tr></thead>
+        <tbody>
+          {% for item in document.evidence %}<tr><td>{{ item }}</td></tr>{% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </section>
   </article>
   {% endfor %}
 

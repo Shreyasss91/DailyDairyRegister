@@ -272,7 +272,7 @@ def register_content_of(workbook_bytes: bytes) -> list[tuple]:
     book = load_workbook(BytesIO(workbook_bytes))
     register = book["Register"]
     values = [tuple(row) for row in register.iter_rows(values_only=True)]
-    issued = [tuple(row) for row in book["Issued version"].iter_rows(values_only=True)]
+    issued = [tuple(row) for row in book["Metadata"].iter_rows(values_only=True)]
     return values + issued
 
 
