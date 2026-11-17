@@ -85,6 +85,17 @@ def test_the_draft_offers_bulk_review_and_retains_individual_review_controls():
     assert "text: day.state === 'reviewed' ? 'withdraw' : 'mark reviewed'" in APP_JS
 
 
+
+
+def test_each_finalised_month_card_offers_direct_excel_and_print_actions():
+    assert "if (month.latest_finalisation_id)" in APP_JS
+    assert "`/api/finalisations/${month.latest_finalisation_id}/export.xlsx`" in APP_JS
+    assert "`/finalisations/${month.latest_finalisation_id}/print`" in APP_JS
+    assert "Download Excel (.xlsx)" in APP_JS
+    assert "Print / Save as PDF" in APP_JS
+    # The action is conditional on an issued version, not merely a reviewed draft.
+
+
 def test_the_client_reads_no_diagnostic_message_to_decide_anything():
     for pattern in ("detail.match", "detail.split", "detail.indexOf", "detail.includes"):
         assert pattern not in APP_JS, pattern

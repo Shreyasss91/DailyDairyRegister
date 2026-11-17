@@ -1361,6 +1361,26 @@ function monthCard(registerId, runId, month) {
     }),
   ]);
 
+  // A month card can export only an immutable issued version. A reviewed draft
+  // without a finalisation deliberately has no document-download actions.
+  if (month.latest_finalisation_id) {
+    actions.append(
+      el('a', {
+        class: 'button',
+        href: `/api/finalisations/${month.latest_finalisation_id}/export.xlsx`,
+        download: '',
+        text: 'Download Excel (.xlsx)',
+      }),
+      el('a', {
+        class: 'button',
+        href: `/finalisations/${month.latest_finalisation_id}/print`,
+        target: '_blank',
+        rel: 'noopener',
+        text: 'Print / Save as PDF',
+      }),
+    );
+  }
+
   if (month.open_correction_run_id) {
     actions.append(
       el('button', {

@@ -6,6 +6,9 @@ The repository policy in `CLAUDE.md` requires every change, however small, to ha
 
 ## [Unreleased]
 
+### Added
+- **2026-11-17 — Add direct monthly export actions to each issued month card:** Every month with a latest issued finalisation now shows its own `Download Excel (.xlsx)` and `Print / Save as PDF` actions without requiring the operator to open Issued versions and then View. Both links target that month's exact latest finalisation identifier, so a month still in draft/review has no export action and an older version is not silently substituted. The existing Issued versions history remains available for superseded versions.
+
 ### Fixed
 - **2026-11-17 — Make the bulk date-review action reliably visible after application updates:** The draft page now has a dedicated review-action row outside the muted register metadata. Its pending count is derived from the per-date review states returned by the server, rather than depending on aggregate counters. The document response revalidates instead of retaining stale HTML, and the application script URL carries a new cache-busting version. The existing per-date controls and the atomic fingerprint-checked bulk-review endpoint remain unchanged.
 
