@@ -38,7 +38,7 @@ from . import calendar_records as cal
 from . import masters
 from .database import transaction
 from .masters import StorageError
-from .seed import apply_approved_feeder_overrides
+from .seed import APPROVED_FEEDER_OVERRIDES, apply_approved_feeder_overrides
 
 C_BATCH_UNKNOWN = "import_batch_unknown"
 C_BATCH_NOT_STAGED = "import_batch_not_staged"
@@ -128,6 +128,12 @@ def _reconcile(
     Reconciliation only ever adds a message or resolves an identity that the
     master already knows. It never repairs a value: a feeder name that does not
     exist in the feeder master stays a warning for a person.
+
+    It can also refuse a row, in one case: when the row carries an
+    owner-confirmed feeder assignment and the feeder that assignment names is not
+    in the master. Accepting that row would store a DTC whose canonical feeder is
+    unset while reporting success, which leaves the feeder's derived capacity
+    short with nothing said about it.
     """
 
     payload = outcome.payload
@@ -135,14 +141,40 @@ def _reconcile(
         return outcome
 
     messages = list(outcome.messages)
+    error = outcome.severity == SEVERITY_ERROR
 
     if dataset == "dtc":
         feeder_name = payload.get("feeder")
-        if feeder_name and masters.find_feeder_by_name(connection, str(feeder_name)) is None:
+        supplied = (
+            masters.find_feeder_by_name(connection, str(feeder_name))
+            if feeder_name
+            else None
+        )
+        if feeder_name and supplied is None:
             messages.append(
                 f"feeder '{feeder_name}' is not in the feeder master, so no canonical "
                 "feeder will be assigned; the supplied value is kept with the source record"
             )
+        assigned_name = APPROVED_FEEDER_OVERRIDES.get(str(payload.get("dtc_id") or ""))
+        if assigned_name:
+            assigned = masters.find_feeder_by_name(connection, assigned_name)
+            if assigned is None:
+                # Without the named feeder the assignment cannot be made, and a DTC
+                # accepted with no canonical feeder quietly leaves its feeder's
+                # capacity short. Refused rather than accepted with a gap.
+                error = True
+                messages.append(
+                    f"the owner-confirmed assignment for {payload['dtc_id']} is "
+                    f"{assigned_name}, which the feeder master does not carry; import "
+                    "the feeder master before accepting this batch"
+                )
+            elif supplied is None or supplied.feeder_id != assigned.feeder_id:
+                messages.append(
+                    f"the owner-confirmed assignment for {payload['dtc_id']} is "
+                    f"{assigned_name} ({assigned.feeder_id}), not the supplied "
+                    f"{feeder_name!r}; the supplied text is kept with the source "
+                    "record and the canonical feeder is set on acceptance"
+                )
         if payload.get("kva") is None:
             messages.append("no capacity was read, so the weight cannot be derived yet")
 
@@ -188,6 +220,8 @@ def _reconcile(
     severity = outcome.severity
     if severity == SEVERITY_OK and messages:
         severity = SEVERITY_WARNING
+    if error:
+        severity = SEVERITY_ERROR
     return RowOutcome(
         outcome.row_number, outcome.raw, payload, severity, tuple(messages), outcome.decision
     )

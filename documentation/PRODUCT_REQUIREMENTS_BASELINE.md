@@ -169,6 +169,16 @@ DTC priority and weight:
 - A configurable overall monthly DTC target is supported.
 - DTC visits count as field visits but not area visits.
 
+### 8.1 The supplied roster, as imported
+
+The office roster has been read and reconciled through the import workflow. What it contains, and what the tool now checks:
+
+- 113 SCD rows, numbered SCD-1 to SCD-113 with no gap and no duplicate: 68 DEPT and 45 SELF_DTC (42 MSB + 3 OWN). Every row carries a capacity and a station, so this file contains no blank and no `#N/A`. The reconciliation is a check on the source, not a target to be reached by editing it.
+- Two of the six owner-confirmed assignments disagree with the supplied feeder text: SCD-107 and SCD-108 arrive naming Mandli F-22 GANDHIBAZAAR and are assigned to MRS F-1 OLDTOWN. Both facts are kept and are stored apart; the register reads the canonical assignment. The remaining four agree with the supplied text.
+- A row whose canonical assignment differs from what its supplied text resolves to is announced before acceptance, naming the DTC, the assignment, the assignment's feeder id and the supplied text. The operator reviews the reassignment rather than discovering it afterwards.
+- A batch whose assignment names a feeder the master does not carry is refused, under the existing rule that an error blocks an import. Accepting it would store DTCs with no canonical feeder and leave every feeder's derived capacity short while reporting success. Import the feeder master first.
+- Because the combined cap allows at most three field visits per working day, and a cycle owes one visit per active DTC, one calendar month cannot hold this roster: 113 required against roughly 25 eligible dates. A one-month DTC coverage cycle is refused as `INFEASIBLE` with the capacity named, never truncated to fit. A cycle of two months or more allocates the whole roster.
+
 ## 9. Feeder master, weighting and scheduling
 
 Initial feeder universe:
