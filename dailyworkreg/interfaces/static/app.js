@@ -591,20 +591,27 @@ function attributionTable(items) {
 async function openDraft(runId) {
   state.runId = runId;
   const head = document.getElementById('draft-head');
+  const banner = document.getElementById('draft-banner');
   const exceptions = document.getElementById('draft-exceptions');
   const evidence = document.getElementById('draft-evidence');
   const target = document.getElementById('draft-rows');
+  const regeneration = document.getElementById('draft-regenerate');
+  const revisions = document.getElementById('draft-revisions');
+  const months = document.getElementById('draft-months');
+  const candidate = document.getElementById('candidate-panel');
   head.textContent = '';
   target.textContent = '';
+  regeneration.textContent = '';
+  revisions.textContent = '';
+  months.textContent = '';
+  hide(banner);
   hide(exceptions);
   hide(evidence);
+  hide(candidate);
   exceptions.textContent = '';
   evidence.textContent = '';
 
   const register = await api(`/api/generations/${runId}`);
-  const review = await api(`/api/generations/${runId}/review`);
-  const days = new Map(review.dates.map((day) => [day.date, day]));
-  state.registerId = review.register_id;
   head.append(
     el('p', {}, [
       el('strong', { text: register.is_draft ? 'Allocator-backed draft' : 'No draft — attempt recorded' }),
@@ -625,11 +632,59 @@ async function openDraft(runId) {
   const evidenceRows = register.months.flatMap((month) =>
     month.evidence.map((item) => ({ ...item, month: month.month, kind: 'evidence' })));
   if (evidenceRows.length) {
-    const block = document.getElementById('draft-evidence');
-    block.hidden = false;
-    block.textContent = '';
-    block.append(el('strong', { text: 'Month evidence' }));
-    block.append(attributionTable(evidenceRows));
+    evidence.hidden = false;
+    evidence.append(el('strong', { text: 'Month evidence' }));
+    evidence.append(attributionTable(evidenceRows));
+  }
+
+  if (!register.is_draft) {
+    state.registerId = null;
+    showBanner(
+      banner,
+      'bad',
+      `No accepted revision exists for this attempt: the allocator reported ${register.status.replace(/_/g, ' ')}. The attempt remains available here for diagnostics; review and finalisation are not available.`,
+    );
+    target.append(el('p', {
+      class: 'muted',
+      text: 'This attempt did not produce an allocation-complete draft. Its stored evidence is shown above; there is no accepted revision to review or finalise. Adjust the generation inputs before trying again.',
+    }));
+    return;
+  }
+
+  const review = await api(`/api/generations/${runId}/review`);
+  const days = new Map(review.dates.map((day) => [day.date, day]));
+  state.registerId = review.register_id;
+
+  const pendingDates = review.total_dates - review.reviewed_dates;
+  if (pendingDates > 0) {
+    const fingerprints = Object.fromEntries(
+      review.dates.map((day) => [day.date, day.fingerprint]),
+    );
+    const bulkReview = el('button', {
+      class: 'button button-primary',
+      text: `Mark all days reviewed (${pendingDates} pending)`,
+      onclick: async () => {
+        const answer = await act(
+          `/api/generations/${runId}/review`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fingerprints }),
+          },
+          runId,
+        );
+        if (answer) {
+          showBanner(
+            banner,
+            'success',
+            `${answer.reviewed_dates} pending date(s) marked reviewed; ${answer.already_reviewed_dates} date(s) were already reviewed.`,
+          );
+        }
+      },
+    });
+    head.append(el('div', { class: 'actions' }, [bulkReview]));
+  } else {
+    head.append(el('p', { class: 'muted', text: 'All days are reviewed.' }));
   }
 
   target.append(table(
@@ -642,7 +697,6 @@ async function openDraft(runId) {
   const registerDetail = await api(`/api/registers/${review.register_id}`);
   renderRevisions(registerDetail);
   renderRegeneration(register, review);
-  hide(document.getElementById('candidate-panel'));
   await renderMonths(review.register_id, runId);
 }
 

@@ -22,12 +22,14 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
 from ..infrastructure.sqlite import generation_store, revision_state
+from ..infrastructure.sqlite.database import transaction
 
 #: Bumped only if the canonical form below changes, because a fingerprint computed by
 #: another version cannot be compared with this one honestly.
@@ -435,6 +437,84 @@ def mark_reviewed(
         content_fingerprint=content[label],
     )
     return {"date": label, "state": DateReviewState.REVIEWED.value, "reviewed_at": stamp}
+
+
+
+def mark_all_reviewed(
+    connection: sqlite3.Connection,
+    run_id: str,
+    *,
+    expected_fingerprints: Mapping[str, str],
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Review every pending date against the exact content the operator saw.
+
+    The complete fingerprint set is checked before any write. Pending dates are then
+    marked together in one transaction, so a stale row or a finalised month cannot
+    leave a partly reviewed register. Existing reviews are preserved, including their
+    original timestamp and note. Locks remain an independent state.
+    """
+
+    if not isinstance(expected_fingerprints, Mapping):
+        raise RevisionError(
+            C_STALE_REVIEW,
+            "the date fingerprints are missing; reload the draft before reviewing it",
+        )
+
+    with transaction(connection):
+        require_current(connection, run_id)
+        content = fingerprints(connection, run_id)
+        if set(expected_fingerprints) != set(content):
+            raise RevisionError(
+                C_STALE_REVIEW,
+                "the dates in this screen no longer match the stored register; "
+                "reload the draft before reviewing all dates",
+            )
+
+        stale = sorted(
+            day
+            for day, current_fingerprint in content.items()
+            if expected_fingerprints.get(day) != current_fingerprint
+        )
+        if stale:
+            listed = ", ".join(stale[:5])
+            suffix = " and other dates" if len(stale) > 5 else ""
+            raise RevisionError(
+                C_STALE_REVIEW,
+                f"{listed}{suffix} changed since they were shown; "
+                "reload the draft before reviewing all dates",
+            )
+
+        existing = revision_state.reviews(connection, run_id)
+        pending = [
+            day
+            for day in sorted(content)
+            if day not in existing or existing[day].state != revision_state.REVIEWED
+        ]
+
+        # Validate every affected month before writing any review state. A closed
+        # month stays immutable, while already-reviewed dates in it remain untouched.
+        for month in sorted({day[:7] for day in pending}):
+            require_month_mutable(connection, run_id, month)
+
+        stamp = (now or datetime.now()).isoformat()
+        for day in pending:
+            revision_state.set_review(
+                connection,
+                run_id,
+                day,
+                state=DateReviewState.REVIEWED.value,
+                reviewed_at=stamp,
+                note=None,
+                content_fingerprint=content[day],
+            )
+
+        return {
+            "run_id": run_id,
+            "reviewed_dates": len(pending),
+            "already_reviewed_dates": len(content) - len(pending),
+            "total_dates": len(content),
+        }
 
 
 def clear_review(

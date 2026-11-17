@@ -74,6 +74,7 @@ from ..application.revisions import (
     RevisionError,
     clear_review,
     lock_date,
+    mark_all_reviewed,
     mark_reviewed,
     review_state,
     revision_summary,
@@ -983,6 +984,27 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         run_id: str, db: sqlite3.Connection = Depends(get_db)
     ) -> dict[str, Any]:
         return review_state(db, run_id)
+
+    @app.put("/api/generations/{run_id}/review")
+    def review_all_dates(
+        run_id: str,
+        payload: dict[str, Any] | None = None,
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        body = payload or {}
+        expected = body.get("fingerprints")
+        if not isinstance(expected, dict) or any(
+            not isinstance(day, str) or not isinstance(value, str)
+            for day, value in expected.items()
+        ):
+            raise RevisionError(
+                C_STALE_REVIEW,
+                "the date fingerprints are missing or malformed; "
+                "reload the draft before reviewing all dates",
+            )
+        return mark_all_reviewed(
+            db, run_id, expected_fingerprints=expected
+        )
 
     @app.put("/api/generations/{run_id}/review/{day}")
     def review_date(

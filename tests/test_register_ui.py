@@ -53,6 +53,21 @@ def test_the_page_sends_every_act_of_this_capability_to_the_server():
         assert path in APP_JS, path
 
 
+
+def test_failed_generation_attempts_render_evidence_without_revision_review():
+    guard = APP_JS.index("if (!register.is_draft)")
+    review_lookup = APP_JS.index("const review = await api(`/api/generations/${runId}/review`)")
+    assert guard < review_lookup
+    assert "No accepted revision exists for this attempt" in APP_JS
+    assert "Month evidence" in APP_JS
+
+
+def test_the_draft_offers_bulk_review_and_retains_individual_review_controls():
+    assert "Mark all days reviewed" in APP_JS
+    assert "`/api/generations/${runId}/review`" in APP_JS
+    assert "text: day.state === 'reviewed' ? 'withdraw' : 'mark reviewed'" in APP_JS
+
+
 def test_the_client_reads_no_diagnostic_message_to_decide_anything():
     for pattern in ("detail.match", "detail.split", "detail.indexOf", "detail.includes"):
         assert pattern not in APP_JS, pattern

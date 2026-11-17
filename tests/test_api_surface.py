@@ -572,6 +572,81 @@ def test_reviewing_and_withdrawing_a_date_through_the_api(stocked):
     assert withdrawn.json()["state"] == "pending_review"
 
 
+
+def test_bulk_review_marks_all_pending_dates_and_preserves_existing_review(stocked):
+    made = generate(stocked)
+    run_id = made["run_id"]
+    first = stocked.put(
+        f"/api/generations/{run_id}/review/2026-11-03",
+        json={"note": "already inspected"},
+    )
+    assert first.status_code == 200
+
+    before = stocked.get(f"/api/generations/{run_id}/review").json()
+    existing_day = next(day for day in before["dates"] if day["date"] == "2026-11-03")
+    fingerprints = {day["date"]: day["fingerprint"] for day in before["dates"]}
+
+    answer = stocked.put(
+        f"/api/generations/{run_id}/review",
+        json={"fingerprints": fingerprints},
+    )
+    assert answer.status_code == 200
+    assert answer.json()["reviewed_dates"] == 29
+    assert answer.json()["already_reviewed_dates"] == 1
+    assert answer.json()["total_dates"] == 30
+
+    after = stocked.get(f"/api/generations/{run_id}/review").json()
+    assert after["reviewed_dates"] == 30
+    assert all(day["state"] == "reviewed" for day in after["dates"])
+    preserved = next(day for day in after["dates"] if day["date"] == "2026-11-03")
+    assert preserved["reviewed_at"] == existing_day["reviewed_at"]
+    assert preserved["note"] == "already inspected"
+    assert after["months"] == {"2026-11": "reviewed"}
+
+    repeated = stocked.put(
+        f"/api/generations/{run_id}/review",
+        json={"fingerprints": fingerprints},
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["reviewed_dates"] == 0
+    assert repeated.json()["already_reviewed_dates"] == 30
+
+
+def test_bulk_review_refuses_stale_fingerprints_without_partial_writes(stocked):
+    made = generate(stocked)
+    run_id = made["run_id"]
+    before = stocked.get(f"/api/generations/{run_id}/review").json()
+    fingerprints = {day["date"]: day["fingerprint"] for day in before["dates"]}
+    fingerprints["2026-11-17"] = "stale-content"
+
+    answer = stocked.put(
+        f"/api/generations/{run_id}/review",
+        json={"fingerprints": fingerprints},
+    )
+    assert answer.status_code == 400
+    assert answer.json()["error"]["constraint"] == C_STALE_REVIEW
+
+    after = stocked.get(f"/api/generations/{run_id}/review").json()
+    assert after["reviewed_dates"] == 0
+    assert all(day["state"] == "pending_review" for day in after["dates"])
+
+
+def test_bulk_review_requires_the_complete_date_set(stocked):
+    made = generate(stocked)
+    run_id = made["run_id"]
+    before = stocked.get(f"/api/generations/{run_id}/review").json()
+    fingerprints = {day["date"]: day["fingerprint"] for day in before["dates"]}
+    fingerprints.pop("2026-11-30")
+
+    answer = stocked.put(
+        f"/api/generations/{run_id}/review",
+        json={"fingerprints": fingerprints},
+    )
+    assert answer.status_code == 400
+    assert answer.json()["error"]["constraint"] == C_STALE_REVIEW
+    assert stocked.get(f"/api/generations/{run_id}/review").json()["reviewed_dates"] == 0
+
+
 def test_a_review_of_stale_content_is_refused_with_a_stable_constraint(stocked):
     made = generate(stocked)
     answer = stocked.put(
