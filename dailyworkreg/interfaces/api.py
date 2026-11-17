@@ -16,6 +16,8 @@ import shutil
 import sqlite3
 import tempfile
 import uuid
+from io import BytesIO
+from zipfile import ZIP_DEFLATED, ZipFile
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timezone
 from pathlib import Path
@@ -1095,6 +1097,84 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         issued = documents_source.document(db, finalisation_id)
         return templates.TemplateResponse(
             request, "print_register.html", {"document": issued}
+        )
+
+
+    @app.get("/api/registers/{register_id}/exports.zip")
+    def export_all_issued_months(
+        register_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> Response:
+        """Package each month's latest issued workbook and one combined print view."""
+
+        months = month_lifecycle(db, register_id)
+        issued_months = [
+            item for item in months if item["latest_finalisation_id"] is not None
+        ]
+        if not issued_months:
+            raise SurfaceError(
+                "register_has_no_issued_months",
+                "No issued monthly versions are available yet. Finalise at least one month first.",
+            )
+
+        issued_documents = [
+            documents_source.document(db, item["latest_finalisation_id"])
+            for item in issued_months
+        ]
+        combined_html = templates.env.get_template("print_register.html").render(
+            documents=issued_documents
+        )
+
+        included_lines = [
+            "DailyDairyRegister — issued monthly export",
+            "",
+            "excel/: one XLSX workbook for each included month.",
+            (
+                "print-ready/: one combined HTML document with a separate section "
+                "for every included month. Open it in a browser, click "
+                "'Print / Save as PDF', then choose 'Save as PDF'."
+            ),
+            "The application does not generate PDF files itself; PDF output uses browser printing.",
+            "Only each month's latest issued version is included. Drafts and unfinalised months are never exported.",
+            "",
+            "Included issued versions:",
+        ]
+        included_lines.extend(
+            f"- {item.month}: issued version {item.sequence}; finalisation {item.finalisation_id}"
+            for item in issued_documents
+        )
+        omitted_months = [
+            item["month"] for item in months if item["latest_finalisation_id"] is None
+        ]
+        if omitted_months:
+            included_lines.extend(
+                ["", "Months omitted because they have no issued finalisation:"]
+            )
+            included_lines.extend(f"- {month}" for month in omitted_months)
+
+        first_month = issued_documents[0].month
+        last_month = issued_documents[-1].month
+        combined_filename = (
+            f"daily-dairy-register-{first_month}-to-{last_month}-combined.html"
+        )
+
+        package = BytesIO()
+        with ZipFile(package, "w", compression=ZIP_DEFLATED) as archive:
+            for document in issued_documents:
+                archive.writestr(
+                    f"excel/{documents.xlsx_filename(document)}",
+                    documents.workbook_bytes(document),
+                )
+            archive.writestr(f"print-ready/{combined_filename}", combined_html)
+            archive.writestr("README.txt", chr(10).join(included_lines) + chr(10))
+
+        return Response(
+            content=package.getvalue(),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="daily-dairy-register-issued-months.zip"'
+                )
+            },
         )
 
     @app.get("/api/finalisations/{finalisation_id}/export.xlsx")

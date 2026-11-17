@@ -17,6 +17,7 @@ import sqlite3
 from datetime import date
 from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from dailyworkreg.application import finalisation as finalise
@@ -191,6 +192,88 @@ def day_sections(markup: str) -> list[str]:
 
     parts = markup.split('<section class="day">')
     return parts[1:]
+
+
+
+
+def test_bulk_export_contains_each_month_workbook_and_one_combined_print_document(client, db):
+    run_id = stored(
+        db,
+        start=date(2026, 11, 1),
+        end=date(2026, 12, 31),
+        cycle_months=2,
+    )
+    register_id = revisions.register_of(db, run_id)
+    review_every_date(db, run_id, month="2026-11")
+    review_every_date(db, run_id, month="2026-12")
+    november = finalise.finalise_month(db, run_id, "2026-11")
+    december = finalise.finalise_month(db, run_id, "2026-12")
+
+    answer = client.get(f"/api/registers/{register_id}/exports.zip")
+
+    assert answer.status_code == 200, answer.text
+    assert answer.headers["content-type"].startswith("application/zip")
+    assert "attachment" in answer.headers["content-disposition"]
+    with ZipFile(BytesIO(answer.content)) as package:
+        names = set(package.namelist())
+        november_xlsx = "excel/daily-dairy-register-2026-11-v1.xlsx"
+        december_xlsx = "excel/daily-dairy-register-2026-12-v1.xlsx"
+        combined_html = (
+            "print-ready/daily-dairy-register-2026-11-to-2026-12-combined.html"
+        )
+        assert {november_xlsx, december_xlsx, combined_html, "README.txt"} <= names
+
+        for path in (november_xlsx, december_xlsx):
+            book = load_workbook(BytesIO(package.read(path)), read_only=True)
+            assert book.sheetnames == ["Register", "Issued version"]
+            book.close()
+
+        markup = package.read(combined_html).decode("utf-8")
+        assert markup.count('<article class="sheet">') == 2
+        assert "Issued version 1 of November 2026" in markup
+        assert "Issued version 1 of December 2026" in markup
+        assert november["finalisation_id"] in markup
+        assert december["finalisation_id"] in markup
+        assert ".sheet + .sheet" in markup
+        instructions = package.read("README.txt").decode("utf-8")
+        assert "one combined HTML document" in instructions
+        assert "browser's own print dialog" in instructions
+
+
+def test_bulk_export_uses_only_issued_months(client, db):
+    run_id = stored(
+        db,
+        start=date(2026, 11, 1),
+        end=date(2026, 12, 31),
+        cycle_months=2,
+    )
+    register_id = revisions.register_of(db, run_id)
+    review_every_date(db, run_id, month="2026-11")
+    finalise.finalise_month(db, run_id, "2026-11")
+
+    answer = client.get(f"/api/registers/{register_id}/exports.zip")
+    assert answer.status_code == 200, answer.text
+    with ZipFile(BytesIO(answer.content)) as package:
+        names = package.namelist()
+        assert len([name for name in names if name.startswith("excel/")]) == 1
+        assert "excel/daily-dairy-register-2026-11-v1.xlsx" in names
+        assert not any("2026-12" in name for name in names)
+        markup_name = next(name for name in names if name.endswith("-combined.html"))
+        markup = package.read(markup_name).decode("utf-8")
+        assert markup.count('<article class="sheet">') == 1
+        assert "November 2026" in markup
+        assert "December 2026" not in markup
+        instructions = package.read("README.txt").decode("utf-8")
+        assert "2026-12" in instructions
+        assert "omitted because they have no issued finalisation" in instructions
+
+
+def test_bulk_export_refuses_a_register_without_an_issued_month(client, db):
+    unissued_run = stored(db)
+    unissued_register = revisions.register_of(db, unissued_run)
+    refused = client.get(f"/api/registers/{unissued_register}/exports.zip")
+    assert refused.status_code == 400
+    assert refused.json()["error"]["constraint"] == "register_has_no_issued_months"
 
 
 # --- the workbook ----------------------------------------------------------

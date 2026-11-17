@@ -1413,6 +1413,21 @@ async function renderMonths(registerId, runId) {
   const months = await api(`/api/registers/${registerId}/months`);
   target.append(el('h3', { text: 'Closing the month' }));
   target.append(el('p', { class: 'muted', text: 'Each month is closed on its own. A closed month is never reopened; a mistake is corrected by a new version.' }));
+  const issuedCount = months.filter((month) => month.latest_finalisation_id).length;
+  if (issuedCount > 0) {
+    target.append(el('div', { class: 'actions' }, [
+      el('a', {
+        class: 'button button-primary',
+        href: `/api/registers/${registerId}/exports.zip`,
+        download: '',
+        text: `Download all issued months (${issuedCount}) (.zip)`,
+      }),
+      el('span', {
+        class: 'muted',
+        text: 'Includes one Excel workbook per issued month and one combined print-ready document for PDF.',
+      }),
+    ]));
+  }
   months.forEach((month) => target.append(monthCard(registerId, runId, month)));
 }
 
