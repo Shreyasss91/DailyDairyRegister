@@ -32,6 +32,7 @@ from ..imports.datasets import (
     DatasetVerdict,
     RowOutcome,
     judge_dataset,
+    read_activity_fields,
 )
 from ..imports.tabular import C_UNMAPPED_SOURCE, SourceFormatError, TabularSource
 from . import calendar_records as cal
@@ -46,10 +47,11 @@ C_BATCH_HAS_ERRORS = "import_batch_has_errors"
 C_BATCH_NOTHING_TO_IMPORT = "import_batch_nothing_to_import"
 C_HOLIDAY_MODE_NOT_APPLICABLE = "holiday_merge_mode_not_applicable"
 
-#: An activity row is refused rather than completed. The catalogue's numbers are the
-#: office's decision, so a batch that reached acceptance without them is a batch some
-#: earlier staging let through, and it is not repaired here.
-C_ACTIVITY_NUMBERS_MISSING = "activity_scheduling_numbers_missing"
+#: An activity batch is held to the contract in force at acceptance, not to the one it
+#: was staged under. A batch that reached staging before these rules existed is refused
+#: rather than repaired, because the alternative is writing a weight, a frequency or a
+#: repeat gap that no approved catalogue states.
+C_ACTIVITY_CONTRACT_UNSATISFIED = "activity_contract_unsatisfied"
 
 C_HOLIDAY_REPLACE = "replace"
 C_HOLIDAY_MERGE = "merge"
@@ -438,7 +440,7 @@ def accept_batch(
             batch_id,
         )
     if batch.dataset == "activity":
-        _refuse_activities_without_numbers(batch_id, importable)
+        _refuse_activities_that_break_the_contract(batch_id, importable)
 
     inserted = 0
     updated = 0
@@ -663,34 +665,50 @@ def _next_feeder_id(connection: sqlite3.Connection) -> str:
     return f"F-{index:02d}"
 
 
-def _refuse_activities_without_numbers(batch_id: str, importable: list[StagingRowRow]) -> None:
-    """Refuse an activity batch that does not state its own scheduling numbers.
+def _refuse_activities_that_break_the_contract(
+    batch_id: str, importable: list[StagingRowRow]
+) -> None:
+    """Hold an already-staged activity batch to the contract in force now.
 
-    The judge refuses such a row, so this is unreachable through staging today. It
-    exists because a batch staged before that rule existed is still in the database,
-    and accepting it would write a weight, a frequency and a repeat gap that no
-    approved catalogue states. A refusal keeps the batch staged and changes nothing,
-    which is the only honest outcome for numbers nobody supplied.
+    Staging refuses such a row, so no new upload reaches acceptance carrying one. What
+    this covers is the other direction of time: a batch staged under the earlier
+    contract is still in the database with its payload already written, and that
+    contract accepted a zero weight, a negative weight, a negative frequency, a
+    negative repeat gap, and an identifier invented at acceptance.
+
+    Checking only that the values were present was not enough, because those values
+    are not absent: they are present and wrong, and the write path below reads them
+    with `float()` and `int()` and would store them as though the catalogue had said
+    so. So every importable payload is read through the same `read_activity_fields`
+    the judge uses, and one row that fails refuses the whole batch. Refusing keeps the
+    batch staged, leaves the master exactly as it was, and names the rows and the
+    fields, because the operator's next step is to correct the file and upload it
+    again rather than to guess which row was meant.
     """
 
-    fields = ("activity_id", "weight", "monthly_min", "monthly_max", "repeat_gap_days")
-    incomplete = [
-        row
-        for row in importable
-        if any(row.payload.get(name) is None for name in fields)
-    ]
-    if not incomplete:
+    failures: list[tuple[int, tuple[str, ...]]] = []
+    for row in importable:
+        _fields, problems = read_activity_fields(row.payload or {})
+        if problems:
+            failures.append((row.row_number, problems))
+    if not failures:
         return
-    if len(incomplete) == 1:
-        naming = "1 row does not state"
-    else:
-        naming = f"{len(incomplete)} rows do not state"
+
+    naming = (
+        "1 row in this batch does not meet"
+        if len(failures) == 1
+        else f"{len(failures)} rows in this batch do not meet"
+    )
+    detail = " ".join(
+        f"Row {row_number}: {'; '.join(problems)}."
+        for row_number, problems in failures
+    )
     raise StorageError(
-        C_ACTIVITY_NUMBERS_MISSING,
+        C_ACTIVITY_CONTRACT_UNSATISFIED,
         (
-            f"{naming} an activity id, a weight, a monthly minimum, a monthly maximum "
-            "or a repeat gap. Those values come from the approved catalogue and are not "
-            "filled in here, so the batch stays staged until the source states them"
+            f"{naming} the activity rules as they stand now: {detail} Nothing was "
+            "imported and the batch is unchanged. A batch staged before these rules "
+            "existed has to be rejected and uploaded again from a corrected file."
         ),
         batch_id,
     )

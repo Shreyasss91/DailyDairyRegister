@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from datetime import date
 from pathlib import Path
 
@@ -307,6 +308,86 @@ def test_an_unknown_dataset_is_refused(client):
     )
     assert answer.status_code == 400
     assert answer.json()["error"]["constraint"] == "unknown_dataset"
+
+
+def test_a_file_whose_columns_do_not_match_the_contract_is_refused_in_words(client):
+    """A wrong-column upload is a refusal, not a server error.
+
+    Staging raises its own refusal for a file it cannot map at all, and that refusal
+    used to escape the route and reach the operator as an unhandled failure with no
+    reason in it. No batch is created either way, so nothing empty is left behind.
+    """
+
+    answer = client.post(
+        "/api/imports?dataset=dtc",
+        files={"file": ("wrong.csv", b"DTC ID,Class\nSCD-1,DEPT\n", "text/csv")},
+    )
+
+    assert answer.status_code == 400
+    error = answer.json()["error"]
+    assert error["constraint"] == "source_file_unmapped"
+    assert "no column for name" in error["detail"]
+    assert client.get("/api/imports").json() == []
+
+
+def test_an_activity_file_with_foreign_headings_is_refused_in_words(client):
+    answer = client.post(
+        "/api/imports?dataset=activity",
+        files={
+            "file": (
+                "proposed.csv",
+                "Suggested ID (not canonical),Category,Proposed English Description\n"
+                "P-1,Inspection,Some proposal\n".encode(),
+                "text/csv",
+            )
+        },
+    )
+
+    assert answer.status_code == 400
+    error = answer.json()["error"]
+    assert error["constraint"] == "source_file_unmapped"
+    assert "description_en" in error["detail"]
+    assert client.get("/api/imports").json() == []
+
+
+def test_a_legacy_activity_batch_is_refused_at_acceptance(client, db_path: Path):
+    """The acceptance guard is reachable from the surface, and says why."""
+
+    stream = io.StringIO()
+    writer = csv.writer(stream)
+    writer.writerow(
+        ["Activity ID", "Category", "Description", "Kannada", "Weight", "Monthly Min",
+         "Monthly Max", "Repeat Gap"]
+    )
+    writer.writerow(["LEG-900", "Rehearsal", "Legacy rehearsal", "", "1", "1", "4", "2"])
+    batch = client.post(
+        "/api/imports?dataset=activity",
+        files={"file": ("legacy.csv", stream.getvalue().encode(), "text/csv")},
+    ).json()
+
+    connection = open_database(db_path)
+    try:
+        stored = connection.execute(
+            "SELECT normalized_json FROM import_staging_row WHERE batch_id = ?",
+            (batch["batch_id"],),
+        ).fetchone()[0]
+        payload = json.loads(stored) | {"weight": -2.5}
+        connection.execute(
+            "UPDATE import_staging_row SET normalized_json = ? WHERE batch_id = ?",
+            (json.dumps(payload), batch["batch_id"]),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    answer = client.post(f"/api/imports/{batch['batch_id']}/accept", json={})
+
+    assert answer.status_code == 400
+    error = answer.json()["error"]
+    assert error["constraint"] == "activity_contract_unsatisfied"
+    assert "weight -2.5 is not greater than zero" in error["detail"]
+    assert client.get("/api/masters/activity").json() == []
+    assert client.get(f"/api/imports/{batch['batch_id']}").json()["status"] == "staged"
 
 
 def test_an_unknown_batch_is_refused_with_its_own_constraint(client):

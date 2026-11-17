@@ -25,7 +25,7 @@ from dailyworkreg.infrastructure.imports.datasets import judge_dataset
 from dailyworkreg.infrastructure.imports.tabular import read_source_file
 from dailyworkreg.infrastructure.sqlite import StorageError, masters, open_database
 from dailyworkreg.infrastructure.sqlite.imports import (
-    C_ACTIVITY_NUMBERS_MISSING,
+    C_ACTIVITY_CONTRACT_UNSATISFIED,
     accept_batch,
     get_batch,
     reject_batch,
@@ -305,8 +305,8 @@ def test_a_batch_staged_before_the_rule_existed_cannot_be_accepted(db):
     with pytest.raises(StorageError) as refusal:
         accept_batch(db, batch.batch_id)
 
-    assert refusal.value.constraint == C_ACTIVITY_NUMBERS_MISSING
-    assert "come from the approved catalogue" in str(refusal.value)
+    assert refusal.value.constraint == C_ACTIVITY_CONTRACT_UNSATISFIED
+    assert "no weight" in str(refusal.value)
     assert masters.list_activities(db) == ()
     assert get_batch(db, batch.batch_id).status == "staged"
 

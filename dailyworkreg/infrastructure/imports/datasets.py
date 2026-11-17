@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -403,103 +404,205 @@ def judge_feeder(row: dict[str, str], mapping: dict[str, str], row_number: int) 
     return RowOutcome(row_number, dict(row), payload, severity, tuple(messages))
 
 
-def judge_activity(row: dict[str, str], mapping: dict[str, str], row_number: int) -> RowOutcome:
-    """Judge one catalogue row without choosing any of its scheduling numbers.
+# --- the activity contract ------------------------------------------------
 
-    An activity row is a table of approved decisions: which record it is, what it is
-    called in both languages, how heavily it weighs against its peers, how often it
-    may and must occur, and how far apart its occurrences sit. All of those except
-    the Kannada wording are refused when absent or unreadable, because the only
-    alternative is a number this tool invented, and an invented weight or frequency
-    would enter the register as though the office had approved it. A missing Kannada
-    description is a warning rather than a refusal: the absence is recorded and the
-    English text is what the register shows, and nothing is translated here.
+
+@dataclass(frozen=True)
+class ActivityFields:
+    """An activity payload read into the shapes the contract talks about.
+
+    A field the source left blank, marked as a placeholder, or wrote in terms that
+    cannot be read as its type is `None` here, and the accompanying problems say
+    which it was. Nothing is defaulted and no identifier is manufactured.
     """
 
-    def get(field_name: str) -> str | None:
-        column = mapping.get(field_name)
-        return row.get(column) if column else None
+    activity_id: str | None
+    category: str | None
+    description_en: str | None
+    description_kn: str | None
+    weight: float | None
+    monthly_min: int | None
+    monthly_max: int | None
+    repeat_gap_days: int | None
+    weekday_mask: str | None
 
-    activity_id = _text(get("activity_id"))
-    category = _text(get("category"))
-    description_en = _text(get("description_en"))
-    if activity_id is None or category is None or description_en is None:
-        missing = [
-            name
-            for name, value in (
-                ("activity id", activity_id),
-                ("category", category),
-                ("English description", description_en),
-            )
-            if value is None
-        ]
-        return RowOutcome(
-            row_number, dict(row), None, SEVERITY_ERROR,
-            (f"missing {', '.join(missing)}",),
-        )
 
-    weight, weight_messages = coerce_float(get("weight"), field_name="weight")
-    monthly_min, min_messages = coerce_int(get("monthly_min"), field_name="monthly minimum")
-    monthly_max, max_messages = coerce_int(get("monthly_max"), field_name="monthly maximum")
-    gap, gap_messages = coerce_int(get("repeat_gap_days"), field_name="repeat gap")
+ACTIVITY_TEXT_FIELDS = (
+    ("activity_id", "activity id"),
+    ("category", "category"),
+    ("description_en", "English description"),
+)
 
-    problems: list[str] = [
-        *weight_messages,
-        *min_messages,
-        *max_messages,
-        *gap_messages,
+ACTIVITY_NUMBER_FIELDS = (
+    ("weight", "weight", False),
+    ("monthly_min", "monthly minimum", True),
+    ("monthly_max", "monthly maximum", True),
+    ("repeat_gap_days", "repeat gap", True),
+)
+
+
+def _shown(value: object) -> str:
+    """A supplied value as a message should quote it back."""
+
+    return f"'{value}'" if isinstance(value, str) else repr(value)
+
+
+def _contract_text(value: object) -> str | None:
+    """Text as stored, or None. A number in a text column keeps its digits."""
+
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _text(value)
+    return str(value).strip() or None
+
+
+def _contract_number(
+    value: object, *, field_name: str, whole: bool
+) -> tuple[float | int | None, list[str]]:
+    """One number, read from a source cell or from an already-stored payload.
+
+    The same rules apply to both: a blank stays blank, a placeholder is named as a
+    placeholder, unreadable text is refused, and a value of the wrong shape is
+    refused rather than coerced into something plausible.
+    """
+
+    if value is None:
+        return None, []
+    if isinstance(value, bool):
+        return None, [f"{field_name} {_shown(value)} is not a number"]
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if not whole:
+            return number, []
+        if not math.isfinite(number) or not number.is_integer():
+            return None, [f"{field_name} {_shown(value)} is not a whole number"]
+        return int(number), []
+    if isinstance(value, str):
+        if whole:
+            return coerce_int(value, field_name=field_name)
+        return coerce_float(value, field_name=field_name)
+    return None, [f"{field_name} {_shown(value)} is not a number"]
+
+
+def read_activity_fields(payload: Mapping[str, object]) -> tuple[ActivityFields, tuple[str, ...]]:
+    """Read one activity payload and report every way it breaks the contract.
+
+    This is the only place the activity contract is written down. The staging judge
+    calls it on the values a source row supplies, and acceptance calls it on the
+    values an already-staged row carries, so a batch staged under an earlier contract
+    is held to exactly the rules a new upload is held to and the two cannot drift.
+
+    The contract, in full: an activity identifier, a category and an English
+    description; a finite weight greater than zero; a monthly minimum and maximum of
+    zero or more, the minimum not above the maximum; and a repeat gap of zero or more
+    days. A Kannada description is wanted but not required here, because its absence
+    is a warning rather than a refusal and this function judges only what blocks an
+    import.
+
+    The function is pure. It reads no database, invents no value, translates nothing
+    and repairs nothing it cannot read.
+    """
+
+    problems: list[str] = []
+
+    missing = [
+        label
+        for name, label in ACTIVITY_TEXT_FIELDS
+        if _contract_text(payload.get(name)) is None
     ]
-    blank = [
-        name
-        for name, value, messages in (
-            ("weight", weight, weight_messages),
-            ("monthly minimum", monthly_min, min_messages),
-            ("monthly maximum", monthly_max, max_messages),
-            ("repeat gap", gap, gap_messages),
-        )
-        if value is None and not messages
-    ]
+    if missing:
+        problems.append(f"missing {', '.join(missing)}")
+
+    numbers: dict[str, float | int | None] = {}
+    blank: list[str] = []
+    for name, label, whole in ACTIVITY_NUMBER_FIELDS:
+        number, messages = _contract_number(payload.get(name), field_name=label, whole=whole)
+        numbers[name] = number
+        problems.extend(messages)
+        if number is None and not messages:
+            blank.append(label)
     if blank:
         listed = blank[0] if len(blank) == 1 else f"{', '.join(blank[:-1])} or {blank[-1]}"
         problems.append(
             f"no {listed} was supplied; supply the approved catalogue value, because "
             "the tool does not choose a weight, a frequency or a repeat gap for an activity"
         )
+
+    weight = numbers["weight"]
     if weight is not None and not math.isfinite(weight):
-        problems.append(f"weight '{get('weight')}' is not a finite number")
+        problems.append(f"weight {_shown(payload.get('weight'))} is not a finite number")
     elif weight is not None and weight <= 0:
         problems.append(
             f"weight {weight:g} is not greater than zero, so it cannot express a share"
         )
-    for name, value in (
-        ("monthly minimum", monthly_min),
-        ("monthly maximum", monthly_max),
-        ("repeat gap", gap),
-    ):
+    for name, label, _whole in ACTIVITY_NUMBER_FIELDS[1:]:
+        value = numbers[name]
         if value is not None and value < 0:
-            problems.append(f"{name} {value} is negative")
-    if monthly_min is not None and monthly_max is not None and monthly_min > monthly_max:
-        problems.append(f"monthly minimum {monthly_min} is above maximum {monthly_max}")
-    if problems:
-        return RowOutcome(row_number, dict(row), None, SEVERITY_ERROR, tuple(problems))
+            problems.append(f"{label} {value} is negative")
+    minimum, maximum = numbers["monthly_min"], numbers["monthly_max"]
+    if minimum is not None and maximum is not None and minimum > maximum:
+        problems.append(f"monthly minimum {minimum} is above maximum {maximum}")
 
-    description_kn = _text(get("description_kn"))
+    fields = ActivityFields(
+        activity_id=_contract_text(payload.get("activity_id")),
+        category=_contract_text(payload.get("category")),
+        description_en=_contract_text(payload.get("description_en")),
+        description_kn=_contract_text(payload.get("description_kn")),
+        weight=numbers["weight"],
+        monthly_min=numbers["monthly_min"],
+        monthly_max=numbers["monthly_max"],
+        repeat_gap_days=numbers["repeat_gap_days"],
+        weekday_mask=_contract_text(payload.get("weekday_mask")),
+    )
+    return fields, tuple(problems)
+
+
+def judge_activity(row: dict[str, str], mapping: dict[str, str], row_number: int) -> RowOutcome:
+    """Judge one catalogue row against the contract in `read_activity_fields`.
+
+    The rules themselves live in one function, because acceptance has to apply the
+    same ones to rows staged before this judge existed. What belongs here is only the
+    mapping from this file's columns onto those fields, and the one thing the
+    contract calls a warning: a missing Kannada description. Nothing is translated,
+    no identifier is manufactured, and no number is completed.
+    """
+
+    def get(field_name: str) -> str | None:
+        column = mapping.get(field_name)
+        return row.get(column) if column else None
+
+    supplied = {
+        "activity_id": get("activity_id"),
+        "category": get("category"),
+        "description_en": get("description_en"),
+        "description_kn": get("description_kn"),
+        "weight": get("weight"),
+        "monthly_min": get("monthly_min"),
+        "monthly_max": get("monthly_max"),
+        "repeat_gap_days": get("repeat_gap_days"),
+        "weekday_mask": get("weekday_mask"),
+    }
+    fields, problems = read_activity_fields(supplied)
+    if problems:
+        return RowOutcome(row_number, dict(row), None, SEVERITY_ERROR, problems)
+
     warnings: list[str] = []
-    if description_kn is None:
+    if fields.description_kn is None:
         warnings.append(
             "no Kannada description was supplied; the activity is imported with its "
             "English text alone and nothing is translated here"
         )
     payload = {
-        "activity_id": activity_id,
-        "category": category,
-        "description_en": description_en,
-        "description_kn": description_kn,
-        "weight": weight,
-        "monthly_min": monthly_min,
-        "monthly_max": monthly_max,
-        "repeat_gap_days": gap,
-        "weekday_mask": _text(get("weekday_mask")),
+        "activity_id": fields.activity_id,
+        "category": fields.category,
+        "description_en": fields.description_en,
+        "description_kn": fields.description_kn,
+        "weight": fields.weight,
+        "monthly_min": fields.monthly_min,
+        "monthly_max": fields.monthly_max,
+        "repeat_gap_days": fields.repeat_gap_days,
+        "weekday_mask": fields.weekday_mask,
     }
     severity = SEVERITY_WARNING if warnings else SEVERITY_OK
     return RowOutcome(row_number, dict(row), payload, severity, tuple(warnings))

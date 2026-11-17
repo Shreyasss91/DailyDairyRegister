@@ -607,9 +607,13 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         content = await file.read()
         try:
             source = read_source_bytes(file.filename or "", content)
+            batch, _ = staged.stage_source(db, dataset, source)
         except SourceFormatError as error:
+            # Reading and staging both refuse a file in the same vocabulary, and both
+            # refusals belong in front of whoever uploaded it. Only reading used to be
+            # wrapped, so a file whose columns did not match the contract raised past
+            # this handler and reached the operator as a server error with no reason.
             raise SurfaceError(error.constraint, error.detail) from error
-        batch, _ = staged.stage_source(db, dataset, source)
         return _batch(db, batch.batch_id)
 
     @app.get("/api/imports")
