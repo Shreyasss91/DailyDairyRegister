@@ -33,7 +33,7 @@ from ..imports.datasets import (
     RowOutcome,
     judge_dataset,
 )
-from ..imports.tabular import TabularSource
+from ..imports.tabular import C_UNMAPPED_SOURCE, SourceFormatError, TabularSource
 from . import calendar_records as cal
 from . import masters
 from .database import transaction
@@ -45,6 +45,11 @@ C_BATCH_NOT_STAGED = "import_batch_not_staged"
 C_BATCH_HAS_ERRORS = "import_batch_has_errors"
 C_BATCH_NOTHING_TO_IMPORT = "import_batch_nothing_to_import"
 C_HOLIDAY_MODE_NOT_APPLICABLE = "holiday_merge_mode_not_applicable"
+
+#: An activity row is refused rather than completed. The catalogue's numbers are the
+#: office's decision, so a batch that reached acceptance without them is a batch some
+#: earlier staging let through, and it is not repaired here.
+C_ACTIVITY_NUMBERS_MISSING = "activity_scheduling_numbers_missing"
 
 C_HOLIDAY_REPLACE = "replace"
 C_HOLIDAY_MERGE = "merge"
@@ -277,13 +282,16 @@ def stage_source(
         raise StorageError(C_BATCH_UNKNOWN, f"unknown import dataset: {dataset}")
 
     verdict = judge_dataset(dataset, source.headers, source.rows)
-    outcomes = list(verdict.outcomes)
-    if not verdict.file_messages:
-        outcomes = [_reconcile(connection, dataset, outcome) for outcome in outcomes]
-        outcomes = _flag_duplicate_identities(dataset, outcomes)
-    verdict = DatasetVerdict(
-        dataset=dataset, outcomes=tuple(outcomes), file_messages=verdict.file_messages
-    )
+    if verdict.file_messages:
+        # The file could not be read against the contract at all, so no row can be
+        # judged. Refusing here keeps the reason in front of whoever uploaded it;
+        # recording an empty batch instead would store a rowless file that explains
+        # nothing and can never be accepted.
+        raise SourceFormatError(C_UNMAPPED_SOURCE, " ".join(verdict.file_messages))
+
+    outcomes = [_reconcile(connection, dataset, outcome) for outcome in verdict.outcomes]
+    outcomes = _flag_duplicate_identities(dataset, outcomes)
+    verdict = DatasetVerdict(dataset=dataset, outcomes=tuple(outcomes))
 
     batch_id = f"{dataset}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
     with transaction(connection):
@@ -429,6 +437,8 @@ def accept_batch(
             "this batch has no row that would change the master",
             batch_id,
         )
+    if batch.dataset == "activity":
+        _refuse_activities_without_numbers(batch_id, importable)
 
     inserted = 0
     updated = 0
@@ -532,29 +542,24 @@ def accept_batch(
                 updated += 1 if existed else 0
 
             elif batch.dataset == "activity":
-                activity_id = payload.get("activity_id")
-                if not activity_id:
-                    activity_id = _next_activity_id(connection)
-                activity_id = str(activity_id)
+                # The numbers arrive from the catalogue, never from here. A payload
+                # reaching this point is complete, because the judge refused every row
+                # missing a weight, a frequency or a repeat gap, and the guard above
+                # covers a batch staged before that rule existed. Substituting a default
+                # here is how an invented weight would enter the register looking like an
+                # approved one.
+                activity_id = str(payload["activity_id"])
                 existed = masters.get_activity(connection, activity_id) is not None
-                previous = masters.get_activity(connection, activity_id) if existed else None
                 masters.upsert_activity(
                     connection,
                     activity_id=activity_id,
                     category=str(payload["category"]),
                     description_en=str(payload["description_en"]),
                     description_kn=payload.get("description_kn"),
-                    weight=_number(payload.get("weight"), previous.weight if previous else 1.0),
-                    monthly_min=_integer(
-                        payload.get("monthly_min"), previous.monthly_min if previous else 0
-                    ),
-                    monthly_max=_integer(
-                        payload.get("monthly_max"), previous.monthly_max if previous else 10
-                    ),
-                    repeat_gap_days=_integer(
-                        payload.get("repeat_gap_days"),
-                        previous.repeat_gap_days if previous else 2,
-                    ),
+                    weight=float(payload["weight"]),
+                    monthly_min=int(payload["monthly_min"]),
+                    monthly_max=int(payload["monthly_max"]),
+                    repeat_gap_days=int(payload["repeat_gap_days"]),
                     weekday_mask=payload.get("weekday_mask"),
                 )
                 inserted += 0 if existed else 1
@@ -658,11 +663,34 @@ def _next_feeder_id(connection: sqlite3.Connection) -> str:
     return f"F-{index:02d}"
 
 
-def _next_activity_id(connection: sqlite3.Connection) -> str:
-    existing = {
-        activity.activity_id for activity in masters.list_activities(connection)
-    }
-    index = len(existing) + 1
-    while f"ACT-{index:03d}" in existing:
-        index += 1
-    return f"ACT-{index:03d}"
+def _refuse_activities_without_numbers(batch_id: str, importable: list[StagingRowRow]) -> None:
+    """Refuse an activity batch that does not state its own scheduling numbers.
+
+    The judge refuses such a row, so this is unreachable through staging today. It
+    exists because a batch staged before that rule existed is still in the database,
+    and accepting it would write a weight, a frequency and a repeat gap that no
+    approved catalogue states. A refusal keeps the batch staged and changes nothing,
+    which is the only honest outcome for numbers nobody supplied.
+    """
+
+    fields = ("activity_id", "weight", "monthly_min", "monthly_max", "repeat_gap_days")
+    incomplete = [
+        row
+        for row in importable
+        if any(row.payload.get(name) is None for name in fields)
+    ]
+    if not incomplete:
+        return
+    if len(incomplete) == 1:
+        naming = "1 row does not state"
+    else:
+        naming = f"{len(incomplete)} rows do not state"
+    raise StorageError(
+        C_ACTIVITY_NUMBERS_MISSING,
+        (
+            f"{naming} an activity id, a weight, a monthly minimum, a monthly maximum "
+            "or a repeat gap. Those values come from the approved catalogue and are not "
+            "filled in here, so the batch stays staged until the source states them"
+        ),
+        batch_id,
+    )

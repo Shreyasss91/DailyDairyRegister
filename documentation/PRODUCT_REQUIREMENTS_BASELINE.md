@@ -125,6 +125,47 @@ What is still open:
 - Constraints are strict. If a schedule is infeasible, report the infeasibility and the blocking constraints. Do not silently violate minimums, maximums, gaps or daily limits.
 - Support deterministic regeneration from a saved seed and configuration, and an alternative draft generated with a new seed.
 
+### 6.1 The catalogue the importer requires, and what has been supplied
+
+The 40–60 activity records in §6 are **not supplied as approved data**. What exists in
+this repository is the blank import template and a file of 51 drafting suggestions that
+says in its own name and in every row that it is proposed and not approved. Neither is a
+catalogue: the blank template holds no record, and the proposals carry no approved
+numbers, no approved Kannada and no office approval.
+
+Because a missing number used to be completed at acceptance with weight 1.0, monthly
+minimum 0, monthly maximum 10 and repeat gap 2, and an identifier-less row used to be
+given `ACT-###` automatically, an incomplete file could enter the master looking
+complete and a re-upload of the same identifier-less row could add a second copy. The
+importer now requires each row to state:
+
+- an activity identifier, category and English description;
+- a weight greater than zero;
+- a monthly minimum and maximum of zero or more, with the minimum not above the maximum;
+- a repeat gap of zero or more days.
+
+A number that is blank, a placeholder such as `#N/A`, or text that is not a number is
+refused and named, and nothing is defaulted. A Kannada description is required for the
+register output but its absence is reported as a warning on that row rather than a
+refusal: the importer never translates, and a row without Kannada is imported with its
+English text alone. A file whose columns do not match the import contract at all is
+refused at staging with the missing column named, instead of being recorded as a batch
+with no rows.
+
+**What the owner must supply, and no code may supply instead:** the approved activity
+list (or approval of named rows from the proposals), the Kannada wording for each, the
+weight, the monthly minimum and maximum, the repeat gap, and any weekday restriction.
+
+**Scope material found, and why it is not a catalogue.** The only section-officer duty
+material on the machine that names concrete duties is a BESCOM O&M supervisory register
+(81 duties across 15 work areas). Its own cover says it is a supervisory tool and not an
+official duty order; its frequencies are words such as "Daily" and "As required"; and it
+carries no weights, no monthly limits, no repeat gaps and no Kannada text. Whether it
+applies to this MESCOM office at all is an owner decision. It is therefore used only to
+prepare a worksheet of blanks for review, kept out of Git, marked not approved, and
+refused by the importer if anyone tries to import it.
+
+
 ## 7. Area master and area visits
 
 The initial supplied Kannada list contains 21 names. The owner confirmed five pairs are aliases for the same canonical area, resulting in **16 canonical areas**:
@@ -438,7 +479,7 @@ The following points remain open and must not be silently converted into approve
 1. **Target allocator proof and validation:** The policy choices in §10 are recorded, but the exact joint allocation algorithm and its mathematical feasibility proof still require deterministic validation. Define every term and unit in any lower-bound equation; use the actual eligible dates and 7-calendar-day revisit interval; account for category overlap under the combined daily cap; validate per-asset caps and cross-cycle boundaries. The candidate bound and table supplied during analysis must not be treated as proven or hardcoded until these conditions are satisfied. **Status: partially satisfied.** A joint date-level allocator now exists (`dailyworkreg/domain/allocator.py`) and every result it reports as feasible has been validated against the full hard-constraint and obligation-aware checks. It is validated empirically, not proved: no mathematical proof of global optimality or of the completeness of the constructive search is claimed, and the allocator is explicitly not required to find a globally optimal weighted schedule. The necessary conditions in §10.6 remain necessary only. Unresolved cases return INDETERMINATE rather than being reported as impossible.
 3. **Initial data validation:** during implementation, re-import/validate the supplied DTC source against the 113-SCD inclusion rule, class counts, preserved source fields and explicit feeder overrides. Do not infer missing source rows from this requirements document.
 4. **Holiday data validation:** load and verify the Karnataka General Holiday baseline for 2025 and 2026 only. Restricted Holidays must remain excluded.
-5. **Activity catalogue content:** prepare the initial 40–60 activity records with English/Kannada text for owner review before treating the catalogue as operationally approved.
+5. **Activity catalogue content:** prepare the initial 40–60 activity records with English/Kannada text for owner review before treating the catalogue as operationally approved. **Status: open, and blocked on the owner.** A source search of this machine found no approved catalogue; the importer now refuses any row that omits its number, identifier or text rather than completing it (see §6.1). What is missing is source material and owner decisions — approved activity list, Kannada wording, weights, monthly limits, repeat gaps and any weekday restriction — not implementation.
 6. **Area and feeder coverage defaults:** The owner has not selected a monthly minimum or explicit coverage cycle for all areas or all feeders. Do not assume one visit per canonical area or feeder per month. Obtain the owner’s choice before making full-roster monthly coverage a required target.
 
 These are requirements/data validation gates, not reasons to block unrelated scaffolding indefinitely. The DTC cycle/fallback modes and the initial per-asset monthly maximum are now requirements decisions, but the exact joint target allocator must pass the date-level validation in item 1 before it controls generation. Keep the existing open-decision numbering as-is; the missing item number 2 is a pre-existing numbering gap and is intentionally not renumbered in this act.

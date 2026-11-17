@@ -14,6 +14,7 @@ from dailyworkreg.infrastructure.imports.datasets import (
     normalise_header,
 )
 from dailyworkreg.infrastructure.imports.tabular import (
+    C_UNMAPPED_SOURCE,
     SourceFormatError,
     read_source_bytes,
 )
@@ -25,6 +26,7 @@ from dailyworkreg.infrastructure.sqlite.imports import (
     list_batches,
     reject_batch,
     stage_bytes,
+    stage_source,
     staging_rows,
 )
 from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
@@ -149,6 +151,22 @@ def test_a_missing_required_column_is_reported_by_name():
     assert verdict.file_messages
     assert "name" in verdict.file_messages[0]
     assert verdict.can_accept is False
+
+
+def test_a_file_whose_columns_do_not_match_the_contract_is_refused_when_staged(db):
+    """It must not become a batch with no rows, no errors and no explanation.
+
+    The reason for the refusal used to be computed and then dropped, so an operator
+    uploading a file with different headings saw an empty batch and no message.
+    """
+
+    source = read_source_bytes("d.csv", b"DTC ID,Class\nSCD-1,DEPT\n")
+    with pytest.raises(SourceFormatError) as refusal:
+        stage_source(db, "dtc", source)
+
+    assert refusal.value.constraint == C_UNMAPPED_SOURCE
+    assert "no column for name" in refusal.value.detail
+    assert list_batches(db) == ()
 
 
 def test_a_placeholder_capacity_is_reported_and_not_read_as_zero():
@@ -301,15 +319,25 @@ def test_an_area_with_no_id_and_no_match_is_refused(db):
     assert "no identity to update" in verdict.outcomes[0].messages[-1]
 
 
-def test_an_activity_without_an_id_is_given_one(db):
-    csv = "Category,Description\nInspection,Inspect distribution transformer\n"
+def test_an_activity_without_an_id_is_refused(db):
+    csv = (
+        "Category,Description,Weight,Monthly Min,Monthly Max,Repeat Gap\n"
+        "Inspection,Inspect distribution transformer,1,1,4,2\n"
+    )
     batch, verdict = stage_bytes(db, "activity", "act.csv", csv.encode())
-    assert verdict.error_count == 0
-    accept_batch(db, batch.batch_id)
-    activities = masters.list_activities(db)
-    assert len(activities) == 1
-    assert activities[0].activity_id.startswith("ACT-")
-    assert activities[0].description_kn is None
+    assert verdict.error_count == 1
+    assert "missing activity id" in verdict.outcomes[0].messages[0]
+    with pytest.raises(StorageError):
+        accept_batch(db, batch.batch_id)
+    assert masters.list_activities(db) == ()
+
+
+def test_an_activity_without_its_numbers_is_refused(db):
+    csv = "Activity ID,Category,Description\nACT-1,Inspection,Inspect distribution transformer\n"
+    batch, verdict = stage_bytes(db, "activity", "act.csv", csv.encode())
+    assert verdict.error_count == 1
+    assert "was supplied" in verdict.outcomes[0].messages[0]
+    assert masters.list_activities(db) == ()
 
 
 def test_holiday_import_replaces_the_year_by_default(db):

@@ -36,6 +36,7 @@ C_UNSUPPORTED_FORMAT = "source_format_unsupported"
 C_EMPTY_SOURCE = "source_file_empty"
 C_NO_HEADER = "source_header_missing"
 C_DUPLICATE_HEADER = "source_header_duplicate"
+C_UNMAPPED_SOURCE = "source_file_unmapped"
 
 
 @dataclass(frozen=True)

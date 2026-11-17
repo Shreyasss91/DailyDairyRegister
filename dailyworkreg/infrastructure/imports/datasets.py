@@ -13,6 +13,7 @@ guess about which column was meant.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -403,49 +404,105 @@ def judge_feeder(row: dict[str, str], mapping: dict[str, str], row_number: int) 
 
 
 def judge_activity(row: dict[str, str], mapping: dict[str, str], row_number: int) -> RowOutcome:
+    """Judge one catalogue row without choosing any of its scheduling numbers.
+
+    An activity row is a table of approved decisions: which record it is, what it is
+    called in both languages, how heavily it weighs against its peers, how often it
+    may and must occur, and how far apart its occurrences sit. All of those except
+    the Kannada wording are refused when absent or unreadable, because the only
+    alternative is a number this tool invented, and an invented weight or frequency
+    would enter the register as though the office had approved it. A missing Kannada
+    description is a warning rather than a refusal: the absence is recorded and the
+    English text is what the register shows, and nothing is translated here.
+    """
+
     def get(field_name: str) -> str | None:
         column = mapping.get(field_name)
         return row.get(column) if column else None
 
+    activity_id = _text(get("activity_id"))
     category = _text(get("category"))
     description_en = _text(get("description_en"))
-    if category is None or description_en is None:
+    if activity_id is None or category is None or description_en is None:
         missing = [
             name
-            for name, value in (("category", category), ("English description", description_en))
+            for name, value in (
+                ("activity id", activity_id),
+                ("category", category),
+                ("English description", description_en),
+            )
             if value is None
         ]
         return RowOutcome(
             row_number, dict(row), None, SEVERITY_ERROR,
             (f"missing {', '.join(missing)}",),
         )
-    messages: list[str] = []
+
     weight, weight_messages = coerce_float(get("weight"), field_name="weight")
-    messages.extend(weight_messages)
     monthly_min, min_messages = coerce_int(get("monthly_min"), field_name="monthly minimum")
-    messages.extend(min_messages)
     monthly_max, max_messages = coerce_int(get("monthly_max"), field_name="monthly maximum")
-    messages.extend(max_messages)
-    if monthly_min is not None and monthly_max is not None and monthly_min > monthly_max:
-        return RowOutcome(
-            row_number, dict(row), None, SEVERITY_ERROR,
-            (f"monthly minimum {monthly_min} is above maximum {monthly_max}",),
-        )
     gap, gap_messages = coerce_int(get("repeat_gap_days"), field_name="repeat gap")
-    messages.extend(gap_messages)
+
+    problems: list[str] = [
+        *weight_messages,
+        *min_messages,
+        *max_messages,
+        *gap_messages,
+    ]
+    blank = [
+        name
+        for name, value, messages in (
+            ("weight", weight, weight_messages),
+            ("monthly minimum", monthly_min, min_messages),
+            ("monthly maximum", monthly_max, max_messages),
+            ("repeat gap", gap, gap_messages),
+        )
+        if value is None and not messages
+    ]
+    if blank:
+        listed = blank[0] if len(blank) == 1 else f"{', '.join(blank[:-1])} or {blank[-1]}"
+        problems.append(
+            f"no {listed} was supplied; supply the approved catalogue value, because "
+            "the tool does not choose a weight, a frequency or a repeat gap for an activity"
+        )
+    if weight is not None and not math.isfinite(weight):
+        problems.append(f"weight '{get('weight')}' is not a finite number")
+    elif weight is not None and weight <= 0:
+        problems.append(
+            f"weight {weight:g} is not greater than zero, so it cannot express a share"
+        )
+    for name, value in (
+        ("monthly minimum", monthly_min),
+        ("monthly maximum", monthly_max),
+        ("repeat gap", gap),
+    ):
+        if value is not None and value < 0:
+            problems.append(f"{name} {value} is negative")
+    if monthly_min is not None and monthly_max is not None and monthly_min > monthly_max:
+        problems.append(f"monthly minimum {monthly_min} is above maximum {monthly_max}")
+    if problems:
+        return RowOutcome(row_number, dict(row), None, SEVERITY_ERROR, tuple(problems))
+
+    description_kn = _text(get("description_kn"))
+    warnings: list[str] = []
+    if description_kn is None:
+        warnings.append(
+            "no Kannada description was supplied; the activity is imported with its "
+            "English text alone and nothing is translated here"
+        )
     payload = {
-        "activity_id": _text(get("activity_id")),
+        "activity_id": activity_id,
         "category": category,
         "description_en": description_en,
-        "description_kn": _text(get("description_kn")),
+        "description_kn": description_kn,
         "weight": weight,
         "monthly_min": monthly_min,
         "monthly_max": monthly_max,
         "repeat_gap_days": gap,
         "weekday_mask": _text(get("weekday_mask")),
     }
-    severity = SEVERITY_WARNING if messages else SEVERITY_OK
-    return RowOutcome(row_number, dict(row), payload, severity, tuple(messages))
+    severity = SEVERITY_WARNING if warnings else SEVERITY_OK
+    return RowOutcome(row_number, dict(row), payload, severity, tuple(warnings))
 
 
 def judge_general_holiday(

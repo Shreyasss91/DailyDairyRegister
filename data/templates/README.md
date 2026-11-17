@@ -101,6 +101,31 @@ For every approved activity, supply:
 - minimum repeat gap in days;
 - optional weekday restriction.
 
+### What the importer enforces now
+
+A row is refused, and named, when its `Activity ID`, `Category`, `Description`, `Weight`,
+`Monthly Min`, `Monthly Max` or `Repeat Gap` is blank, is a placeholder such as `#N/A`,
+or holds text that is not a number. A weight must be greater than zero; a minimum or
+maximum must not be negative and the minimum must not exceed the maximum; a repeat gap
+must not be negative. **Nothing is filled in for you.** Until recently a blank weight
+became 1, a blank minimum 0, a blank maximum 10 and a blank gap 2, and a row with no
+identifier was given `ACT-###`, which made an incomplete file look complete; that is gone.
+A missing Kannada description is a warning rather than a refusal — the row imports with
+its English text and no translation is invented — but the printed register then shows an
+English-only activity, which the office will need to correct.
+
+A file whose headings do not match this contract is refused when it is uploaded, with the
+missing column named, so a wrong-column file cannot become an empty batch that explains
+nothing.
+
+### A worksheet, not a catalogue
+
+If a duty list exists on paper or in a supervisory register, it can be turned into a
+review worksheet: identity, work area, wording and the source's own frequency label kept
+verbatim, and every catalogue number left blank. Such a worksheet is refused by the
+importer for exactly the reasons above, which is what keeps a proposal from becoming a
+catalogue by being uploaded. Keep it out of Git and mark it not approved.
+
 The proposed examples are a starting point for review only. Rewrite/approve them through the appropriate office authority, translate/review Kannada descriptions, and copy only approved final rows to the blank import template. Their example weights/frequencies are not recommendations or approved defaults. The Monday safety meeting is a separate recurring rule and must not be duplicated as an ordinary activity unless separately directed.
 
 ## 6. Area master
