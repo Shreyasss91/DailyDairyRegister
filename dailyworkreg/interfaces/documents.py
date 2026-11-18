@@ -79,6 +79,12 @@ def xlsx_filename(document: RegisterDocument) -> str:
     return f"daily-dairy-register-{month}-v{document.sequence}.xlsx"
 
 
+def pdf_filename(document: RegisterDocument) -> str:
+    """The same safe name for the printed version of one issued month."""
+
+    return xlsx_filename(document).removesuffix(".xlsx") + ".pdf"
+
+
 def workbook_bytes(document: RegisterDocument) -> bytes:
     """The workbook for one issued version, as bytes.
 
@@ -116,7 +122,7 @@ def workbook_bytes(document: RegisterDocument) -> bytes:
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     head_font = Font(bold=True)
 
-    _title(register, "Daily Dairy Register", document.month_label)
+    _title(register, "DAILY DAIRY REGISTER", document.month_label)
 
     header_row = REGISTER_HEADER_ROW
     for index, name in enumerate(REGISTER_HEADERS, start=1):

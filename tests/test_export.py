@@ -618,7 +618,7 @@ def test_the_month_is_headed_centrally_and_named_in_capitals(client, db):
     markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
     head = markup.split('<header class="register-head">')[1].split("</header>")[0]
 
-    assert "Daily Dairy Register" in head
+    assert "DAILY DAIRY REGISTER" in head
     assert "NOVEMBER 2026" in head
     # The heading is the whole of the masthead: the register identifies itself on its own
     # page rather than in the corner of the first one.

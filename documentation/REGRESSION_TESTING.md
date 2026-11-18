@@ -34,10 +34,10 @@ A non-zero exit code means the validation gate failed. Inspect the failing test 
 Run the directly relevant export and UI tests first:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_register_ui.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py
 ```
 
-These modules cover the export/document and frontend contracts, including:
+These modules cover the export/document, PDF, bulk-finalisation and frontend contracts, including:
 
 - XLSX content and issued-version identification.
 - Print-ready monthly document content and navigation.
@@ -50,6 +50,12 @@ These modules cover the export/document and frontend contracts, including:
 - Showing direct monthly export links only when the month has a latest issued finalisation.
 - Showing the register-level `Download all issued months` action only when at least one month is issued.
 - Keeping downloaded combined HTML self-contained while retaining the online single-month return link.
+- One PDF per issued month in its own package, with a README naming each month, version and finalisation, and the months omitted for having no issued finalisation.
+- One workbook per issued month in its own package, using the same `Register` and `Metadata` sheets as the single-month download.
+- Refusing a PDF request with a stable setup message when the local layout engine is missing, and refusing a failed render without sending a partial package.
+- The bulk close: the target set derived from the revision, the preflight writing nothing, one blocked month refusing the whole act, a forced failure rolling back the months already written, and the page refusing a second submission.
+
+The PDF module runs its packaging, refusal and read-only tests against a stand-in renderer, so they pass on a machine without Chromium. The two tests that assert a real `%PDF` file are skipped unless a local browser is installed; run `python -m playwright install chromium` before treating PDF rendering as verified.
 
 The focused tests use the application's test client and test database fixtures. They do not require a separately running application server.
 
@@ -58,8 +64,8 @@ The focused tests use the application's test client and test database fixtures. 
 From the repository root:
 
 ```powershell
-# 1. Focused API/document and UI coverage.
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_register_ui.py
+# 1. Focused API/document, PDF, bulk-finalisation and UI coverage.
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py
 
 # 2. Full regression suite.
 .\.venv\Scripts\python.exe -m pytest
@@ -99,4 +105,9 @@ For a manual export workflow check, use a disposable/test database selected with
 
 ## 7. Current verification boundary
 
-The GitHub commit reports for the monthly export, ZIP export and combined-print correction state that source/tree checks and regression assertions were added, but pytest was not executed in the GitHub-only editing environment. The repository status checks queried for the latest export correction returned no workflow runs or status checks. Run the commands above on the local checkout before treating runtime regression validation as complete.
+This repository has no continuous-integration runner, so the only verification gate is the local suite. Run it on the checkout you are about to commit: the counts quoted in the changelog were produced by the commands above on Windows with the project's own virtual environment.
+
+Two boundaries are worth stating plainly rather than discovering later:
+
+- The PDF tests that assert a real PDF file need a locally installed Chromium. Without it they skip, and a green run then says nothing about PDF rendering. The packaging and refusal tests always run.
+- XLSX bytes are not guaranteed identical across a long interval, because the archive records a modification time. Compare workbooks cell by cell rather than as bytes.

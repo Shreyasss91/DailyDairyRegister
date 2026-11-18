@@ -48,6 +48,14 @@ For an application-only installation without test tools, run this from the repos
 .\.venv\Scripts\python.exe -m pip install -e .
 ``` Install the `test` extra before running pytest.
 
+Install the local PDF layout engine once per computer. The application writes PDF files itself with a Chromium that stays on this machine:
+
+```powershell
+.\.venv\Scripts\python.exe -m playwright install chromium
+```
+
+The browser is downloaded to the user's own profile folder, not into the checkout or the virtual environment, so a `git pull` never removes it. This step is required for the PDF downloads only. Everything else works without it, and a PDF request refuses with a sentence naming this command rather than producing a file that will not open. Reinstalling or upgrading Python does not require repeating it; deleting the profile folder does.
+
 ## 3. Start the application — first and subsequent runs
 
 From the repository root, start the local server:
@@ -196,4 +204,5 @@ For focused export and user-interface regression tests, see [Regression testing]
 - **Python version is too old:** Check `py -0p` and create the environment with Python 3.11 or newer. Do not try to fix this by editing the project's `requires-python` declaration.
 - **Port 8010 is already in use:** Start with `--port 8011` and open `http://127.0.0.1:8011`.
 - **The application appears to use a different database:** Run `dailyworkreg.exe --print-db` and inspect `DAILYWORKREG_DB` and any `--db` argument.
+- **A PDF download says the layout engine is not installed:** Run `.\.venv\Scripts\python.exe -m playwright install chromium` once, then reload the page. The printed page remains available in the meantime and can be saved from the browser's own print dialog.
 - **Git shows local source changes after an update:** Stop before pulling further. Review and preserve those changes; do not use destructive reset/clean commands as a routine update method.

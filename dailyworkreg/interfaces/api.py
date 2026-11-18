@@ -92,6 +92,7 @@ from ..application.revisions import (
 from ..application.snapshot import SnapshotError
 from ..domain.cycle import MonthKey
 from ..domain.validator import InputError, Visit
+from ..infrastructure import rendering
 from ..infrastructure.backup import Limits
 from ..infrastructure.imports.datasets import JUDGES
 from ..infrastructure.imports.tabular import SourceFormatError, read_source_bytes
@@ -252,6 +253,15 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             # shows the whole picture rather than the first thing that went wrong.
             payload["error"]["blockers"] = [item.as_dict() for item in error.blockers]
         return JSONResponse(status_code=400, content=payload)
+
+    @app.exception_handler(rendering.RenderError)
+    async def render_error(_: Request, error: rendering.RenderError) -> JSONResponse:
+        # A missing layout engine is a setup problem on this computer, not a fault in the
+        # register, so it is answered as "not available here" rather than "bad request".
+        return JSONResponse(
+            status_code=503,
+            content={"error": {"constraint": error.constraint, "detail": error.detail}},
+        )
 
     @app.exception_handler(RevisionError)
     async def revision_error(_: Request, error: RevisionError) -> JSONResponse:
@@ -1241,6 +1251,151 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             headers={
                 "Content-Disposition": (
                     'attachment; filename="daily-dairy-register-issued-months.zip"'
+                )
+            },
+        )
+
+    # --- one-click packages, one format at a time -----------------------
+    #
+    # The mixed exports.zip above answers "give me everything"; these answer "give me the
+    # PDFs" and "give me the spreadsheets". Each is a separate route with its own
+    # filename and its own README, because a download that claims to be PDFs and holds an
+    # HTML file sends the operator looking for a fault in their own reader.
+
+    def _issued_months(
+        db: sqlite3.Connection, register_id: str
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Every month of the register, and the issued versions to include."""
+
+        months = month_lifecycle(db, register_id)
+        issued = [item for item in months if item["latest_finalisation_id"] is not None]
+        if not issued:
+            raise SurfaceError(
+                "register_has_no_issued_months",
+                "No issued monthly versions are available yet. Finalise at least one "
+                "month first.",
+            )
+        return months, issued
+
+    def _package_readme(
+        *,
+        what: str,
+        folder_line: str,
+        documents: list[dict[str, Any]],
+        omitted_months: list[str],
+    ) -> str:
+        lines = [
+            f"DailyDairyRegister — {what}",
+            "",
+            folder_line,
+            "",
+            "Only each month's latest issued version is included. Drafts and "
+            "unfinalised months are never exported.",
+            "",
+            "Included issued versions:",
+        ]
+        lines.extend(
+            f"- {item.month}: issued version {item.sequence}; "
+            f"finalisation {item.finalisation_id}; file {name}"
+            for item, name in documents
+        )
+        if omitted_months:
+            lines.extend(["", "Months omitted because they have no issued finalisation:"])
+            lines.extend(f"- {month}" for month in omitted_months)
+        return chr(10).join(lines) + chr(10)
+
+    def _zip_response(entries: dict[str, bytes], filename: str) -> Response:
+        package = BytesIO()
+        with ZipFile(package, "w", compression=ZIP_DEFLATED) as archive:
+            for name, body in entries.items():
+                archive.writestr(name, body)
+        return Response(
+            content=package.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.get("/api/registers/{register_id}/exports/pdf.zip")
+    def export_every_issued_month_as_pdf(
+        register_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> Response:
+        """One genuine PDF for each issued month, laid out on this computer."""
+
+        months, issued = _issued_months(db, register_id)
+        issued_documents = [
+            documents_source.document(db, item["latest_finalisation_id"])
+            for item in issued
+        ]
+        template = templates.env.get_template("print_register.html")
+        html_by_name = {
+            documents.pdf_filename(document): template.render(document=document)
+            for document in issued_documents
+        }
+        rendered = rendering.render_documents(html_by_name)
+        entries: dict[str, bytes] = {
+            f"pdf/{name}": body for name, body in rendered.items()
+        }
+        named = list(zip(issued_documents, rendered, strict=True))
+        entries["README.txt"] = _package_readme(
+            what="issued monthly PDFs",
+            folder_line="pdf/: one PDF for each included month.",
+            documents=[(document, name) for document, name in named],
+            omitted_months=[
+                item["month"]
+                for item in months
+                if item["latest_finalisation_id"] is None
+            ],
+        )
+        return _zip_response(entries, "daily-dairy-register-issued-months-pdf.zip")
+
+    @app.get("/api/registers/{register_id}/exports/excel.zip")
+    def export_every_issued_month_as_excel(
+        register_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> Response:
+        """One workbook for each issued month, in one download."""
+
+        months, issued = _issued_months(db, register_id)
+        issued_documents = [
+            documents_source.document(db, item["latest_finalisation_id"])
+            for item in issued
+        ]
+        named = [
+            (document, documents.xlsx_filename(document))
+            for document in issued_documents
+        ]
+        entries: dict[str, bytes] = {
+            f"excel/{name}": documents.workbook_bytes(document)
+            for document, name in named
+        }
+        entries["README.txt"] = _package_readme(
+            what="issued monthly workbooks",
+            folder_line="excel/: one XLSX workbook for each included month.",
+            documents=[(document, name) for document, name in named],
+            omitted_months=[
+                item["month"]
+                for item in months
+                if item["latest_finalisation_id"] is None
+            ],
+        )
+        return _zip_response(entries, "daily-dairy-register-issued-months-excel.zip")
+
+    @app.get("/api/finalisations/{finalisation_id}/export.pdf")
+    def export_finalisation_pdf(
+        finalisation_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> Response:
+        """One issued month as a PDF, laid out on this computer."""
+
+        issued = documents_source.document(db, finalisation_id)
+        markup = templates.env.get_template("print_register.html").render(
+            document=issued
+        )
+        body = rendering.render_document(markup)
+        return Response(
+            content=body,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{documents.pdf_filename(issued)}"'
                 )
             },
         )

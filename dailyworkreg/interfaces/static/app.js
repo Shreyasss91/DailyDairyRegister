@@ -1298,6 +1298,12 @@ function renderIssuedDocument(target, record, registerId, runId) {
       }),
       el('a', {
         class: 'button',
+        href: `/api/finalisations/${record.finalisation_id}/export.pdf`,
+        download: '',
+        text: 'Download PDF (.pdf)',
+      }),
+      el('a', {
+        class: 'button',
         href: `/finalisations/${record.finalisation_id}/print`,
         target: '_blank',
         rel: 'noopener',
@@ -1576,18 +1582,35 @@ async function renderMonths(registerId, runId) {
   target.append(await bulkFinalisationPanel(registerId, runId));
   const issuedCount = months.filter((month) => month.latest_finalisation_id).length;
   if (issuedCount > 0) {
-    target.append(el('div', { class: 'actions' }, [
+    // Three downloads, each naming exactly what it contains. A package that promises
+    // PDFs and holds an HTML file sends the operator looking for a fault in their own
+    // reader, so the printed and the spreadsheet packages are separate buttons.
+    target.append(el('div', { class: 'actions export-actions' }, [
       el('a', {
         class: 'button button-primary',
+        href: `/api/registers/${registerId}/exports/pdf.zip`,
+        download: '',
+        text: `Download PDFs — all months (${issuedCount}) (.zip)`,
+      }),
+      el('a', {
+        class: 'button button-primary',
+        href: `/api/registers/${registerId}/exports/excel.zip`,
+        download: '',
+        text: `Download Excel — all months (${issuedCount}) (.zip)`,
+      }),
+      el('a', {
+        class: 'button',
         href: `/api/registers/${registerId}/exports.zip`,
         download: '',
-        text: `Download all issued months (${issuedCount}) (.zip)`,
-      }),
-      el('span', {
-        class: 'muted',
-        text: 'Includes one Excel workbook per issued month and one combined print-ready document for PDF.',
+        text: `Download everything issued (${issuedCount}) (.zip)`,
       }),
     ]));
+    target.append(el('p', {
+      class: 'muted',
+      text: 'The PDF package holds one PDF for each issued month, laid out on this '
+        + 'computer. The Excel package holds one workbook for each. The third holds the '
+        + 'workbooks plus one combined print-ready page and is kept for older links.',
+    }));
   }
   months.forEach((month) => target.append(monthCard(registerId, runId, month)));
 }

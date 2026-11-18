@@ -58,11 +58,17 @@ def test_the_page_revalidates_html_and_uses_a_versioned_application_script(clien
 
 
 
-def test_the_draft_offers_one_download_all_package_for_issued_months():
+def test_the_draft_offers_one_download_package_for_each_format():
+    """Three downloads, each naming what it holds, shown only when a month is issued."""
+
     assert "const issuedCount = months.filter((month) => month.latest_finalisation_id).length" in APP_JS
     assert "`/api/registers/${registerId}/exports.zip`" in APP_JS
-    assert "Download all issued months" in APP_JS
-    assert "one combined print-ready document for PDF" in APP_JS
+    assert "`/api/registers/${registerId}/exports/pdf.zip`" in APP_JS
+    assert "`/api/registers/${registerId}/exports/excel.zip`" in APP_JS
+    assert "Download PDFs — all months" in APP_JS
+    assert "Download Excel — all months" in APP_JS
+    assert "Download everything issued" in APP_JS
+    assert "one combined print-ready page" in APP_JS
 
 
 def test_the_page_sends_every_act_of_this_capability_to_the_server():
