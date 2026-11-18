@@ -162,6 +162,18 @@
         <label>Activities per working day
           <input type="number" id="gen-activities" value="3" min="0" step="1" />
         </label>
+        <fieldset class="choices" id="gen-language">
+          <legend>Entry language</legend>
+          <label class="choice">
+            <input type="radio" name="gen-language" value="en" /> English
+          </label>
+          <label class="choice">
+            <input type="radio" name="gen-language" value="kn" /> Kannada
+          </label>
+          <label class="choice">
+            <input type="radio" name="gen-language" value="both" checked /> Both
+          </label>
+        </fieldset>
         <label>DTC target (fallback) <input type="number" id="gen-dtc-target" min="0" /></label>
         <button id="gen-run" class="button button-primary">Generate</button>
       </div>
@@ -241,6 +253,6 @@
 
   </main>
 
-  <script src="/static/app.js?v=activities-1"></script>
+  <script src="/static/app.js?v=language-1"></script>
 </body>
 </html>

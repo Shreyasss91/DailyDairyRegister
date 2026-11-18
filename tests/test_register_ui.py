@@ -204,3 +204,22 @@ def test_an_issued_version_offers_its_own_exports():
     # Exporting is a read: nothing about it writes, corrects or reopens anything.
     lowered = APP_JS.lower()
     assert "export" in lowered and "/corrections" not in APP_JS.split("export-actions")[1][:800]
+
+
+def test_the_generate_page_offers_the_three_languages(client):
+    """A choice between three, visible as three, defaulting to the office's own filing."""
+
+    answer = client.get("/")
+    assert answer.status_code == 200
+
+    for value in ("en", "kn", "both"):
+        assert f'name="gen-language" value="{value}"' in answer.text
+    assert 'id="gen-language"' in answer.text
+    # One is chosen before the operator touches anything, and it is the bilingual one.
+    assert re.search(r'value="both"\s+checked', answer.text)
+    assert APP_JS.count('document.querySelector(\'input[name="gen-language"]:checked\')') == 1
+    assert "payload.entry_language = language" in APP_JS
+
+
+def test_the_generate_page_preselects_the_language_the_platform_defaults_to():
+    assert "checked" in INDEX.split('id="gen-language"')[1].split("</fieldset>")[0]

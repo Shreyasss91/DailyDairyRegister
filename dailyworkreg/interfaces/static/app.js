@@ -537,6 +537,18 @@ document.getElementById('gen-start').addEventListener('change', () => {
   if (start) document.getElementById('gen-cycle-start').value = start.slice(0, 7);
 });
 
+/**
+ * The language the operator ticked for this register.
+ *
+ * Read from the checked radio rather than from a module-level variable, so the answer is
+ * what the form says now: a language recalled from an earlier click and a language on
+ * screen can disagree, and the one on screen is the one the operator believes.
+ */
+function chosenLanguage() {
+  const checked = document.querySelector('input[name="gen-language"]:checked');
+  return checked ? checked.value : '';
+}
+
 document.getElementById('gen-run').addEventListener('click', async () => {
   const result = document.getElementById('gen-result');
   const mode = document.getElementById('gen-mode').value;
@@ -548,6 +560,8 @@ document.getElementById('gen-run').addEventListener('click', async () => {
   };
   const activities = document.getElementById('gen-activities').value;
   if (activities !== '') payload.activities_per_day = Number(activities);
+  const language = chosenLanguage();
+  if (language) payload.entry_language = language;
   if (mode === 'coverage_cycle') {
     payload.cycle_start_month = document.getElementById('gen-cycle-start').value;
     payload.cycle_duration_months = Number(document.getElementById('gen-months-input')?.value || document.getElementById('gen-cycle-months').value || 1);
@@ -567,7 +581,7 @@ document.getElementById('gen-run').addEventListener('click', async () => {
       result,
       kind,
       done.is_draft
-        ? `A draft was generated: ${done.months} month(s), ${done.rows} date row(s), ${done.visits} visit(s), ${done.activities || 0} recorded activit${(done.activities || 0) === 1 ? 'y' : 'ies'}.`
+        ? `A draft was generated: ${done.months} month(s), ${done.rows} date row(s), ${done.visits} visit(s), ${done.activities || 0} recorded activit${(done.activities || 0) === 1 ? 'y' : 'ies'}, written in ${done.entry_language_label || 'English and Kannada'}.`
         : `No draft was produced: the allocator reported ${done.status.replace('_', ' ')} for at least one month. The attempt is stored with its evidence.`,
       done.missing_content,
     );

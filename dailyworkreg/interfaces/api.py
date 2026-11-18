@@ -36,7 +36,11 @@ from ..application.calendar_projection import (
     project_calendar,
     save_weekly_off_rules,
 )
-from ..application.draft_generation import DraftMode, generate_draft
+from ..application.draft_generation import (
+    C_ENTRY_LANGUAGE_INVALID,
+    DraftMode,
+    generate_draft,
+)
 from ..application.draft_requests import GenerationInputError, GenerationSpec, prepare_generation
 from ..application.finalisation import (
     C_BULK_TARGETS_MISMATCH,
@@ -90,8 +94,14 @@ from ..application.revisions import (
     registers as register_history,
 )
 from ..application.snapshot import SnapshotError
+from ..domain import wording
 from ..domain.cycle import MonthKey
 from ..domain.validator import InputError, Visit
+from ..domain.wording import (
+    DEFAULT_ENTRY_LANGUAGE,
+    ENTRY_LANGUAGES,
+    LANGUAGE_DESCRIPTIONS,
+)
 from ..infrastructure import rendering
 from ..infrastructure.backup import Limits
 from ..infrastructure.imports.datasets import JUDGES
@@ -727,6 +737,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 for entry in row.entries
                 if entry.kind.value == "activity"
             ),
+            "entry_language": prepared.request.entry_language,
+            "entry_language_label": LANGUAGE_DESCRIPTIONS.get(
+                prepared.request.entry_language, prepared.request.entry_language
+            ),
             "exceptions": len(draft.exceptions),
             "missing_content": list(prepared.readiness.missing_content),
         }
@@ -772,6 +786,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             "seed": register.seed,
             "generator_version": register.generator_version,
             "allocator_version": register.allocator_version,
+            "entry_language": register.entry_language,
+            "entry_language_label": LANGUAGE_DESCRIPTIONS.get(
+                register.entry_language, register.entry_language
+            ),
             "missing_content": list(register.missing_content),
             "is_operational_diary": register.is_operational_diary,
             "months": [
@@ -1602,6 +1620,7 @@ def _spec(payload: dict[str, Any]) -> GenerationSpec:
         cycle_duration_months=int(payload.get("cycle_duration_months", 1)),
         cycle_visits_per_asset=int(payload.get("cycle_visits_per_asset", 1)),
         activities_per_day=_activities_per_day(payload.get("activities_per_day")),
+        entry_language=_entry_language(payload.get("entry_language")),
         dtc_target=payload.get("dtc_target"),
         area_required=_counts(payload.get("area_required")),
         feeder_required=_counts(payload.get("feeder_required")),
@@ -1611,11 +1630,12 @@ def _spec(payload: dict[str, Any]) -> GenerationSpec:
 
 
 def _activities_per_day(value: Any) -> int | None:
-    """The operator's requested count, or ``None`` for the platform default.
+    """The operator's requested count, or ``None`` when the request does not ask.
 
-    An absent value is not the same as zero: absent asks for the default the platform
-    keeps (three a day when a catalogue is stored), while zero explicitly leaves every
-    day to field visits. Reading one as the other would silently change a register.
+    An absent value stays absent rather than becoming zero: a caller that predates the
+    catalogue has not asked for activities and keeps the visits-only draft it used to get,
+    while the platform's three-a-day default belongs to the form an operator uses. Reading
+    one as the other would silently change somebody's register.
     """
 
     if value is None or value == "":
@@ -1623,6 +1643,26 @@ def _activities_per_day(value: Any) -> int | None:
     if isinstance(value, bool):
         raise ValueError("activities_per_day must be a whole number")
     return int(value)
+
+
+def _entry_language(value: Any) -> str:
+    """The language the register is written in, or a refusal naming the three.
+
+    Absent is the platform default rather than a remembered choice: a generation that does
+    not say which language it is written in must not inherit whichever one was used last.
+    """
+
+    if value is None or value == "":
+        return DEFAULT_ENTRY_LANGUAGE
+    if not isinstance(value, str) or not wording.is_known_language(value):
+        raise GenerationInputError(
+            C_ENTRY_LANGUAGE_INVALID,
+            (
+                f"{value!r} is not a language the register is written in; choose one "
+                "of " + ", ".join(ENTRY_LANGUAGES)
+            ),
+        )
+    return value.strip().lower()
 
 
 def _month(label: str) -> MonthKey:

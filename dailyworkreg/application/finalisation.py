@@ -34,9 +34,11 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
+from ..domain import wording
 from ..infrastructure.sqlite import generation_store, revision_state
 from . import readiness as readiness_module
 from . import revisions
+from . import snapshot as snapshot_module
 
 C_FINALISATION_UNKNOWN = "finalisation_unknown"
 C_MONTH_NOT_IN_REVISION = "month_is_not_in_this_revision"
@@ -64,6 +66,11 @@ C_FINALISED_MONTH_CONTENT_CHANGED = "finalised_month_content_would_change"
 #: is acknowledged instead, because an over-covered commitment is a fact to record, not a
 #: fault to repair.
 BLOCKING_EXCEPTION_KINDS = ("infeasible", "unresolved")
+
+#: Content kept with a closed month that describes how it is presented rather than what it
+#: recorded. Frozen with the record, but left out of its fingerprint, which answers whether
+#: the month's content is the same month's content.
+PRESENTATION_CONTENT_KEYS = ("entry_language", "asset_types")
 
 
 @dataclass(frozen=True)
@@ -169,6 +176,30 @@ def month_record(
     return None
 
 
+def _reading_of_the_revision(
+    connection: sqlite3.Connection, run_id: str
+) -> tuple[str, dict[str, str]]:
+    """How this revision's register is read: its language, and what each asset is.
+
+    Both come from the request the revision was generated from, which is the revision's own
+    record of what it was asked for. A snapshot this build cannot read is not a reason to
+    refuse a close - the month still has to be issued - so it yields the platform's default
+    language and no asset kinds, which the document projection already handles.
+    """
+
+    default_language = wording.DEFAULT_ENTRY_LANGUAGE
+    try:
+        stored = generation_store.read_run(connection, run_id)
+        request = snapshot_module.decode_request(
+            json.loads(stored.run.request_snapshot_json)
+        )
+    except (ValueError, TypeError, KeyError):
+        return default_language, {}
+    return request.entry_language, {
+        asset.asset_id: asset.asset_type.value for asset in request.roster
+    }
+
+
 def month_content(connection: sqlite3.Connection, run_id: str, month: str) -> dict[str, Any]:
     """Everything about one month that a finalised record has to keep.
 
@@ -184,10 +215,16 @@ def month_content(connection: sqlite3.Connection, run_id: str, month: str) -> di
     locks = sorted(
         day for day in revision_state.locks(connection, run_id) if day.startswith(month)
     )
+    language, asset_types = _reading_of_the_revision(connection, run_id)
     return {
         "month": month,
         "rows": rows,
         "locked_dates": locks,
+        # Frozen with the month, not re-read from the office's settings at export time: a
+        # month issued in Kannada is issued in Kannada, and changing the language of a
+        # later generation must not silently rewrite the document already approved.
+        "entry_language": language,
+        "asset_types": asset_types,
         "status": "" if record is None else record.status,
         "allocator_status": "" if record is None else record.allocator_status,
         "obligations": {} if record is None else json.loads(record.obligations_json),
@@ -199,7 +236,20 @@ def month_content(connection: sqlite3.Connection, run_id: str, month: str) -> di
 
 
 def month_fingerprint(connection: sqlite3.Connection, run_id: str, month: str) -> str:
-    return revisions.fingerprint(month_content(connection, run_id, month))
+    """What makes this month the month that was closed.
+
+    The language and the asset kinds are kept with the record but kept out of this: they
+    are presentation, and a fingerprint recorded before they existed has to keep matching,
+    or every month closed by an earlier build would refuse the next revision of its
+    register as though its content had changed.
+    """
+
+    content = {
+        key: value
+        for key, value in month_content(connection, run_id, month).items()
+        if key not in PRESENTATION_CONTENT_KEYS
+    }
+    return revisions.fingerprint(content)
 
 
 def finalised_months(

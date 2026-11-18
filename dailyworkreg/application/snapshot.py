@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from ..domain import wording
 from ..domain.activities import ActivitySpec
 from ..domain.cycle import CoverageCycle, DtcClass, DtcWeights, MonthKey
 from ..domain.validator import (
@@ -41,10 +42,14 @@ from .draft_generation import (
 #: activities a day records, so a stored draft can be re-derived exactly. A schema 1
 #: snapshot is still read: it carries no catalogue, so it reproduces the visits-only
 #: draft it was generated as, which is what it recorded.
-REQUEST_SNAPSHOT_SCHEMA = 2
+#:
+#: Schema 3 adds the language the register is written in. Schema 1 and 2 snapshots are
+#: still read, and they hold no language because the register was filed in both then, so
+#: that is what they are read as - the document they were issued as.
+REQUEST_SNAPSHOT_SCHEMA = 3
 
 #: Versions this reader understands.
-REQUEST_SNAPSHOT_READABLE = (1, 2)
+REQUEST_SNAPSHOT_READABLE = (1, 2, 3)
 
 C_SNAPSHOT_VERSION_UNSUPPORTED = "request_snapshot_version_unsupported"
 C_SNAPSHOT_MALFORMED = "request_snapshot_malformed"
@@ -157,6 +162,7 @@ def encode_request(request: DraftRequest) -> dict[str, Any]:
         ],
         "activities": [_activity(item) for item in request.activities],
         "activities_per_day": request.activities_per_day,
+        "entry_language": request.entry_language,
         "cycle": (
             None
             if request.cycle is None
@@ -317,6 +323,10 @@ def decode_request(payload: dict[str, Any]) -> DraftRequest:
                 for item in payload.get("activities") or ()
             ),
             activities_per_day=int(payload.get("activities_per_day") or 0),
+            # A snapshot written before the language existed records a register filed in
+            # both, which is exactly what it was. It is not upgraded to today's default,
+            # because there was no default then and the draft it describes was bilingual.
+            entry_language=wording.normalise_language(payload.get("entry_language")),
             cycle=cycle,
             weights=(
                 None

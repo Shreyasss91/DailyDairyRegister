@@ -209,28 +209,86 @@ def printed_table(markup: str) -> str:
     return markup.split('<table class="register">')[1].split("</table>")[0]
 
 
-def expected_activity(row: dict) -> str:
+#: What a calendar reason is called beside the date, mirrored here so the test states the
+#: rule instead of asking the code what it does.
+REASON_LABELS = {
+    "sunday": "Weekly off",
+    "second_saturday": "Weekly off",
+    "fourth_saturday": "Weekly off",
+    "other_weekly_off": "Weekly off",
+    "general_holiday": "Holiday",
+    "leave": "Leave",
+    "other_non_working": "Non-working day",
+}
+
+#: What a visit says, by the kind of asset it named.
+VISIT_PHRASES = {
+    "DTC": (
+        "Inspected {name} [{asset_id}] for transformer loading, oil level and earthing, "
+        "and checked the consumer supply"
+    ),
+    "FEEDER": (
+        "Patrolled {name} [{asset_id}] feeder for loading, tripping history and "
+        "tree clearance along the route"
+    ),
+    "AREA": (
+        "Inspected {name} [{asset_id}] area for DTC loading, street-light complaints and "
+        "service connections"
+    ),
+}
+
+GENERIC_VISIT_PHRASE = "Visited {name} [{asset_id}] and checked the supply and complaints there"
+
+
+def in_language(english: str, kannada: str | None, language: str) -> str:
+    english = (english or "").strip()
+    kannada = (kannada or "").strip()
+    if language == "kn":
+        return kannada or english
+    if language == "en":
+        return english or kannada
+    return f"{english} ({kannada})" if english and kannada else (english or kannada)
+
+
+def expected_activity(content: dict, row: dict) -> str:
     """What one stored date must read as, worked out from the record alone.
 
-    This mirrors the documented rule — visits, then entries, then calendar reasons, then
-    warnings, joined with a comma and a space, and an em dash when the date holds
-    nothing — rather than calling the code under test, so a change of order or separator
-    has to be made deliberately in two places.
+    This mirrors the documented rule — visits as a sentence naming the work, then activities
+    and other entries, then calendar reasons classified by the kind of day, then warnings,
+    joined with a comma and a space, in the language the record was issued in, and an em
+    dash when the date holds nothing — rather than calling the code under test, so a change
+    of wording, order or separator has to be made deliberately in two places.
     """
+
+    language = content.get("entry_language") or "both"
+    asset_types = content.get("asset_types") or {}
+    label = REASON_LABELS.get(row["kind"], "")
 
     items: list[str] = []
     for visit in row["visits"]:
-        text = f"{visit[2]} [{visit[0]}]"
-        if len(visit) > 3 and visit[3]:
-            text += f" ({visit[3]})"
-        items.append(text)
+        name = in_language(visit[2], visit[3] if len(visit) > 3 else "", language)
+        template = VISIT_PHRASES.get(asset_types.get(visit[0], ""), GENERIC_VISIT_PHRASE)
+        items.append(template.format(name=name, asset_id=visit[0]))
     for entry in row["entries"]:
-        text = entry[2]
-        if len(entry) > 3 and entry[3]:
-            text += f" ({entry[3]})"
-        items.append(text)
-    items.extend(f"Calendar: {reason}" for reason in row["reasons_en"])
-    items.extend(f"Calendar: {reason}" for reason in row["reasons_kn"])
+        items.append(in_language(entry[2], entry[3] if len(entry) > 3 else "", language))
+    if language == "en":
+        reasons = row["reasons_en"] or row["reasons_kn"]
+    elif language == "kn":
+        reasons = row["reasons_kn"] or row["reasons_en"]
+    else:
+        reasons = row["reasons_en"] + [
+            reason for reason in row["reasons_kn"] if reason not in row["reasons_en"]
+        ]
+    seen: set[str] = set()
+    kept: list[str] = []
+    for reason in reasons:
+        if reason and reason not in seen:
+            seen.add(reason)
+            kept.append(reason)
+    # The classification belongs to the date, so it is written once beside the first
+    # reason rather than on every one of them.
+    for position, reason in enumerate(kept):
+        items.append(f"{reason} ({label})" if label and position == 0 else reason)
     for constraint, detail in row["warnings"]:
         if constraint and detail:
             items.append(f"Warning: {detail} [{constraint}]")
@@ -409,7 +467,7 @@ def test_every_stored_value_is_what_the_register_row_shows(client, db):
     rows = {stamped(row): row for row in register_rows(book)}
 
     for day, stored_row in stored_rows.items():
-        assert rows[day]["activity"] == expected_activity(stored_row)
+        assert rows[day]["activity"] == expected_activity(record["content"], stored_row)
 
 
 def test_every_stored_visit_reaches_the_cell_with_its_identifier(client, db):
@@ -448,7 +506,7 @@ def test_several_activities_on_one_date_share_one_row_and_one_cell(client, db):
     assert len(rows) == 1
     assert "Pole inspection" in rows[0]["activity"]
     assert "Meter reading" in rows[0]["activity"]
-    assert rows[0]["activity"] == expected_activity(fifth)
+    assert rows[0]["activity"] == expected_activity(record["content"], fifth)
 
 
 def test_a_kannada_description_is_kept_beside_its_english_one(client, db):
@@ -469,7 +527,7 @@ def test_a_kannada_description_is_kept_beside_its_english_one(client, db):
     # Printed as stored and beside the English text, never translated or transliterated.
     assert "Line inspection" in row["activity"]
     assert "ಲೈನ್ ಪರಿಶೀಲನೆ" in row["activity"]
-    assert row["activity"] == expected_activity(record["content"]["rows"]["2026-11-06"])
+    assert row["activity"] == expected_activity(record["content"], record["content"]["rows"]["2026-11-06"])
 
 
 def test_a_calendar_reason_and_a_warning_stay_visible_in_the_cell(client, db):
@@ -486,8 +544,13 @@ def test_a_calendar_reason_and_a_warning_stay_visible_in_the_cell(client, db):
     for day, stored_row in with_reasons.items():
         cell = rows[day]["activity"]
         for reason in stored_row["reasons_en"]:
-            # Labelled, so a calendar reason cannot be misread as an activity performed.
-            assert f"Calendar: {reason}" in cell
+            # Classified, so a bare "Sunday" cannot be read as the date rather than as
+            # the reason it carries no work and cannot be mistaken for an activity.
+            assert f"{reason} (" in cell
+            assert "Calendar:" not in cell
+        assert any(
+            word in cell for word in ("Weekly off", "Holiday", "Leave", "Non-working day")
+        )
 
     warned = {
         day: row for day, row in stored_rows.items() if row["warnings"]
@@ -646,7 +709,7 @@ def test_each_printed_row_shows_what_its_date_recorded(client, db):
     rows = {row[1]: row[2] for row in printed_rows(markup)}
 
     for day, stored_row in record["content"]["rows"].items():
-        assert rows[day] == expected_activity(stored_row)
+        assert rows[day] == expected_activity(record["content"], stored_row)
 
 
 def test_a_date_with_several_things_on_it_is_still_one_printed_row(client, db):

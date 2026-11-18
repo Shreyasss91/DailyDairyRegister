@@ -1191,7 +1191,50 @@ reads no clock.
   register page's one Activity cell and the `Register` sheet, because it is an ordinary
   day entry and not a second kind of content.
 
-### 24.9 What is not modelled
+### 24.9 Register wording (as built)
+
+The words a register is written in are the office's decision, recorded with the generation
+that produced the month and frozen into the closed record. Three choices live in
+`dailyworkreg/domain/wording.py`, which decides nothing about work and is read by the
+generation request, the stored record, the document projection and the HTTP surface, so a
+value cannot be spelled one way when it is stored and another when it is compared.
+
+- **Language.** `entry_language` is `en`, `kn` or `both`. The generate page offers the
+  three as a visible choice, defaulting to `both`, and the generation route records the
+  answer; an absent value is the platform default, never the last one used. A language
+  the register is not written in is refused with `entry_language_invalid`, both at the
+  request boundary and in the domain, so an unknown value cannot reach an issued record.
+- **A missing translation is not a blank cell.** A Kannada register whose record holds no
+  Kannada for an item prints that item in English rather than omitting it. A feeder has no
+  Kannada name in the masters, so its visits read in English in every language.
+- **The choice is frozen with the month.** It is written into the month's content and read
+  back by the export, so a month issued in Kannada stays Kannada after a later generation
+  is asked for English. It is deliberately **outside** the month fingerprint along with the
+  asset kinds (`PRESENTATION_CONTENT_KEYS`): a month closed before the choice existed must
+  still be recognised as itself, or every such month would refuse the next revision of its
+  register as though its content had changed.
+- **A non-working date says what it is.** The stored reason is kept and the kind of day is
+  written beside it in words a reader acts on: `Sunday (Weekly off)`,
+  `Second Saturday (Weekly off)`, `Holiday - <name> (Holiday)`, `<leave type> (Leave)`.
+  The old `Calendar:` prefix is gone, because a bare "Sunday" beside a date reads as the
+  date rather than as the reason it carries no work. A kind with no label carries no
+  parenthetical rather than a guessed one, and a reason carried in both lists is printed
+  once.
+- **A field visit reads as work done.** An asset name alone says where somebody went, not
+  what the register is a record of, so a visit is written as a sentence naming the checks
+  for the kind of asset the revision's own roster recorded: `Inspected <name> [SCD-44] for
+  transformer loading, oil level and earthing, and checked the consumer supply` for a DTC,
+  a patrolling sentence for a feeder, an area sentence for an area. The asset kinds are
+  frozen with the month (`asset_types`), a record that does not say which kind it visited
+  reads a neutral sentence instead of a guessed verb, and the narrative is presentation
+  only: the visit, its date and its asset remain the record. The narrative sentence is
+  English in every language; the language setting decides how the asset is named.
+- **A month closed before this change reads differently.** Its record carries no language
+  and no asset kinds, so it is read as the bilingual register it was and its visits read
+  the neutral sentence. Reissuing it in another wording is a correction revision
+  generated under this contract, not an act the platform performs on a closed month.
+
+### 24.10 What is not modelled
 
 - Partial-month generation, and therefore the use of the section 23 proration rule to
   build a schedule. A part-month is still refused.
@@ -1204,6 +1247,12 @@ reads no clock.
   Randomising within a range is not implemented, and neither is a per-weekday count.
 - An activity's applicability to particular areas, feeders or DTCs: the catalogue has no
   such column, so a placement is office-wide.
+- A Kannada narrative sentence for a visit, and Kannada names for feeders, which the
+  masters do not store. The language setting governs names and activity text, not the
+  sentence a visit is written in.
+- A per-month or per-register language other than the one recorded at generation. Changing
+  a closed month's language is not an act the platform offers; a different wording means a
+  correction revision generated in that language.
 - Authentication or multi-operator attribution. The note is the only human record.
 
 ## 25. Persistence guarantees beneath a finalised month (as built)

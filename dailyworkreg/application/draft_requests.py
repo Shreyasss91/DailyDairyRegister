@@ -15,6 +15,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import date
 
+from ..domain import wording
 from ..domain.activities import ActivitySpec
 from ..domain.cycle import CoverageCycle, DtcClass, DtcWeights, MonthKey
 from ..domain.validator import (
@@ -24,9 +25,11 @@ from ..domain.validator import (
     FeasibilityConfig,
     Visit,
 )
+from ..domain.wording import DEFAULT_ENTRY_LANGUAGE
 from ..infrastructure.sqlite import masters
 from .calendar_projection import CalendarProjection, project_calendar
 from .draft_generation import (
+    C_ENTRY_LANGUAGE_INVALID,
     C_RANGE_REVERSED,
     AssetDisplay,
     DraftMode,
@@ -69,11 +72,16 @@ class GenerationSpec:
     cycle_start_month: MonthKey | None = None
     cycle_duration_months: int = 1
     cycle_visits_per_asset: int = 1
-    #: Regular activities recorded on every eligible working day. ``None`` means "the
-    #: platform default", which is :data:`DEFAULT_ACTIVITIES_PER_DAY` when a catalogue
-    #: is stored and ``0`` when it is not - a range must still generate field visits
-    #: on an office that has not imported activities yet.
+    #: Regular activities recorded on every eligible working day. ``None`` means the
+    #: caller did not ask for activities, and it stays that: a request that says nothing
+    #: about activities generates a visits-only draft. The daily count is a decision, so
+    #: the operator's own form supplies it and its box starts at
+    #: :data:`DEFAULT_ACTIVITIES_PER_DAY`.
     activities_per_day: int | None = None
+    #: Which language the register is written in. Left unset it is the platform default,
+    #: because a register has always been filed in both languages and a caller that predates
+    #: the choice must keep the document it used to get.
+    entry_language: str = DEFAULT_ENTRY_LANGUAGE
     #: Capacity-fallback mode only.
     dtc_target: int | None = None
     area_required: dict[MonthKey, dict[str, int]] = field(default_factory=dict)
@@ -274,6 +282,26 @@ def _activities_per_day(requested: int | None) -> int:
     return requested
 
 
+def _entry_language(requested: str | None) -> str:
+    """The language the register is written in, or a refusal the operator can act on.
+
+    Absent means the platform default rather than a remembered choice: a generation that
+    does not state its language must not silently inherit the last one.
+    """
+
+    if requested is None or str(requested).strip() == "":
+        return DEFAULT_ENTRY_LANGUAGE
+    if not wording.is_known_language(requested):
+        raise GenerationInputError(
+            C_ENTRY_LANGUAGE_INVALID,
+            (
+                f"{requested!r} is not a language the register is written in; choose "
+                "English, Kannada, or both"
+            ),
+        )
+    return str(requested).strip().lower()
+
+
 def prepare_generation(
     connection: sqlite3.Connection, spec: GenerationSpec
 ) -> PreparedGeneration:
@@ -329,6 +357,7 @@ def prepare_generation(
         entries=entries,
         activities=catalogue,
         activities_per_day=per_day,
+        entry_language=_entry_language(spec.entry_language),
         cycle=cycle,
         weights=weights,
         rotation_offset=spec.rotation_offset,

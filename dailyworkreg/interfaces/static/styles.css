@@ -110,6 +110,22 @@ input, select {
 .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 12px 0; }
 .form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 
+/* A choice between three, shown as three side by side rather than hidden behind a
+   dropdown: which language a register is written in is one of the decisions an operator
+   makes every time, and a collapsed control hides the options it is choosing between. */
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.choices legend { padding: 0; font-size: 12px; color: var(--muted); }
+.choices .choice { display: flex; gap: 5px; align-items: center; font-size: 13px; color: var(--ink); }
+.choices input[type="radio"] { margin: 0; }
+
 .detail { margin: 12px 0; padding: 12px; background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; font-size: 13px; }
 .detail h3 { margin: 0 0 4px; font-size: 14px; }
 .detail h4 { margin: 14px 0 6px; font-size: 13px; }

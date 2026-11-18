@@ -44,6 +44,7 @@ from datetime import date, timedelta
 from enum import Enum
 from typing import Any
 
+from ..domain import wording
 from ..domain.activities import (
     ActivityInfeasible,
     ActivitySpec,
@@ -69,6 +70,7 @@ from ..domain.validator import (
     Violation,
     Visit,
 )
+from ..domain.wording import DEFAULT_ENTRY_LANGUAGE
 
 #: Version of this generation service. Recorded on every draft so a projection can
 #: be explained after the code moves, independently of the allocator version.
@@ -110,6 +112,8 @@ C_RANGE_OUTSIDE_CYCLE = "draft_range_outside_coverage_cycle"
 C_FIXED_VISIT_WRONG_MONTH = "fixed_visit_in_wrong_month"
 #: The roster is empty.
 C_ROSTER_REQUIRED = "asset_roster_required"
+#: The requested entry language is not one the platform writes.
+C_ENTRY_LANGUAGE_INVALID = "entry_language_invalid"
 
 
 class DraftMode(str, Enum):
@@ -329,6 +333,10 @@ class DraftRequest:
             a catalogue generates visits only.
         activities_per_day: How many distinct activities every eligible working day
             records. ``0`` leaves the days to visits alone.
+        entry_language: Which language the register is written in - ``en``, ``kn`` or
+            ``both``. It is recorded with the draft so an issued month keeps the
+            language it was approved in, and it changes presentation only: the same
+            requests with the same seed place the same work in every language.
         cycle: Declared coverage cycle, cycle mode only.
         weights: DTC scheduling weights, influence ordering only.
         rotation_offset: Rotation state carried between cycles.
@@ -351,6 +359,7 @@ class DraftRequest:
     entries: tuple[DayEntry, ...] = ()
     activities: tuple[ActivitySpec, ...] = ()
     activities_per_day: int = 0
+    entry_language: str = DEFAULT_ENTRY_LANGUAGE
     cycle: CoverageCycle | None = None
     weights: DtcWeights | None = None
     rotation_offset: int = 0
@@ -576,6 +585,9 @@ class DraftRegister:
     snapshot: GenerationSnapshot | None = None
     #: Dependencies that stop this being a complete operational diary.
     missing_content: tuple[str, ...] = ()
+    #: The language this register was generated in. Part of the draft rather than of the
+    #: rendering, because a month is issued in one language and the record has to keep it.
+    entry_language: str = DEFAULT_ENTRY_LANGUAGE
 
     @property
     def is_allocation_complete(self) -> bool:
@@ -753,6 +765,24 @@ def _validate_calendar_days(request: DraftRequest) -> dict[date, CalendarDay]:
             ),
         )
     return by_day
+
+
+def _validate_language(request: DraftRequest) -> None:
+    """Refuse a language the register is not written in.
+
+    The choice is recorded with the draft, so an unknown value would be carried into the
+    issued record and read back by a later build that does not know it either. It is
+    refused where the request is made instead.
+    """
+
+    if not wording.is_known_language(request.entry_language):
+        raise InputError(
+            C_ENTRY_LANGUAGE_INVALID,
+            (
+                f"{request.entry_language!r} is not a language the register is written "
+                "in; it is written in English, Kannada, or both"
+            ),
+        )
 
 
 def _validate_entries(request: DraftRequest) -> None:
@@ -1128,6 +1158,7 @@ def generate_draft(request: DraftRequest) -> DraftRegister:
     """
 
     months = _validate_range(request)
+    _validate_language(request)
     display = _validate_roster(request)
     days = _validate_calendar_days(request)
     _validate_entries(request)
@@ -1246,6 +1277,7 @@ def generate_draft(request: DraftRequest) -> DraftRegister:
         warnings=(),
         snapshot=snapshot,
         missing_content=MISSING_CONTENT,
+        entry_language=request.entry_language,
     )
 
 

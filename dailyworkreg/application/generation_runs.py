@@ -565,6 +565,7 @@ def load_register(connection: sqlite3.Connection, run_id: str) -> DraftRegister:
         ),
         snapshot=snapshot,
         missing_content=tuple(json.loads(stored.run.missing_content_json)),
+        entry_language=request.entry_language,
     )
 
 

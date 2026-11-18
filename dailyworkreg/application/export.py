@@ -27,10 +27,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
+from ..domain import wording
 from . import finalisation
 
 #: Readable labels for the classifications a stored row can carry. Presentation only: the
@@ -75,6 +77,44 @@ DISPLAY_ITEM_ORDER = ("visits", "entries", "reasons", "warnings")
 #: The separator between two items of one date, as the register prints them.
 ACTIVITY_SEPARATOR = ", "
 
+#: Which language a date's items are written in, as the operator chose when generating.
+#: The choices themselves live in :mod:`dailyworkreg.domain.wording`; this module reads
+#: them and never invents a fourth.
+LANGUAGE_ENGLISH = wording.LANGUAGE_ENGLISH
+LANGUAGE_KANNADA = wording.LANGUAGE_KANNADA
+LANGUAGE_BOTH = wording.LANGUAGE_BOTH
+ENTRY_LANGUAGES = wording.ENTRY_LANGUAGES
+DEFAULT_ENTRY_LANGUAGE = wording.DEFAULT_ENTRY_LANGUAGE
+LANGUAGE_LABELS = wording.LANGUAGE_DESCRIPTIONS
+
+#: How a calendar reason is classified in the register, shared with the generation
+#: request so the two cannot disagree about what a Sunday is.
+REASON_KIND_LABELS = wording.REASON_KIND_LABELS
+
+#: What a field visit says when it is written out. A visit is work, not an entry in a list,
+#: so the register names what was done at the installation rather than only the installation:
+#: a date reading "DIST TRAINING COLLEGE [SCD-44]" says where somebody went and not what the
+#: register is a record of. This is presentation - the visit, its date and its asset are the
+#: record - and an asset kind the templates do not know reads the neutral sentence rather
+#: than no sentence.
+VISIT_PHRASES = {
+    "DTC": (
+        "Inspected {name} [{asset_id}] for transformer loading, oil level and earthing, "
+        "and checked the consumer supply"
+    ),
+    "FEEDER": (
+        "Patrolled {name} [{asset_id}] feeder for loading, tripping history and "
+        "tree clearance along the route"
+    ),
+    "AREA": (
+        "Inspected {name} [{asset_id}] area for DTC loading, street-light complaints and "
+        "service connections"
+    ),
+}
+
+#: The fallback when a record does not say which kind of asset a visit named.
+GENERIC_VISIT_PHRASE = "Visited {name} [{asset_id}] and checked the supply and complaints there"
+
 
 @dataclass(frozen=True)
 class DocumentVisit:
@@ -85,6 +125,10 @@ class DocumentVisit:
     provenance_label: str
     name_en: str
     name_kn: str | None
+    #: The kind of asset the visit named, read from the revision's own roster. Empty when
+    #: a record written before this existed is read, which the phrasing handles rather than
+    #: guesses at.
+    asset_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -113,6 +157,7 @@ class DocumentDay:
     visits: tuple[DocumentVisit, ...]
     entries: tuple[DocumentEntry, ...]
     locked: bool
+    language: str = DEFAULT_ENTRY_LANGUAGE
 
     @property
     def items(self) -> tuple[str, ...]:
@@ -128,12 +173,19 @@ class DocumentDay:
         items: list[str] = []
         for name in DISPLAY_ITEM_ORDER:
             if name == "visits":
-                items.extend(_visit_item(visit) for visit in self.visits)
+                items.extend(
+                    _visit_item(visit, self.language) for visit in self.visits
+                )
             elif name == "entries":
-                items.extend(_entry_item(entry) for entry in self.entries)
+                items.extend(
+                    _entry_item(entry, self.language) for entry in self.entries
+                )
             elif name == "reasons":
-                items.extend(f"Calendar: {reason}" for reason in self.reasons_en)
-                items.extend(f"Calendar: {reason}" for reason in self.reasons_kn)
+                # The classification is a fact about the date, not about each reason, so it
+                # is stated once beside the first one rather than repeated on every line.
+                label = REASON_KIND_LABELS.get(self.kind)
+                for position, reason in enumerate(self._printable_reasons()):
+                    items.append(_reason_item(reason, label if position == 0 else None))
             elif name == "warnings":
                 items.extend(_warning_item(*warning) for warning in self.warnings)
         return tuple(item for item in items if item)
@@ -144,6 +196,32 @@ class DocumentDay:
 
         items = self.items
         return ACTIVITY_SEPARATOR.join(items) if items else EMPTY_DAY_TEXT
+
+    def _printable_reasons(self) -> tuple[str, ...]:
+        """The reasons this date prints, in the chosen language, each one once.
+
+        The stored English and Kannada lists are parallel facts rather than translations -
+        a Sunday stores "Sunday" and, in Kannada, "weekly off" - so the chosen language
+        picks the list that says it best, and a list that is empty falls back to the other
+        rather than making a non-working date look unexplained. Two lists naming the same
+        text are printed once.
+        """
+
+        if self.language == LANGUAGE_ENGLISH:
+            chosen = self.reasons_en or self.reasons_kn
+        elif self.language == LANGUAGE_KANNADA:
+            chosen = self.reasons_kn or self.reasons_en
+        else:
+            chosen = self.reasons_en + tuple(
+                reason for reason in self.reasons_kn if reason not in self.reasons_en
+            )
+        seen: set[str] = set()
+        kept: list[str] = []
+        for reason in chosen:
+            if reason and reason not in seen:
+                seen.add(reason)
+                kept.append(reason)
+        return tuple(kept)
 
     @property
     def visit_provenance(self) -> tuple[str, ...]:
@@ -178,6 +256,13 @@ class RegisterDocument:
     declared_obligations: tuple[tuple[str, Any], ...]
     evidence: tuple[str, ...]
     days: tuple[DocumentDay, ...]
+    entry_language: str = DEFAULT_ENTRY_LANGUAGE
+
+    @property
+    def language_label(self) -> str:
+        """How the document names the language its items are written in."""
+
+        return LANGUAGE_LABELS.get(self.entry_language, self.entry_language)
 
     @property
     def version_label(self) -> str:
@@ -238,6 +323,15 @@ def document(connection: sqlite3.Connection, finalisation_id: str) -> RegisterDo
     content = record.get("content") or {}
     rows = content.get("rows") or {}
     locked = content.get("locked_dates") or []
+    language = content.get("entry_language") or DEFAULT_ENTRY_LANGUAGE
+    if language not in ENTRY_LANGUAGES:
+        # A stored value this build does not know is not quietly rendered as another one;
+        # the register prints both texts, which is the reading that leaves nothing out.
+        language = DEFAULT_ENTRY_LANGUAGE
+    asset_types = {
+        str(key): str(value)
+        for key, value in (content.get("asset_types") or {}).items()
+    }
     ordered = {day: rows[day] for day in rows}  # stored order, never re-sorted
     return RegisterDocument(
         finalisation_id=record["finalisation_id"],
@@ -264,13 +358,28 @@ def document(connection: sqlite3.Connection, finalisation_id: str) -> RegisterDo
             json.dumps(item, ensure_ascii=False, sort_keys=True)
             for item in (content.get("evidence") or [])
         ),
+        entry_language=language,
         days=tuple(
-            _day(day, row, locked=day in set(locked)) for day, row in ordered.items()
+            _day(
+                day,
+                row,
+                locked=day in set(locked),
+                language=language,
+                asset_types=asset_types,
+            )
+            for day, row in ordered.items()
         ),
     )
 
 
-def _day(day: str, row: dict[str, Any], *, locked: bool) -> DocumentDay:
+def _day(
+    day: str,
+    row: dict[str, Any],
+    *,
+    locked: bool,
+    language: str,
+    asset_types: Mapping[str, str],
+) -> DocumentDay:
     kind = _text(row.get("kind"))
     return DocumentDay(
         day=day,
@@ -285,13 +394,16 @@ def _day(day: str, row: dict[str, Any], *, locked: bool) -> DocumentDay:
             for item in row.get("warnings") or []
             if isinstance(item, list | tuple) and len(item) >= 2
         ),
-        visits=tuple(_visit(item) for item in row.get("visits") or []),
+        visits=tuple(
+            _visit(item, asset_types) for item in row.get("visits") or []
+        ),
         entries=tuple(_entry(item) for item in row.get("entries") or []),
         locked=locked,
+        language=language,
     )
 
 
-def _visit(item: Any) -> DocumentVisit:
+def _visit(item: Any, asset_types: Mapping[str, str]) -> DocumentVisit:
     asset_id, provenance, name_en, name_kn = _four(item)
     return DocumentVisit(
         asset_id=asset_id,
@@ -299,6 +411,7 @@ def _visit(item: Any) -> DocumentVisit:
         provenance_label=PROVENANCE_LABELS.get(provenance, provenance),
         name_en=name_en,
         name_kn=None if name_kn is None else name_kn,
+        asset_type=asset_types.get(asset_id, ""),
     )
 
 
@@ -328,20 +441,58 @@ def _four(item: Any) -> tuple[str, str, str, str | None]:
     return head[0], head[1], head[2], (None if tail in (None, "") else _text(tail))
 
 
-def _visit_item(visit: DocumentVisit) -> str:
-    """One field visit as the register prints it: the name, then the asset it names."""
+def _visit_item(visit: DocumentVisit, language: str = DEFAULT_ENTRY_LANGUAGE) -> str:
+    """One field visit as the register prints it: what was done, and where.
 
-    text = f"{visit.name_en} [{visit.asset_id}]".strip()
-    return f"{text} ({visit.name_kn})" if visit.name_kn else text
+    The sentence names the work rather than only the installation, and the installation is
+    named in the language the register is being written in. An asset with no stored Kannada
+    name keeps its English one rather than printing a blank, and a record that does not say
+    which kind of asset it visited reads the neutral sentence instead of a guessed verb.
+    """
+
+    name = _in_language(visit.name_en, visit.name_kn, language).strip()
+    template = VISIT_PHRASES.get(visit.asset_type or "", GENERIC_VISIT_PHRASE)
+    return template.format(name=name, asset_id=visit.asset_id).strip()
 
 
-def _entry_item(entry: DocumentEntry) -> str:
-    """One activity or other entry, with its stored Kannada title kept beside it."""
+def _entry_item(entry: DocumentEntry, language: str = DEFAULT_ENTRY_LANGUAGE) -> str:
+    """One activity or other entry, in the language the register is written in."""
 
-    text = entry.title_en.strip()
-    if entry.title_kn:
-        text = f"{text} ({entry.title_kn})"
-    return text
+    return _in_language(entry.title_en, entry.title_kn, language).strip()
+
+
+def _reason_item(reason: str, label: str | None) -> str:
+    """One calendar reason, classified so a date's reason cannot be mistaken for work.
+
+    The stored reason stays as the record wrote it, and what that day is to the office - a
+    weekly off, a holiday, leave - is written beside it, which turns a bare "Sunday" into
+    a statement about the date rather than a label for it.
+    """
+
+    text = reason.strip()
+    if not text:
+        return ""
+    return f"{text} ({label})" if label else text
+
+
+def _in_language(english: str, kannada: str | None, language: str) -> str:
+    """The text of one item in the chosen language, never blank if something is stored.
+
+    A Kannada register whose record holds no Kannada for an item keeps its English, because
+    a register that prints an empty cell for real recorded work is worse than one that
+    prints what it holds in the other language.
+    """
+
+    english = (english or "").strip()
+    kannada = (kannada or "").strip()
+
+    if language == LANGUAGE_KANNADA:
+        return kannada or english
+    if language == LANGUAGE_ENGLISH:
+        return english or kannada
+    if english and kannada:
+        return f"{english} ({kannada})"
+    return english or kannada
 
 
 def _warning_item(constraint: str, detail: str) -> str:
