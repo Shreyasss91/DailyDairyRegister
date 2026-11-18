@@ -1705,15 +1705,24 @@ async function bulkFinalisationPanel(registerId, runId) {
       });
       submitting = false;
       phase = BULK_STATE.DONE;
-      showFeedback(
-        'ok',
-        `Closed ${closed.count} month(s) in one act.`,
-        closed.months.map((record) => (
-          `${record.month}: version ${record.sequence}, finalisation ${record.finalisation_id}`
-        )),
-      );
+      const closedItems = closed.months.map((record) => (
+        `${record.month}: version ${record.sequence}, finalisation ${record.finalisation_id}`
+      ));
+      showFeedback('ok', `Closed ${closed.count} month(s) in one act.`, closedItems);
       status.textContent = 'Every open month of this revision is closed.';
       status.className = 'muted bulk-status status-ok';
+      // The panel is rebuilt below, so the outcome is also written where the register's
+      // other results appear: after the refresh the operator still has the list of what
+      // was issued, rather than only a panel that now says there is nothing to do.
+      const draftBanner = document.getElementById('draft-banner');
+      if (draftBanner) {
+        showBanner(
+          draftBanner,
+          'ok',
+          `Closed ${closed.count} month(s) in one act.`,
+          closedItems,
+        );
+      }
       await renderMonths(registerId, runId);
     } catch (error) {
       submitting = false;

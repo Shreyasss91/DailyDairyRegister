@@ -317,8 +317,9 @@ def state(page) -> dict:
     return page.evaluate(
         """() => {
             const panel = document.querySelector('.bulk-finalisation');
-            const button = [...panel.querySelectorAll('button')]
-                .find((node) => node.textContent.startsWith('Finalize all months'));
+            // The primary action keeps its identity while it is closing, so it is found
+            // by its place in the panel rather than by a label that changes underneath.
+            const button = panel.querySelector('.actions button.button-primary');
             const status = panel.querySelector('.bulk-status');
             return {
                 disabled: button.disabled,
@@ -600,13 +601,34 @@ def test_a_second_click_while_closing_sends_one_request(loaded):
 
 
 def test_the_action_reports_progress_before_the_server_answers(loaded):
+    """The operator sees that the act has started, without waiting for the disk."""
+
     page, office, seen = loaded
 
+    # The request is held open so the progress state can be read: a local database
+    # answers in milliseconds, and asserting after it finished would prove nothing
+    # about what the operator sees while they wait.
+    held: list = []
+    page.route("**/finalisation/bulk", lambda route: held.append(route))
     page.click(BUTTON)
-    wait_for(page, lambda: office.finalisations() == 2)
-    page.wait_for_timeout(400)
+    page.wait_for_timeout(300)
 
-    # The success banner names every month that was closed, so a partial act could
-    # never be reported as a whole one.
-    panel = state(page)
-    assert "Closed 2 month(s) in one act." in panel["banner"] or "already closed" in panel["text"].lower()
+    during = state(page)
+    assert "Closing 2 month(s) in one act" in during["banner"]
+    assert during["disabled"] is True
+    assert during["label"] == "Closing…"
+
+    wait_for(page, lambda: held)
+    held[0].continue_()
+    wait_for(page, lambda: office.finalisations() == 2)
+    page.wait_for_timeout(800)
+    done = state(page)
+    assert done["disabled"] is True
+    assert office.finalisations() == 2
+    # The panel is rebuilt from the server after the act, so the outcome is also
+    # written where the register's other results appear and survives that refresh.
+    page.wait_for_timeout(300)
+    outcome = page.inner_text("#draft-banner")
+    assert "Closed 2 month(s) in one act." in outcome
+    assert "2026-11: version 1" in outcome
+    assert "2026-12: version 1" in outcome
