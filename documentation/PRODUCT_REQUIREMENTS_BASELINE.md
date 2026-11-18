@@ -1111,7 +1111,37 @@ revisions are never deleted.
 - The single-month close is unchanged in behaviour and in its refusal codes; the bulk act
   shares its preparation and its write rather than reimplementing either.
 
-### 24.7 What is not modelled
+### 24.7 What the operator does, and what the page must tell them (as built)
+
+- The panel is a state machine with one honest sentence per state, because "the button is
+  disabled" has four causes an operator must be able to tell apart: the checks are still
+  running, nothing is open, a month is genuinely stuck, or the acknowledgements have not
+  been ticked yet. Only the last is cleared by ticking a box, and the page says which
+  months are still waiting rather than "not ready".
+- Eligibility is the server's answer, in two parts, and the page never infers one from the
+  other. Each month reports its `blockers` (everything in the way now), its
+  `hard_blockers` (what no acknowledgement can clear) and
+  `eligible_after_acknowledgements`; the revision reports `can_finalise` (close now) and
+  `can_finalise_after_acknowledgements` (close once the listed findings are acknowledged),
+  together with `pending_acknowledgements`: one entry per finding, naming its month, its
+  kind, its detail and the token that has to come back. The distinction is drawn from the
+  finding tokens the server itself issued, not from a list of blocker names, so a new
+  acknowledgement kind cannot be mistaken for a hard blocker by forgetting to extend it.
+- A selection belongs to one month and one token. Two months can carry the same finding
+  and the same token text, so ticking one must not answer the other; the panel keys
+  selections by both.
+- The request is one click and one POST. While it is in flight the action is disabled and
+  says it is closing, a second click cannot start a second act, and the panel exists in a
+  single consistent state afterwards: either the months are closed and the lifecycle is
+  re-read from the server, or the refusal is shown in full — the server's sentence first,
+  then each blocker with its month and dates — and the checks are marked out of date with
+  a `Refresh finalisation checks` action beside them. Refreshing discards the old tick
+  state and the old fingerprints; tokens from an out-of-date preflight are never
+  submitted.
+- A preflight that cannot be read leaves the same refresh action, so a network failure is
+  a state the page recovers from rather than a panel that stays empty.
+
+### 24.8 What is not modelled
 
 - Partial-month generation, and therefore the use of the section 23 proration rule to
   build a schedule. A part-month is still refused.

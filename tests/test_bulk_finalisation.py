@@ -784,6 +784,57 @@ def test_the_closed_months_are_exportable_straight_after_a_bulk_close(
 # --- the page ---------------------------------------------------------------
 
 
+def test_the_preflight_separates_a_finding_from_a_blocker(db):
+    """The page must not confuse "not ticked yet" with "cannot be done"."""
+
+    run_id = stored(db)
+    review_every_date(db, run_id)
+    add_sunday_holiday(db)
+
+    preflight = finalise.bulk_preflight(db, run_id)
+
+    assert preflight["can_finalise"] is False
+    assert preflight["can_finalise_after_acknowledgements"] is True
+    assert preflight["hard_blocked_months"] == []
+    for item in preflight["months"]:
+        assert item["hard_blockers"] == []
+        assert item["eligible_after_acknowledgements"] is True
+        assert item["eligible"] is False
+    tokens = [(item["month"], item["token"]) for item in preflight["pending_acknowledgements"]]
+    assert [item["month"] for item in preflight["pending_acknowledgements"]] == [
+        "2026-11",
+        "2026-12",
+    ]
+    assert all(token.startswith("calendar_conflict|") for _, token in tokens)
+
+
+def test_the_preflight_names_a_blocker_no_acknowledgement_can_clear(db):
+    run_id = stored(db)
+    review_every_date(db, run_id, month="2026-11")
+
+    preflight = finalise.bulk_preflight(db, run_id)
+
+    assert preflight["hard_blocked_months"] == ["2026-12"]
+    assert preflight["can_finalise_after_acknowledgements"] is False
+    assert preflight["pending_acknowledgements"] == []
+    december = next(item for item in preflight["months"] if item["month"] == "2026-12")
+    assert finalise.C_DATES_NOT_REVIEWED in [item["code"] for item in december["hard_blockers"]]
+
+
+def test_a_month_already_closed_is_not_eligible_even_with_nothing_acknowledged(db):
+    run_id = stored(db)
+    review_every_date(db, run_id)
+    finalise.finalise_month(db, run_id, "2026-11")
+
+    preflight = finalise.bulk_preflight(db, run_id)
+
+    november = next(item for item in preflight["months"] if item["month"] == "2026-11")
+    assert november["already_finalised"] is True
+    assert november["eligible_after_acknowledgements"] is False
+    assert november["month"] not in preflight["pending_acknowledgements"]
+    assert preflight["target_months"] == ["2026-12"]
+
+
 def test_the_page_offers_one_register_level_bulk_close():
     script = (REQUEST / "dailyworkreg/interfaces/static/app.js").read_text(
         encoding="utf-8"
@@ -806,8 +857,9 @@ def test_the_page_shows_the_targets_the_blockers_and_the_acknowledgements():
     )[0]
 
     assert "'Month', 'Dates read', 'Allocation', 'Findings', 'Status'" in panel
-    assert "What is in the way" in panel
-    assert "input.bulk-ack[data-month=" in panel
+    assert "What is in the way, and cannot be cleared here" in panel
+    assert "Recorded findings to acknowledge" in panel
+    assert "'data-month': item.month" in panel
     assert "already_finalised" in panel
 
 
@@ -819,8 +871,14 @@ def test_the_page_cannot_submit_the_bulk_close_twice():
         "async function renderMonths(", 1
     )[0]
 
-    assert "if (button.disabled) return;" in panel
-    assert "button.disabled = true;" in panel
-    assert "button.textContent = 'Closing" in panel
-    # A refusal re-enables the button so the operator is not left with a dead panel.
-    assert "button.disabled = false;" in panel
+    # One act, one request: the guard refuses a click that is not a ready act, and the
+    # flag is set before the request leaves so a second click cannot start another.
+    assert "if (submitting || evaluate() !== BULK_STATE.READY) return;" in panel
+    assert "submitting = true;" in panel
+    # declared, then cleared on the success path and again after a refusal
+    assert panel.count("submitting = false") == 3
+    assert "button.textContent = submitting ? 'Closing…'" in panel
+    # A refusal does not leave a dead panel: it marks the checks out of date and offers
+    # the refresh that reads them again.
+    assert "phase = BULK_STATE.STALE;" in panel
+    assert "Refresh finalisation checks" in panel

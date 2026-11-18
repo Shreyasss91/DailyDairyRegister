@@ -15,12 +15,25 @@ const state = {
 async function api(path, options) {
   const response = await fetch(path, options);
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch (error) {
+    // A refused request whose body is not JSON is still a refusal, and the operator has
+    // to see it rather than an exception about parsing.
+    throw new Error(
+      `The server answered ${response.status} without a readable explanation. `
+      + 'Nothing was changed; reload the page and try again.',
+    );
+  }
   if (!response.ok) {
     const detail = payload && payload.error ? payload.error.detail : response.statusText;
     const constraint = payload && payload.error ? payload.error.constraint : 'request_refused';
     const error = new Error(detail || constraint);
     error.constraint = constraint;
+    // Every reason travels with the refusal, and the page shows them by month rather
+    // than only the sentence that summarised them.
+    error.blockers = (payload && payload.error && payload.error.blockers) || [];
     throw error;
   }
   return payload;
@@ -32,7 +45,13 @@ function el(tag, attributes, children) {
     if (key === 'class') node.className = value;
     else if (key === 'text') node.textContent = value;
     else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
-    else if (value !== undefined && value !== null) node.setAttribute(key, value);
+    else if (typeof value === 'boolean') {
+      // A boolean is a state, not text. ``setAttribute('disabled', false)`` writes the
+      // string "false", and an element carrying a disabled attribute is disabled
+      // whatever that string says: that is how a button the server had approved was
+      // rendered dead. Setting the property keeps the attribute in step both ways.
+      node[key] = value;
+    } else if (value !== undefined && value !== null) node.setAttribute(key, value);
   });
   (children || []).forEach((child) => {
     if (child === null || child === undefined) return;
@@ -1416,162 +1435,312 @@ function monthCard(registerId, runId, month) {
 // anything is closed. The panel shows the whole picture -- the months that would close,
 // the months already closed and the months that cannot close yet -- because confirming
 // against a partial list is how an operator agrees to something they were not shown.
-// Nothing here decides eligibility: the button is enabled by the server's verdict and the
-// request repeats the fingerprints and acknowledgements the preflight issued.
+// Nothing here decides eligibility: the button is enabled by the server's verdict, and
+// the request repeats the fingerprints and acknowledgements the preflight issued.
+//
+// The panel is a small state machine, because "the button is disabled" has four honest
+// causes and an operator is owed the reason: the checks are still running, nothing is
+// open, a month is genuinely stuck, or the acknowledgements have not been ticked yet.
+// Each shows its own sentence, and only the last is cleared by ticking a box. A
+// selection belongs to one month and one token, never to a token alone, because two
+// months can carry the same finding and ticking one must not answer the other.
+
+const BULK_STATE = {
+  LOADING: 'loading_preflight',
+  UNAVAILABLE: 'preflight_unavailable',
+  NOTHING: 'nothing_open',
+  BLOCKED: 'blocked',
+  AWAITING: 'awaiting_acknowledgements',
+  STALE: 'stale',
+  READY: 'ready',
+  SUBMITTING: 'submitting',
+  DONE: 'done',
+};
 
 async function bulkFinalisationPanel(registerId, runId) {
   const panel = el('div', { class: 'detail bulk-finalisation' });
-  const result = el('div', { class: 'detail' });
-  let preflight;
-  try {
-    preflight = await api(`/api/generations/${runId}/finalisation/preflight`);
-  } catch (error) {
-    panel.append(el('p', { class: 'muted', text: error.message }));
-    return panel;
-  }
-
-  panel.append(el('h3', { text: 'Close every open month' }));
-  if (preflight.already_finalised.length) {
-    panel.append(el('p', {
-      class: 'muted',
-      text: `Already closed in this revision: ${preflight.already_finalised.join(', ')}. `
-        + 'They are not closed again and their records are not touched.',
-    }));
-  }
-  if (!preflight.target_months.length) {
-    panel.append(el('p', { class: 'status-ok', text: 'Every month of this revision is closed.' }));
-    return panel;
-  }
-
-  const findings = [];
-  preflight.months.forEach((month) => {
-    if (month.already_finalised) return;
-    month.findings.forEach((finding) => findings.push({ ...finding, month: month.month }));
+  const body = el('div', { class: 'bulk-body' });
+  const status = el('p', { class: 'muted bulk-status' });
+  const feedback = el('div', { class: 'banner', hidden: true });
+  const note = el('input', {
+    type: 'text',
+    placeholder: 'Note recorded on every month closed (optional)',
+  });
+  const button = el('button', {
+    class: 'button button-primary',
+    text: 'Finalize all months',
+    type: 'button',
+  });
+  const refresh = el('button', {
+    class: 'button',
+    text: 'Refresh finalisation checks',
+    type: 'button',
   });
 
-  panel.append(
-    el('p', {
+  let preflight = null;
+  let phase = BULK_STATE.LOADING;
+  let submitting = false;
+  let problem = '';
+  const chosen = new Set();
+
+  const keyOf = (month, token) => `${month}\u0000${token}`;
+
+  function requiredAcknowledgements() {
+    if (!preflight) return [];
+    const targets = new Set(preflight.target_months);
+    return preflight.pending_acknowledgements.filter((item) => targets.has(item.month));
+  }
+
+  function evaluate() {
+    if (submitting) return BULK_STATE.SUBMITTING;
+    if (phase === BULK_STATE.LOADING) return BULK_STATE.LOADING;
+    if (phase === BULK_STATE.UNAVAILABLE) return BULK_STATE.UNAVAILABLE;
+    if (phase === BULK_STATE.STALE) return BULK_STATE.STALE;
+    if (!preflight || !preflight.target_months.length) return BULK_STATE.NOTHING;
+    if (!preflight.is_current) return BULK_STATE.BLOCKED;
+    if (preflight.hard_blocked_months.length) return BULK_STATE.BLOCKED;
+    const missing = requiredAcknowledgements().filter(
+      (item) => !chosen.has(keyOf(item.month, item.token)),
+    );
+    if (missing.length) return BULK_STATE.AWAITING;
+    if (!preflight.can_finalise_after_acknowledgements) return BULK_STATE.BLOCKED;
+    return BULK_STATE.READY;
+  }
+
+  const STATUS_TEXT = {
+    [BULK_STATE.LOADING]: 'Checking each month…',
+    [BULK_STATE.UNAVAILABLE]: 'The checks could not be read, so nothing can be closed yet.',
+    [BULK_STATE.NOTHING]: 'Every month of this revision is closed, so there is nothing to finalize.',
+    [BULK_STATE.BLOCKED]: 'The server reports at least one open month cannot be closed, so none will be.',
+    [BULK_STATE.STALE]: 'These checks are out of date. Refresh them before finalizing.',
+    [BULK_STATE.READY]: 'The server reports every open month can be closed.',
+  };
+
+  function applyState() {
+    const state = evaluate();
+    button.disabled = state !== BULK_STATE.READY;
+    const count = preflight ? preflight.target_months.length : 0;
+    button.textContent = submitting ? 'Closing…' : `Finalize all months (${count})`;
+    refresh.disabled = submitting;
+    let sentence = STATUS_TEXT[state] || '';
+    if (state === BULK_STATE.AWAITING) {
+      const missing = requiredAcknowledgements().filter(
+        (item) => !chosen.has(keyOf(item.month, item.token)),
+      );
+      const months = [...new Set(missing.map((item) => item.month))].join(', ');
+      sentence = `${missing.length} recorded finding(s) for ${months} still have to be `
+        + 'acknowledged before any month is closed.';
+    }
+    if (problem) sentence = `${sentence} ${problem}`.trim();
+    status.textContent = sentence;
+    status.className = state === BULK_STATE.READY || state === BULK_STATE.DONE
+      ? 'muted bulk-status status-ok'
+      : 'muted bulk-status';
+  }
+
+  function showFeedback(kind, message, items) {
+    feedback.hidden = false;
+    feedback.className = `banner banner-${kind}`;
+    feedback.textContent = '';
+    feedback.append(el('div', { text: message }));
+    if (items && items.length) {
+      feedback.append(el('ul', {}, items.map((item) => el('li', { text: item }))));
+    }
+  }
+
+  function renderBody() {
+    body.textContent = '';
+    if (!preflight) return;
+    if (preflight.already_finalised.length) {
+      body.append(el('p', {
+        class: 'muted',
+        text: `Already closed in this revision: ${preflight.already_finalised.join(', ')}. `
+          + 'They are not closed again and their records are not touched.',
+      }));
+    }
+    body.append(el('p', {
       class: 'muted',
       text: 'Closing every open month at once is all or nothing: if any month cannot be '
         + 'closed, none of them is. Nothing is reviewed for you, and a month whose dates '
         + 'have not been read in front of you is refused rather than closed.',
-    }),
-    table(
+    }));
+    body.append(table(
       ['Month', 'Dates read', 'Allocation', 'Findings', 'Status'],
       preflight.months.map((month) => el('tr', {}, [
         el('td', { text: month.month }),
         el('td', { text: `${month.reviewed_dates} of ${month.total_dates}` }),
-        el('td', { text: `${month.allocator_status}${month.locked_dates ? ` · ${month.locked_dates} locked` : ''}` }),
+        el('td', {
+          text: `${month.allocator_status}`
+            + `${month.locked_dates ? ` · ${month.locked_dates} locked` : ''}`,
+        }),
         el('td', { text: month.findings.length ? `${month.findings.length}` : 'none' }),
         el('td', {
-          class: month.already_finalised ? 'muted' : (month.eligible ? 'status-ok' : 'status-warn'),
+          class: month.already_finalised
+            ? 'muted'
+            : (month.eligible ? 'status-ok' : 'status-warn'),
           text: month.already_finalised
             ? `closed as version ${month.sequence}`
-            : (month.eligible ? 'can be closed' : `${month.blockers.length} blocker(s)`),
+            : (month.eligible
+              ? 'can be closed'
+              : (month.hard_blockers.length
+                ? `${month.hard_blockers.length} blocker(s)`
+                : 'acknowledge its findings')),
         }),
       ])),
-    ),
-  );
+    ));
 
-  if (preflight.blocked_months.length) {
-    const blockers = preflight.months
-      .filter((month) => !month.already_finalised && !month.eligible)
-      .flatMap((month) => month.blockers.map((blocker) => ({ ...blocker, month: month.month })));
-    panel.append(
-      el('strong', { text: 'What is in the way' }),
-      table(
-        ['Month', 'What is in the way', 'Detail'],
-        blockers.map((blocker) => el('tr', {}, [
-          el('td', { text: blocker.month }),
-          el('td', { text: blocker.label }),
-          el('td', { text: blocker.detail }),
-        ])),
-      ),
-    );
-  }
+    const hardBlockers = preflight.months
+      .filter((month) => !month.already_finalised)
+      .flatMap((month) => month.hard_blockers.map(
+        (blocker) => ({ ...blocker, month: month.month }),
+      ));
+    if (hardBlockers.length) {
+      body.append(
+        el('strong', { text: 'What is in the way, and cannot be cleared here' }),
+        table(
+          ['Month', 'What is in the way', 'Detail'],
+          hardBlockers.map((blocker) => el('tr', {}, [
+            el('td', { text: blocker.month }),
+            el('td', { text: blocker.label }),
+            el('td', { text: blocker.detail }),
+          ])),
+        ),
+      );
+    }
 
-  if (findings.length) {
-    panel.append(
-      el('strong', { text: 'Recorded findings to acknowledge' }),
-      el('p', {
-        class: 'muted',
-        text: 'These stay on each month\'s record after closing; acknowledging says you have seen them.',
-      }),
-      table(
-        ['Month', 'Finding', 'Detail', 'Acknowledge'],
-        findings.map((item) => el('tr', {}, [
-          el('td', { text: item.month }),
-          el('td', { text: item.what }),
-          el('td', { text: item.detail }),
-          el('td', {}, [
-            el('input', {
+    const required = requiredAcknowledgements();
+    if (required.length) {
+      body.append(
+        el('strong', { text: 'Recorded findings to acknowledge' }),
+        el('p', {
+          class: 'muted',
+          text: 'These stay on each month\'s record after closing; acknowledging says you '
+            + 'have seen them. A finding belongs to its month, so one tick never answers '
+            + 'another month.',
+        }),
+        table(
+          ['Month', 'Finding', 'Detail', 'Acknowledge'],
+          required.map((item) => {
+            const box = el('input', {
               type: 'checkbox',
               class: 'bulk-ack',
               value: item.token,
               'data-month': item.month,
-              'data-kind': item.kind,
+              'data-token': item.token,
               title: item.token,
-            }),
-          ]),
-        ])),
-      ),
-    );
+            });
+            box.checked = chosen.has(keyOf(item.month, item.token));
+            box.addEventListener('change', () => {
+              const key = keyOf(item.month, item.token);
+              if (box.checked) chosen.add(key);
+              else chosen.delete(key);
+              problem = '';
+              applyState();
+            });
+            return el('tr', {}, [
+              el('td', { text: item.month }),
+              el('td', { text: item.what }),
+              el('td', { text: item.detail }),
+              el('td', {}, [box]),
+            ]);
+          }),
+        ),
+      );
+    }
   }
 
-  const note = el('input', { type: 'text', placeholder: 'Note recorded on every month closed (optional)' });
-  const button = el('button', {
-    class: 'button button-primary',
-    text: `Finalize all months (${preflight.target_months.length})`,
-    disabled: !preflight.can_finalise,
-    onclick: async () => {
-      if (button.disabled) return;
-      button.disabled = true;
-      const label = button.textContent;
-      button.textContent = 'Closing…';
-      try {
-        const months = {};
-        preflight.target_months.forEach((month) => {
-          const entry = preflight.months.find((item) => item.month === month);
-          const acknowledged = Array.from(panel.querySelectorAll(`input.bulk-ack[data-month="${month}"]:checked`))
-            .map((node) => node.value);
-          months[month] = { fingerprint: entry.fingerprint, acknowledged };
-        });
-        const closed = await api(`/api/generations/${runId}/finalisation/bulk`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            months,
-            note: note.value.trim() === '' ? null : note.value.trim(),
-          }),
-        });
-        showBanner(
-          result,
-          'ok',
-          `Closed ${closed.count} month(s) in one act.`,
-          closed.months.map((record) => `${record.month}: version ${record.sequence}, finalisation ${record.finalisation_id}`),
-        );
-        await renderMonths(registerId, runId);
-      } catch (error) {
-        showBanner(result, 'warn', error.message);
-        button.disabled = false;
-        button.textContent = label;
-      }
-    },
+  async function load() {
+    phase = BULK_STATE.LOADING;
+    preflight = null;
+    problem = '';
+    chosen.clear();
+    renderBody();
+    applyState();
+    try {
+      preflight = await api(`/api/generations/${runId}/finalisation/preflight`);
+      phase = BULK_STATE.READY;
+      problem = '';
+    } catch (error) {
+      preflight = null;
+      phase = BULK_STATE.UNAVAILABLE;
+      problem = error.message;
+    }
+    renderBody();
+    applyState();
+  }
+
+  refresh.addEventListener('click', async () => {
+    if (submitting) return;
+    feedback.hidden = true;
+    await load();
+  });
+
+  button.addEventListener('click', async () => {
+    // A disabled button cannot be clicked at all, but the guard is the contract: one
+    // act, one request, and a second click while the first is in flight changes nothing.
+    if (submitting || evaluate() !== BULK_STATE.READY) return;
+    submitting = true;
+    problem = '';
+    showFeedback('ok', `Closing ${preflight.target_months.length} month(s) in one act…`);
+    applyState();
+    const months = {};
+    preflight.target_months.forEach((month) => {
+      const entry = preflight.months.find((item) => item.month === month);
+      months[month] = {
+        fingerprint: entry.fingerprint,
+        acknowledged: requiredAcknowledgements()
+          .filter((item) => item.month === month)
+          .map((item) => item.token)
+          .filter((token) => chosen.has(keyOf(month, token))),
+      };
+    });
+    try {
+      const closed = await api(`/api/generations/${runId}/finalisation/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          months,
+          note: note.value.trim() === '' ? null : note.value.trim(),
+        }),
+      });
+      submitting = false;
+      phase = BULK_STATE.DONE;
+      showFeedback(
+        'ok',
+        `Closed ${closed.count} month(s) in one act.`,
+        closed.months.map((record) => (
+          `${record.month}: version ${record.sequence}, finalisation ${record.finalisation_id}`
+        )),
+      );
+      status.textContent = 'Every open month of this revision is closed.';
+      status.className = 'muted bulk-status status-ok';
+      await renderMonths(registerId, runId);
+    } catch (error) {
+      submitting = false;
+      // Whatever the server refused for, the checks this panel is holding are now older
+      // than the reason it gave, so they are marked out of date and must be re-read
+      // before the next attempt. The refusal is shown in full, blockers first.
+      phase = BULK_STATE.STALE;
+      const blockers = (error.blockers || []).map((blocker) => (
+        `${blocker.label}`
+        + `${blocker.dates && blocker.dates.length ? ` (${blocker.dates.join(', ')})` : ''}`
+        + `: ${blocker.detail}`
+      ));
+      showFeedback('warn', error.message, blockers);
+      applyState();
+    }
   });
 
   panel.append(
-    el('p', {
-      class: 'muted',
-      text: preflight.can_finalise
-        ? 'The server reports every open month can be closed.'
-        : 'The server reports at least one open month cannot be closed, so none will be.',
-    }),
-    el('div', { class: 'actions' }, [note, button]),
-    result,
+    el('h3', { text: 'Close every open month' }),
+    body,
+    status,
+    el('div', { class: 'actions' }, [note, button, refresh]),
+    feedback,
   );
+  await load();
   return panel;
 }
-
 async function renderMonths(registerId, runId) {
   const target = document.getElementById('draft-months');
   if (!target) return;

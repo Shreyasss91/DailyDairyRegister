@@ -989,6 +989,15 @@ def bulk_preflight(connection: sqlite3.Connection, run_id: str) -> dict[str, Any
             }
             for item in check.conflicts
         )
+        # A blocker an operator can clear by acknowledging a recorded finding is not a
+        # reason the month is stuck, and the page must be able to tell the two apart
+        # without reading a code name or a sentence. The distinction is drawn from the
+        # tokens the month's own findings carry, so a new acknowledgement kind cannot be
+        # mistaken for a hard blocker by forgetting to add it to a list here.
+        finding_tokens = {item["token"] for item in findings}
+        hard_blockers = [
+            item for item in blockers if item.get("token") not in finding_tokens
+        ]
         entries.append(
             {
                 "month": month,
@@ -999,6 +1008,10 @@ def bulk_preflight(connection: sqlite3.Connection, run_id: str) -> dict[str, Any
                 "sequence": None if existing is None else existing.sequence,
                 "eligible": not blockers,
                 "blockers": blockers,
+                "hard_blockers": hard_blockers,
+                "eligible_after_acknowledgements": (
+                    existing is None and not hard_blockers
+                ),
                 "findings": findings,
                 "unacknowledged_tokens": [
                     item["token"] for item in findings if not item["acknowledged"]
@@ -1014,10 +1027,26 @@ def bulk_preflight(connection: sqlite3.Connection, run_id: str) -> dict[str, Any
             }
         )
     targets = [item for item in entries if not item["already_finalised"]]
+    hard_blocked = [
+        item["month"] for item in targets if not item["eligible_after_acknowledgements"]
+    ]
+    pending = [
+        {
+            "month": item["month"],
+            "token": finding["token"],
+            "kind": finding["kind"],
+            "what": finding["what"],
+            "detail": finding["detail"],
+        }
+        for item in targets
+        for finding in item["findings"]
+        if not finding["acknowledged"]
+    ]
+    is_current = revisions.current_run(connection, register_id) == run_id
     return {
         "run_id": run_id,
         "register_id": register_id,
-        "is_current": revisions.current_run(connection, register_id) == run_id,
+        "is_current": is_current,
         "months": entries,
         "target_months": [item["month"] for item in targets],
         "already_finalised": [
@@ -1025,7 +1054,17 @@ def bulk_preflight(connection: sqlite3.Connection, run_id: str) -> dict[str, Any
         ],
         "eligible_months": [item["month"] for item in targets if item["eligible"]],
         "blocked_months": [item["month"] for item in targets if not item["eligible"]],
+        # The set the operator must tick, in the month order the panel shows, with the
+        # token that has to come back with the confirmation. Nothing here is a proposal:
+        # a token the server did not issue is refused when the close is attempted.
+        "pending_acknowledgements": pending,
+        "hard_blocked_months": hard_blocked,
+        # Two different questions, answered separately, because the page must not
+        # confuse "you have not ticked these yet" with "this cannot be done".
         "can_finalise": bool(targets) and all(item["eligible"] for item in targets),
+        "can_finalise_after_acknowledgements": (
+            is_current and bool(targets) and not hard_blocked
+        ),
     }
 
 

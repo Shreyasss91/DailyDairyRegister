@@ -53,7 +53,9 @@ def test_bulk_review_uses_date_states_and_a_dedicated_visible_container():
 def test_the_page_revalidates_html_and_uses_a_versioned_application_script(client):
     response = client.get("/")
     assert response.headers["cache-control"] == "no-cache"
-    assert '/static/app.js?v=review-bulk-ui-2' in response.text
+    # Any value will do; what matters is that the script is requested with one, so a
+    # browser holding an older copy is asked for the newer file by name.
+    assert '/static/app.js?v=' in response.text
 
 
 
