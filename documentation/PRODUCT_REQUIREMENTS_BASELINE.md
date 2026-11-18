@@ -1089,11 +1089,16 @@ revisions are never deleted.
   for each month, and the acknowledgement tokens it was given. A missing month, an extra
   month, a month whose content has moved and an acknowledgement naming no finding are all
   refused, and nothing is written. What the operator saw is what is closed.
-- The act is one SQLite transaction over every month, so a failure on the last month
-  leaves the first one open too. Unlike the single-month close, the write does not run one
-  transaction per month; the content-fingerprint and current-revision re-checks are
-  repeated for each record inside that one transaction, so a change between the preflight
-  and the write still rolls the whole act back.
+- The act is one SQLite transaction over every month, and it is opened **before** the
+  target set is derived rather than before the first write. A content fingerprint covers
+  a month's rows and nothing else: whether its dates have been read, whether the calendar
+  has gained a holiday that conflicts with it, whether the masters are still ready and
+  which findings remain unacknowledged are live questions, and asking them outside the
+  write lets the answer change between the question and the record that reports it. Held
+  inside, every one of those questions is asked against the state the records are written
+  in, and a refusal leaves nothing behind. A failure on the last month still rolls back
+  the first, and the fingerprint and current-revision re-checks are still repeated per
+  record inside the same transaction.
 - Each month's gates are asked again with the acknowledgements this request carries. The
   preflight answers "what is missing"; it cannot know what has just been acknowledged, so
   a month that becomes closable by acknowledging an over-covered commitment or a calendar

@@ -1101,7 +1101,38 @@ def finalise_months(
     month, and must acknowledge each finding by the token the preflight gave it. Those
     three checks are what stops a page that has gone stale from closing a month the
     operator has not seen.
+
+    The transaction is opened before the derivation, not before the write. A fingerprint
+    covers a month's content and nothing else: whether its dates have all been read,
+    whether the calendar has since gained a holiday that conflicts with it, whether the
+    masters are still ready and which findings remain unacknowledged are all live
+    questions, and asking them outside the write lets the answer change between the
+    question and the record that reports it. Opening the write transaction first means
+    every one of those questions is asked against the state the records are written in,
+    and a refusal therefore leaves nothing behind for a later reader to wonder about.
     """
+
+    with generation_store.transaction(connection):
+        return _finalise_months_locked(
+            connection,
+            run_id,
+            fingerprints=fingerprints,
+            acknowledgements=acknowledgements,
+            note=note,
+            now=now,
+        )
+
+
+def _finalise_months_locked(
+    connection: sqlite3.Connection,
+    run_id: str,
+    *,
+    fingerprints: dict[str, str],
+    acknowledgements: dict[str, tuple[str, ...]],
+    note: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """The body of :func:`finalise_months`, run inside its write transaction."""
 
     preflight = bulk_preflight(connection, run_id)
     targets = list(preflight["target_months"])
@@ -1188,9 +1219,8 @@ def finalise_months(
         )
         for month in targets
     ]
-    with generation_store.transaction(connection):
-        for item in prepared:
-            _write_finalisation(connection, item)
+    for item in prepared:
+        _write_finalisation(connection, item)
     finalised = [finalisation_payload(connection, item.record) for item in prepared]
     return {
         "run_id": run_id,
