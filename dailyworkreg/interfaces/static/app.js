@@ -1406,6 +1406,166 @@ function monthCard(registerId, runId, month) {
   return panel;
 }
 
+// Closing every open month is one act, and the server is asked what it would do before
+// anything is closed. The panel shows the whole picture -- the months that would close,
+// the months already closed and the months that cannot close yet -- because confirming
+// against a partial list is how an operator agrees to something they were not shown.
+// Nothing here decides eligibility: the button is enabled by the server's verdict and the
+// request repeats the fingerprints and acknowledgements the preflight issued.
+
+async function bulkFinalisationPanel(registerId, runId) {
+  const panel = el('div', { class: 'detail bulk-finalisation' });
+  const result = el('div', { class: 'detail' });
+  let preflight;
+  try {
+    preflight = await api(`/api/generations/${runId}/finalisation/preflight`);
+  } catch (error) {
+    panel.append(el('p', { class: 'muted', text: error.message }));
+    return panel;
+  }
+
+  panel.append(el('h3', { text: 'Close every open month' }));
+  if (preflight.already_finalised.length) {
+    panel.append(el('p', {
+      class: 'muted',
+      text: `Already closed in this revision: ${preflight.already_finalised.join(', ')}. `
+        + 'They are not closed again and their records are not touched.',
+    }));
+  }
+  if (!preflight.target_months.length) {
+    panel.append(el('p', { class: 'status-ok', text: 'Every month of this revision is closed.' }));
+    return panel;
+  }
+
+  const findings = [];
+  preflight.months.forEach((month) => {
+    if (month.already_finalised) return;
+    month.findings.forEach((finding) => findings.push({ ...finding, month: month.month }));
+  });
+
+  panel.append(
+    el('p', {
+      class: 'muted',
+      text: 'Closing every open month at once is all or nothing: if any month cannot be '
+        + 'closed, none of them is. Nothing is reviewed for you, and a month whose dates '
+        + 'have not been read in front of you is refused rather than closed.',
+    }),
+    table(
+      ['Month', 'Dates read', 'Allocation', 'Findings', 'Status'],
+      preflight.months.map((month) => el('tr', {}, [
+        el('td', { text: month.month }),
+        el('td', { text: `${month.reviewed_dates} of ${month.total_dates}` }),
+        el('td', { text: `${month.allocator_status}${month.locked_dates ? ` · ${month.locked_dates} locked` : ''}` }),
+        el('td', { text: month.findings.length ? `${month.findings.length}` : 'none' }),
+        el('td', {
+          class: month.already_finalised ? 'muted' : (month.eligible ? 'status-ok' : 'status-warn'),
+          text: month.already_finalised
+            ? `closed as version ${month.sequence}`
+            : (month.eligible ? 'can be closed' : `${month.blockers.length} blocker(s)`),
+        }),
+      ])),
+    ),
+  );
+
+  if (preflight.blocked_months.length) {
+    const blockers = preflight.months
+      .filter((month) => !month.already_finalised && !month.eligible)
+      .flatMap((month) => month.blockers.map((blocker) => ({ ...blocker, month: month.month })));
+    panel.append(
+      el('strong', { text: 'What is in the way' }),
+      table(
+        ['Month', 'What is in the way', 'Detail'],
+        blockers.map((blocker) => el('tr', {}, [
+          el('td', { text: blocker.month }),
+          el('td', { text: blocker.label }),
+          el('td', { text: blocker.detail }),
+        ])),
+      ),
+    );
+  }
+
+  if (findings.length) {
+    panel.append(
+      el('strong', { text: 'Recorded findings to acknowledge' }),
+      el('p', {
+        class: 'muted',
+        text: 'These stay on each month\'s record after closing; acknowledging says you have seen them.',
+      }),
+      table(
+        ['Month', 'Finding', 'Detail', 'Acknowledge'],
+        findings.map((item) => el('tr', {}, [
+          el('td', { text: item.month }),
+          el('td', { text: item.what }),
+          el('td', { text: item.detail }),
+          el('td', {}, [
+            el('input', {
+              type: 'checkbox',
+              class: 'bulk-ack',
+              value: item.token,
+              'data-month': item.month,
+              'data-kind': item.kind,
+              title: item.token,
+            }),
+          ]),
+        ])),
+      ),
+    );
+  }
+
+  const note = el('input', { type: 'text', placeholder: 'Note recorded on every month closed (optional)' });
+  const button = el('button', {
+    class: 'button button-primary',
+    text: `Finalize all months (${preflight.target_months.length})`,
+    disabled: !preflight.can_finalise,
+    onclick: async () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      const label = button.textContent;
+      button.textContent = 'Closing…';
+      try {
+        const months = {};
+        preflight.target_months.forEach((month) => {
+          const entry = preflight.months.find((item) => item.month === month);
+          const acknowledged = Array.from(panel.querySelectorAll(`input.bulk-ack[data-month="${month}"]:checked`))
+            .map((node) => node.value);
+          months[month] = { fingerprint: entry.fingerprint, acknowledged };
+        });
+        const closed = await api(`/api/generations/${runId}/finalisation/bulk`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            months,
+            note: note.value.trim() === '' ? null : note.value.trim(),
+          }),
+        });
+        showBanner(
+          result,
+          'ok',
+          `Closed ${closed.count} month(s) in one act.`,
+          closed.months.map((record) => `${record.month}: version ${record.sequence}, finalisation ${record.finalisation_id}`),
+        );
+        await renderMonths(registerId, runId);
+      } catch (error) {
+        showBanner(result, 'warn', error.message);
+        button.disabled = false;
+        button.textContent = label;
+      }
+    },
+  });
+
+  panel.append(
+    el('p', {
+      class: 'muted',
+      text: preflight.can_finalise
+        ? 'The server reports every open month can be closed.'
+        : 'The server reports at least one open month cannot be closed, so none will be.',
+    }),
+    el('div', { class: 'actions' }, [note, button]),
+    result,
+  );
+  return panel;
+}
+
 async function renderMonths(registerId, runId) {
   const target = document.getElementById('draft-months');
   if (!target) return;
@@ -1413,6 +1573,7 @@ async function renderMonths(registerId, runId) {
   const months = await api(`/api/registers/${registerId}/months`);
   target.append(el('h3', { text: 'Closing the month' }));
   target.append(el('p', { class: 'muted', text: 'Each month is closed on its own. A closed month is never reopened; a mistake is corrected by a new version.' }));
+  target.append(await bulkFinalisationPanel(registerId, runId));
   const issuedCount = months.filter((month) => month.latest_finalisation_id).length;
   if (issuedCount > 0) {
     target.append(el('div', { class: 'actions' }, [

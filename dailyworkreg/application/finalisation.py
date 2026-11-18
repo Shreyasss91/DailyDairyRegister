@@ -708,7 +708,22 @@ def _partial_month(connection: sqlite3.Connection, run_id: str, month: str) -> b
     return not (start_ok and end_ok)
 
 
-def finalise_month(
+@dataclass(frozen=True)
+class _PreparedFinalisation:
+    """A month that has been judged and built, and is ready to be written.
+
+    The judgement is separated from the write for two reasons. It reads the masters,
+    the calendar and the readiness of the office, and that is not work to hold a write
+    lock across. And a bulk close must judge *every* month before it writes *any*, so
+    that one month's blocker refuses the whole act rather than half-finishing it.
+    """
+
+    check: FinalisationCheck
+    record: revision_state.FinalisationRow
+    open_correction_run_id: str | None
+
+
+def _prepare_finalisation(
     connection: sqlite3.Connection,
     run_id: str,
     month: str,
@@ -716,16 +731,8 @@ def finalise_month(
     acknowledged: tuple[str, ...] = (),
     note: str | None = None,
     now: datetime | None = None,
-) -> dict[str, Any]:
-    """Close one month of one revision, or refuse and say why.
-
-    The gates run outside a write transaction, because operational readiness and calendar
-    projection read the masters and that is not work to hold a lock across. The write is
-    then short and re-checks the two things that would make the decision stale: the month
-    content's fingerprint and the register's current revision. If either moved, the
-    finalisation is refused and the operator is asked to look again, because a record
-    written against content that has since changed is a record of nothing.
-    """
+) -> _PreparedFinalisation:
+    """Judge one month and build the record it would be closed with, writing nothing."""
 
     check = check_finalisation(connection, run_id, month, acknowledged=acknowledged)
     if _partial_month(connection, run_id, month):
@@ -810,45 +817,349 @@ def finalise_month(
         master_version=_master_version(connection),
         note=note,
     )
+    return _PreparedFinalisation(
+        check=check,
+        record=record,
+        open_correction_run_id=None if state is None else state.open_correction_run_id,
+    )
 
-    with generation_store.transaction(connection):
-        again = month_fingerprint(connection, run_id, month)
-        if again != fingerprint:
-            raise FinalisationError(
-                C_CONTENT_CHANGED_WHILE_FINALISING,
-                (
-                    "the month changed while it was being finalised, so nothing was "
-                    "written; reload the register and close it again"
-                ),
-            )
-        if revisions.current_run(connection, register_id) != run_id:
-            raise FinalisationError(
-                C_STALE_FINALISATION,
-                (
-                    "the register moved to another revision while this month was being "
-                    "finalised, so nothing was written; open the current revision"
-                ),
-            )
-        if (
-            revision_state.finalisation_for_run_month(connection, run_id, month)
-            is not None
-        ):
-            raise FinalisationError(
-                C_ALREADY_FINALISED,
-                "this month was finalised a moment ago and cannot be finalised again",
-            )
-        revision_state.insert_finalisation(connection, record)
-        revision_state.set_latest_finalisation(
-            connection, register_id, month, finalisation_id
+
+def _write_finalisation(
+    connection: sqlite3.Connection, prepared: _PreparedFinalisation
+) -> None:
+    """Write one prepared record. Must be called inside a transaction.
+
+    Everything that could have moved between the judgement and this line is asked
+    again, so a record is never written against content that has since changed. An
+    exception here rolls the whole enclosing transaction back, which is what makes a
+    bulk close all or nothing.
+    """
+
+    record = prepared.record
+    fingerprint = record.fingerprint
+    run_id = record.run_id
+    register_id = record.register_id
+    month = record.month
+
+    again = month_fingerprint(connection, run_id, month)
+    if again != fingerprint:
+        raise FinalisationError(
+            C_CONTENT_CHANGED_WHILE_FINALISING,
+            (
+                "the month changed while it was being finalised, so nothing was "
+                "written; reload the register and close it again"
+            ),
         )
-        open_run = None if state is None else state.open_correction_run_id
-        if open_run is not None and _descends_from(connection, run_id, open_run):
-            # The correction may have been worked on across several revisions, so what
-            # closes the month is that the finalised revision descends from the open
-            # correction, not that it is that exact revision.
-            revision_state.clear_open_correction(connection, register_id, month)
+    if revisions.current_run(connection, register_id) != run_id:
+        raise FinalisationError(
+            C_STALE_FINALISATION,
+            (
+                "the register moved to another revision while this month was being "
+                "finalised, so nothing was written; open the current revision"
+            ),
+        )
+    if revision_state.finalisation_for_run_month(connection, run_id, month) is not None:
+        raise FinalisationError(
+            C_ALREADY_FINALISED,
+            "this month was finalised a moment ago and cannot be finalised again",
+        )
+    revision_state.insert_finalisation(connection, record)
+    revision_state.set_latest_finalisation(
+        connection, register_id, month, record.finalisation_id
+    )
+    if prepared.open_correction_run_id is not None and _descends_from(
+        connection, run_id, prepared.open_correction_run_id
+    ):
+        # The correction may have been worked on across several revisions, so what
+        # closes the month is that the finalised revision descends from the open
+        # correction, not that it is that exact revision.
+        revision_state.clear_open_correction(connection, register_id, month)
 
-    return finalisation_payload(connection, record)
+
+def finalise_month(
+    connection: sqlite3.Connection,
+    run_id: str,
+    month: str,
+    *,
+    acknowledged: tuple[str, ...] = (),
+    note: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Close one month of one revision, or refuse and say why.
+
+    The gates run outside a write transaction, because operational readiness and calendar
+    projection read the masters and that is not work to hold a lock across. The write is
+    then short and re-checks the two things that would make the decision stale: the month
+    content's fingerprint and the register's current revision. If either moved, the
+    finalisation is refused and the operator is asked to look again, because a record
+    written against content that has since changed is a record of nothing.
+    """
+
+    prepared = _prepare_finalisation(
+        connection, run_id, month, acknowledged=acknowledged, note=note, now=now
+    )
+    with generation_store.transaction(connection):
+        _write_finalisation(connection, prepared)
+    return finalisation_payload(connection, prepared.record)
+
+
+# --- closing every open month at once ---------------------------------------
+
+C_BULK_NO_TARGETS = "bulk_finalisation_has_no_open_months"
+C_BULK_TARGETS_MISMATCH = "bulk_finalisation_targets_do_not_match_this_revision"
+C_BULK_FINGERPRINT_STALE = "bulk_finalisation_month_changed_since_it_was_shown"
+C_BULK_BLOCKED = "bulk_finalisation_blocked"
+C_BULK_ACKNOWLEDGEMENT_UNKNOWN = "bulk_finalisation_acknowledges_no_finding"
+
+
+def bulk_finalisation_targets(
+    connection: sqlite3.Connection, run_id: str
+) -> list[str]:
+    """The months a bulk close would act on: every open month of this revision.
+
+    Derived from the revision's own months, not from what the page happens to show and
+    not from the month-lifecycle pointer being empty: a month is open when *this*
+    revision has no record of it, which is the same question the single-month close
+    asks immediately before it writes.
+    """
+
+    return [
+        month
+        for month in month_breakdown(connection, run_id)
+        if revision_state.finalisation_for_run_month(connection, run_id, month) is None
+    ]
+
+
+def _partial_blocker(month: str) -> Blocker:
+    return Blocker(
+        code=C_PARTIAL_MONTH_UNSUPPORTED,
+        label="Part-month revision",
+        detail=(
+            "this revision does not cover the whole of "
+            f"{month}, and a part-month cannot be closed"
+        ),
+    )
+
+
+def bulk_preflight(connection: sqlite3.Connection, run_id: str) -> dict[str, Any]:
+    """What a bulk close would do, month by month, without writing anything.
+
+    Every month of the revision appears, including the ones already closed and the ones
+    that cannot be closed, because the panel an operator confirms against must show the
+    whole picture rather than only the good news. ``eligible`` answers "can this be closed
+    now", so a closed month reports ``False`` with ``month_already_finalised`` among its
+    blockers: that is a statement of fact about the month, not a fault in it, and the
+    month is never part of the act.
+    """
+
+    revision = revision_state.revision(connection, run_id)
+    if revision is None:
+        raise FinalisationError(
+            revisions.C_REVISION_UNKNOWN, f"unknown revision {run_id}"
+        )
+    register_id = revision.register_id
+    months = month_breakdown(connection, run_id)
+    entries: list[dict[str, Any]] = []
+    for month in months:
+        existing = revision_state.finalisation_for_run_month(connection, run_id, month)
+        check = check_finalisation(connection, run_id, month)
+        blockers = [item.as_dict() for item in check.blockers]
+        if _partial_month(connection, run_id, month) and not any(
+            item["code"] == C_PARTIAL_MONTH_UNSUPPORTED for item in blockers
+        ):
+            blockers.append(_partial_blocker(month).as_dict())
+        acknowledged = set(check.acknowledged)
+        findings = [
+            {
+                "kind": "over_coverage",
+                "what": item["constraint"],
+                "detail": item["detail"],
+                "token": item["token"],
+                "acknowledged": item["token"] in acknowledged,
+            }
+            for item in check.over_coverage
+        ]
+        findings.extend(
+            {
+                "kind": "calendar_conflict",
+                "what": "Calendar conflict",
+                "detail": item["detail"],
+                "token": item["token"],
+                "acknowledged": item["token"] in acknowledged,
+            }
+            for item in check.conflicts
+        )
+        entries.append(
+            {
+                "month": month,
+                "already_finalised": existing is not None,
+                "finalisation_id": (
+                    None if existing is None else existing.finalisation_id
+                ),
+                "sequence": None if existing is None else existing.sequence,
+                "eligible": not blockers,
+                "blockers": blockers,
+                "findings": findings,
+                "unacknowledged_tokens": [
+                    item["token"] for item in findings if not item["acknowledged"]
+                ],
+                "fingerprint": check.fingerprint,
+                "reviewed_dates": check.reviewed_dates,
+                "total_dates": check.total_dates,
+                "locked_dates": check.locked_dates,
+                "allocator_status": check.allocation_status,
+                "is_correction": (
+                    revision_state.correction_of(connection, run_id) is not None
+                ),
+            }
+        )
+    targets = [item for item in entries if not item["already_finalised"]]
+    return {
+        "run_id": run_id,
+        "register_id": register_id,
+        "is_current": revisions.current_run(connection, register_id) == run_id,
+        "months": entries,
+        "target_months": [item["month"] for item in targets],
+        "already_finalised": [
+            item["month"] for item in entries if item["already_finalised"]
+        ],
+        "eligible_months": [item["month"] for item in targets if item["eligible"]],
+        "blocked_months": [item["month"] for item in targets if not item["eligible"]],
+        "can_finalise": bool(targets) and all(item["eligible"] for item in targets),
+    }
+
+
+def _bulk_blockers(entry: dict[str, Any]) -> tuple[Blocker, ...]:
+    return tuple(
+        Blocker(
+            code=item["code"],
+            label=item["label"],
+            detail=item["detail"],
+            dates=tuple(item.get("dates") or ()),
+            asset_id=item.get("asset_id"),
+            limit=item.get("limit"),
+            actual=item.get("actual"),
+            token=item.get("token"),
+        )
+        for item in entry["blockers"]
+    )
+
+
+def finalise_months(
+    connection: sqlite3.Connection,
+    run_id: str,
+    *,
+    fingerprints: dict[str, str],
+    acknowledgements: dict[str, tuple[str, ...]],
+    note: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Close every open month of one revision in a single all-or-nothing act.
+
+    The act is one transaction over every month, so a failure on the last month leaves
+    the first one open too. Nothing is invented on the way in: the caller must name the
+    month set the server derived, must quote the fingerprint it was shown for each
+    month, and must acknowledge each finding by the token the preflight gave it. Those
+    three checks are what stops a page that has gone stale from closing a month the
+    operator has not seen.
+    """
+
+    preflight = bulk_preflight(connection, run_id)
+    targets = list(preflight["target_months"])
+    if not targets:
+        raise FinalisationError(
+            C_BULK_NO_TARGETS,
+            "every month of this revision has already been finalised, so there is "
+            "nothing to close",
+        )
+    if set(fingerprints) != set(targets):
+        raise FinalisationError(
+            C_BULK_TARGETS_MISMATCH,
+            (
+                "the months to be finalised do not match the open months of this "
+                "revision; reload the register and confirm again"
+            ),
+        )
+    if set(acknowledgements) - set(targets):
+        raise FinalisationError(
+            C_BULK_ACKNOWLEDGEMENT_UNKNOWN,
+            (
+                "an acknowledgement was sent for a month that is not being closed; "
+                "reload the register and confirm again"
+            ),
+        )
+    for item in preflight["months"]:
+        if item["month"] not in targets:
+            continue
+        if fingerprints[item["month"]] != item["fingerprint"]:
+            raise FinalisationError(
+                C_BULK_FINGERPRINT_STALE,
+                (
+                    f"{item['month']} changed since it was shown, so nothing was "
+                    "finalised; reload the register and confirm again"
+                ),
+            )
+    # The preflight answered "what is missing", not "what is missing given what the
+    # caller has just acknowledged", so each month's gates are asked again with this
+    # request's acknowledgements before anything is written. A month that is ready once
+    # its findings are acknowledged is not a blocked month.
+    blocked: list[dict[str, Any]] = []
+    for month in targets:
+        check = check_finalisation(
+            connection,
+            run_id,
+            month,
+            acknowledged=tuple(acknowledgements.get(month) or ()),
+        )
+        found = list(check.blockers)
+        if _partial_month(connection, run_id, month) and not any(
+            item.code == C_PARTIAL_MONTH_UNSUPPORTED for item in found
+        ):
+            found.insert(0, _partial_blocker(month))
+        if found:
+            blocked.append(
+                {
+                    "month": month,
+                    "blockers": [item.as_dict() for item in found],
+                }
+            )
+    if blocked:
+        blockers = tuple(
+            blocker for item in blocked for blocker in _bulk_blockers(item)
+        )
+        named = ", ".join(item["month"] for item in blocked)
+        raise FinalisationError(
+            C_BULK_BLOCKED,
+            (
+                f"nothing was finalised, because {named} cannot be closed; every month "
+                "has to be closable before any of them is"
+            ),
+            blockers,
+        )
+
+    stamp = now or datetime.now()
+    prepared = [
+        _prepare_finalisation(
+            connection,
+            run_id,
+            month,
+            acknowledged=tuple(acknowledgements.get(month) or ()),
+            note=note,
+            now=stamp,
+        )
+        for month in targets
+    ]
+    with generation_store.transaction(connection):
+        for item in prepared:
+            _write_finalisation(connection, item)
+    finalised = [finalisation_payload(connection, item.record) for item in prepared]
+    return {
+        "run_id": run_id,
+        "register_id": preflight["register_id"],
+        "finalised_months": [item["month"] for item in finalised],
+        "count": len(finalised),
+        "months": finalised,
+    }
 
 
 def _master_version(connection: sqlite3.Connection) -> int:

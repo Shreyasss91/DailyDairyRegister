@@ -160,6 +160,12 @@ input, select {
 }
 .month-card .tag { margin-right: 0.4rem; }
 .status-ok { color: #2f6b3a; }
+.status-warn { color: #8a5a00; }
+/* Closing every open month at once. The panel lists the months that would close,
+   the ones already closed and the ones that cannot, so the confirmation is made
+   against the whole picture rather than against the good news only. */
+.bulk-finalisation table { margin-top: 8px; }
+.bulk-finalisation .actions { margin-top: 10px; }
 .status-correction_draft { background: #f3eef8; }
 .status-finalised { background: #eaf1ea; }
 

@@ -647,6 +647,26 @@ def test_bulk_review_requires_the_complete_date_set(stocked):
     assert stocked.get(f"/api/generations/{run_id}/review").json()["reviewed_dates"] == 0
 
 
+def test_bulk_review_refuses_a_malformed_body_as_a_client_error(stocked):
+    """A body that is not a date-to-fingerprint map is refused, not crashed on.
+
+    The route answers this question itself rather than asking the review service, so the
+    refusal has to come from a constraint the route actually holds. It used to name one
+    it had never imported, which turned a malformed request into a failure report.
+    """
+
+    made = generate(stocked)
+    for body in ({}, {"fingerprints": []}, {"fingerprints": {"2026-11-03": 7}}):
+        answer = stocked.put(
+            f"/api/generations/{made['run_id']}/review", json=body
+        )
+        assert answer.status_code == 400, body
+        assert answer.json()["error"]["constraint"] == C_STALE_REVIEW, body
+    assert stocked.get(
+        f"/api/generations/{made['run_id']}/review"
+    ).json()["reviewed_dates"] == 0
+
+
 def test_a_review_of_stale_content_is_refused_with_a_stable_constraint(stocked):
     made = generate(stocked)
     answer = stocked.put(

@@ -16,12 +16,12 @@ import shutil
 import sqlite3
 import tempfile
 import uuid
-from io import BytesIO
-from zipfile import ZIP_DEFLATED, ZipFile
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Any
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import Depends, FastAPI, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -39,13 +39,16 @@ from ..application.calendar_projection import (
 from ..application.draft_generation import DraftMode, generate_draft
 from ..application.draft_requests import GenerationInputError, GenerationSpec, prepare_generation
 from ..application.finalisation import (
+    C_BULK_TARGETS_MISMATCH,
     FinalisationError,
     abandon_correction,
+    bulk_preflight,
     check_finalisation,
     correction_chain,
     create_correction_revision,
     finalisation_record,
     finalise_month,
+    finalise_months,
     month_lifecycle,
 )
 from ..application.generation_runs import (
@@ -73,6 +76,7 @@ from ..application.register_edits import (
     remove_entry,
 )
 from ..application.revisions import (
+    C_STALE_REVIEW,
     RevisionError,
     clear_review,
     lock_date,
@@ -1075,6 +1079,65 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             run_id,
             payload["month"],
             acknowledged=tuple(payload.get("acknowledged") or ()),
+            note=payload.get("note"),
+        )
+
+    @app.get("/api/generations/{run_id}/finalisation/preflight")
+    def read_bulk_finalisation_preflight(
+        run_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        """Everything one bulk close would do, before it is asked to do anything."""
+
+        return bulk_preflight(db, run_id)
+
+    @app.post("/api/generations/{run_id}/finalisation/bulk")
+    def close_every_open_month(
+        run_id: str,
+        payload: dict[str, Any],
+        db: sqlite3.Connection = Depends(get_db),
+    ) -> dict[str, Any]:
+        """Close every open month of this revision, or close none of them."""
+
+        requested = payload.get("months")
+        if not isinstance(requested, dict) or not requested:
+            raise FinalisationError(
+                C_BULK_TARGETS_MISMATCH,
+                (
+                    "a bulk close must name the months it is closing, with the "
+                    "fingerprint each one was shown under"
+                ),
+            )
+        fingerprints: dict[str, str] = {}
+        acknowledgements: dict[str, tuple[str, ...]] = {}
+        for month, entry in requested.items():
+            if not isinstance(entry, dict):
+                raise FinalisationError(
+                    C_BULK_TARGETS_MISMATCH,
+                    f"the entry for {month} is not a month confirmation",
+                )
+            fingerprint = entry.get("fingerprint")
+            if not isinstance(fingerprint, str) or not fingerprint:
+                raise FinalisationError(
+                    C_BULK_TARGETS_MISMATCH,
+                    f"the entry for {month} carries no fingerprint",
+                )
+            tokens = entry.get("acknowledged")
+            if tokens is None:
+                tokens = []
+            if not isinstance(tokens, list) or not all(
+                isinstance(item, str) for item in tokens
+            ):
+                raise FinalisationError(
+                    C_BULK_TARGETS_MISMATCH,
+                    f"the acknowledgements for {month} are not a list of tokens",
+                )
+            fingerprints[str(month)] = fingerprint
+            acknowledgements[str(month)] = tuple(tokens)
+        return finalise_months(
+            db,
+            run_id,
+            fingerprints=fingerprints,
+            acknowledgements=acknowledgements,
             note=payload.get("note"),
         )
 

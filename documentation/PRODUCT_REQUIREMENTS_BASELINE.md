@@ -1073,7 +1073,45 @@ exactly as issued, marked superseded. `abandon_correction` drops an open correct
 returns the register to the record in force, leaving the abandoned revision readable —
 revisions are never deleted.
 
-### 24.6 What is not modelled
+### 24.6 Closing every open month at once (as built)
+
+- `GET /api/generations/{run_id}/finalisation/preflight` reports what a bulk close would
+  do and writes nothing. Every month of the revision appears, including the ones already
+  closed, because the panel an operator confirms against must show the whole picture
+  rather than only the months that would succeed.
+- The target set is derived on the server from the revision's own months: a month is a
+  target when *this revision* holds no record of it
+  (`revision_state.finalisation_for_run_month`). It is deliberately not derived from the
+  month-lifecycle pointer being empty, because a correction revision holds a copy of a
+  month that is already issued and that month is open *on the correction*.
+- `POST /api/generations/{run_id}/finalisation/bulk` closes every target in one act. The
+  caller must send the month set the server derived, the content fingerprint it was shown
+  for each month, and the acknowledgement tokens it was given. A missing month, an extra
+  month, a month whose content has moved and an acknowledgement naming no finding are all
+  refused, and nothing is written. What the operator saw is what is closed.
+- The act is one SQLite transaction over every month, so a failure on the last month
+  leaves the first one open too. Unlike the single-month close, the write does not run one
+  transaction per month; the content-fingerprint and current-revision re-checks are
+  repeated for each record inside that one transaction, so a change between the preflight
+  and the write still rolls the whole act back.
+- Each month's gates are asked again with the acknowledgements this request carries. The
+  preflight answers "what is missing"; it cannot know what has just been acknowledged, so
+  a month that becomes closable by acknowledging an over-covered commitment or a calendar
+  conflict is not treated as blocked.
+- Nothing is reviewed on the operator's behalf: an unread date stays unread and the month
+  stays open. An already closed month is never closed again and its record is untouched.
+  Correction and history semantics are those of a single close: a bulk close on a
+  correction revision writes the next sequence with the correction's own lineage and
+  clears the open correction.
+- Refusals are structured, not sentences: `bulk_finalisation_has_no_open_months`,
+  `bulk_finalisation_targets_do_not_match_this_revision`,
+  `bulk_finalisation_month_changed_since_it_was_shown`,
+  `bulk_finalisation_acknowledges_no_finding` and `bulk_finalisation_blocked`, the last
+  carrying every blocked month's blockers so the page can name each month and each reason.
+- The single-month close is unchanged in behaviour and in its refusal codes; the bulk act
+  shares its preparation and its write rather than reimplementing either.
+
+### 24.7 What is not modelled
 
 - Partial-month generation, and therefore the use of the section 23 proration rule to
   build a schedule. A part-month is still refused.
