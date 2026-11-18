@@ -721,6 +721,12 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             "months": len(draft.months),
             "rows": len(draft.rows),
             "visits": len(draft.visits),
+            "activities": sum(
+                1
+                for row in draft.rows
+                for entry in row.entries
+                if entry.kind.value == "activity"
+            ),
             "exceptions": len(draft.exceptions),
             "missing_content": list(prepared.readiness.missing_content),
         }
@@ -1595,12 +1601,28 @@ def _spec(payload: dict[str, Any]) -> GenerationSpec:
         ),
         cycle_duration_months=int(payload.get("cycle_duration_months", 1)),
         cycle_visits_per_asset=int(payload.get("cycle_visits_per_asset", 1)),
+        activities_per_day=_activities_per_day(payload.get("activities_per_day")),
         dtc_target=payload.get("dtc_target"),
         area_required=_counts(payload.get("area_required")),
         feeder_required=_counts(payload.get("feeder_required")),
         fixed_by_month=fixed,
         prior_history=history,
     )
+
+
+def _activities_per_day(value: Any) -> int | None:
+    """The operator's requested count, or ``None`` for the platform default.
+
+    An absent value is not the same as zero: absent asks for the default the platform
+    keeps (three a day when a catalogue is stored), while zero explicitly leaves every
+    day to field visits. Reading one as the other would silently change a register.
+    """
+
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError("activities_per_day must be a whole number")
+    return int(value)
 
 
 def _month(label: str) -> MonthKey:

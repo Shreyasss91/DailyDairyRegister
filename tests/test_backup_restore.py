@@ -648,7 +648,7 @@ def test_a_backup_from_a_supported_older_tool_is_migrated_on_the_staging_copy(
     scratch = write(tmp_path, "older.db", payload)
     connection = sqlite3.connect(scratch, isolation_level=None)
     try:
-        connection.execute("DELETE FROM schema_migration WHERE version = 5")
+        connection.execute("DELETE FROM schema_migration WHERE version >= 5")
         for (name,) in connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'trigger'"
         ).fetchall():
@@ -668,7 +668,7 @@ def test_a_backup_from_a_supported_older_tool_is_migrated_on_the_staging_copy(
     staged = validate(office, package)
 
     assert staged.source_schema_version == 4
-    assert staged.migrations_applied == (5,)
+    assert staged.migrations_applied == (5, 6)
     assert staged.facts.schema_version == schema_module.SCHEMA_VERSION
     assert not staged.facts.missing_triggers
     assert staged.warnings  # the operator is told the backup was brought forward

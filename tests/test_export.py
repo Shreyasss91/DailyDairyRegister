@@ -915,15 +915,27 @@ def test_exporting_writes_nothing_and_leaves_the_record_untouched(client, db):
 
 
 def test_the_same_version_exports_the_same_document_every_time(client, db):
+    """The document is the record, not the moment it was downloaded.
+
+    The bytes are compared as content rather than as a file: a workbook is a zip, and
+    the zip container stamps each member with the time it was written, so two saves of
+    an identical document differ in their container offsets and timestamps alone. What
+    must not differ is a single cell.
+    """
+
     _, record = issued(db, client)
 
-    first = workbook(client, record["finalisation_id"])[0].content
-    second = workbook(client, record["finalisation_id"])[0].content
-
-    assert first == second
-    assert register_rows(load_workbook(BytesIO(first))) == register_rows(
-        load_workbook(BytesIO(second))
+    first = load_workbook(BytesIO(workbook(client, record["finalisation_id"])[0].content))
+    second = load_workbook(
+        BytesIO(workbook(client, record["finalisation_id"])[0].content)
     )
+
+    assert register_rows(first) == register_rows(second)
+    assert [[cell.value for cell in row] for row in first[documents.METADATA_SHEET].iter_rows()] == [
+        [cell.value for cell in row] for row in second[documents.METADATA_SHEET].iter_rows()
+    ]
+    assert first.properties.title == second.properties.title
+    assert first.properties.created == second.properties.created
 
 
 # --- safety ---------------------------------------------------------------

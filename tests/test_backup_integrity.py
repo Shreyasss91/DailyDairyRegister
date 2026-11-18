@@ -199,7 +199,7 @@ def test_an_older_payload_is_still_readable_before_its_migration(office, client,
     scratch = write(tmp_path, "older.db", payload)
     connection = sqlite3.connect(scratch, isolation_level=None)
     try:
-        connection.execute("DELETE FROM schema_migration WHERE version = 5")
+        connection.execute("DELETE FROM schema_migration WHERE version >= 5")
         for (name,) in connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'trigger'"
         ).fetchall():
@@ -225,7 +225,7 @@ def test_an_older_payload_is_still_readable_before_its_migration(office, client,
 
     # Accepted, because it was migrated first and now carries every protection.
     assert staged.source_schema_version == 4
-    assert staged.migrations_applied == (5,)
+    assert staged.migrations_applied == (5, 6)
     assert staged.facts.missing_triggers == frozenset()
     assert staged.facts.healthy is True
 

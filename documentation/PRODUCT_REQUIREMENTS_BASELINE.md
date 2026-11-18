@@ -1146,14 +1146,64 @@ revisions are never deleted.
 - A preflight that cannot be read leaves the same refresh action, so a network failure is
   a state the page recovers from rather than a panel that stays empty.
 
-### 24.8 What is not modelled
+### 24.8 Placing regular activities on working days (as built)
+
+The office's own approved catalogue (`data/record_A/03_approved_activity_catalogue.csv`,
+60 records in 15 categories) is imported into the activity masters and placed on the
+register by generation, so a generated month records regular work and not only field
+visits. The rule lives in `dailyworkreg/domain/activities.py`, which performs no I/O and
+reads no clock.
+
+- **The count is the operator's, and it is configurable.** The generation request carries
+  `activities_per_day`; the generate form starts at 3, which is the office's own "at least
+  three activities a day". The count is exact rather than a floor: a day carries that many
+  distinct activities. `0` leaves every day to field visits, and a request that does not
+  mention the field at all records no activities - it does not inherit a platform default,
+  so an older caller keeps exactly the draft it used to get.
+- **Hard constraints.** The count per eligible working day; the catalogue's monthly
+  maximum per calendar month; its monthly minimum per calendar month; its minimum repeat
+  gap, counted in calendar days and carried across month boundaries; its weekday
+  restriction; and never two placements of one activity on one day.
+- **A weight is a preference and nothing more.** It orders the choice among the
+  activities the hard constraints already permit. It cannot raise a maximum, shorten a
+  gap, open a restricted weekday or fill a day that has no permitted candidate.
+- **A constraint that cannot hold is refused, never relaxed.** The refusal names the
+  constraint and the month, and the day where one is responsible:
+  `activity_placement_has_no_candidate` (nothing to place, or fewer activities than the
+  count requires), `activity_placement_cannot_fill_a_day`,
+  `activity_monthly_minimum_unsatisfiable`, `activity_monthly_maximum_below_minimum`,
+  `activity_weekday_mask_unreadable` and `activity_limits_inconsistent` (one activity
+  recorded twice). Generation itself refuses with
+  `activity_allocation_infeasible` and a sentence asking for a lower count, a wider
+  catalogue or a longer range.
+- **Deterministic.** The draw is seeded from the generation seed and the month and
+  candidates are ordered by activity id, so the same request produces the same month and a
+  new seed produces a different, equally valid one.
+- **A placement is a day entry.** It carries `kind=activity`, the catalogue's English
+  description and its Kannada text unchanged, and `provenance=generated`, with the stable
+  identifier `ACT-<date>-<activity id>`. A non-working day carries none: a Sunday, a
+  General Holiday and a leave day are not days the office worked. A placement is not
+  duplicated where the operator or the calendar already recorded the same activity on the
+  same date, and a placement on a locked date is preserved as `locked`, exactly as a
+  calendar entry there is. Schema 6 widens the entry table's provenance check for this
+  value, and migration 6 rebuilds the table to do it.
+- **Where it shows.** The placement reaches the draft preview, the review, the issued
+  register page's one Activity cell and the `Register` sheet, because it is an ordinary
+  day entry and not a second kind of content.
+
+### 24.9 What is not modelled
 
 - Partial-month generation, and therefore the use of the section 23 proration rule to
   build a schedule. A part-month is still refused.
 - Reopening a finalised month, in place or by any other act.
-- PDF and Excel output of a finalised version; backup and restore.
-- An activity-selection scheduler. Entries on a date are rendered and corrected; which
-  activity belongs on a date is still the operator's entry, not a computed choice.
+- Prorating the catalogue's monthly activity minimums and maximums for a partial month,
+  which the requirements ask for once partial months exist (§6).
+- A *range* of activities per day. The requirements describe a default of three to six
+  and the office asks for at least three; what is implemented is one configured count,
+  chosen once per generation, from which every eligible day records exactly that number.
+  Randomising within a range is not implemented, and neither is a per-weekday count.
+- An activity's applicability to particular areas, feeders or DTCs: the catalogue has no
+  such column, so a placement is office-wide.
 - Authentication or multi-operator attribution. The note is the only human record.
 
 ## 25. Persistence guarantees beneath a finalised month (as built)

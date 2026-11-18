@@ -25,7 +25,7 @@ from dataclasses import dataclass
 #: Bumped when the schema below changes. Migrations are applied in order and each
 #: one is idempotent, so re-running is safe and a fresh database simply replays the
 #: list.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -435,7 +435,7 @@ _MIGRATION_3_STATEMENTS = (
         title_en   TEXT NOT NULL,
         title_kn   TEXT,
         provenance TEXT NOT NULL
-            CHECK (provenance IN ('calendar', 'manual', 'locked')),
+            CHECK (provenance IN ('calendar', 'manual', 'locked', 'generated')),
         PRIMARY KEY (run_id, entry_id)
     )
     """,
@@ -864,12 +864,95 @@ _MIGRATION_5 = Migration(
 )
 
 
+# --- migration 6: a generated activity is its own kind of entry ---------------
+
+#: The entry table as migration 6 installs it. Repeated rather than shared with the
+#: schema statements above for the same reason migration 5 repeats its table: an
+#: applied migration is history.
+_GENERATION_ENTRY_TABLE_SQL = """
+    CREATE TABLE IF NOT EXISTS generation_entry (
+        run_id     TEXT NOT NULL REFERENCES generation_run (run_id) ON DELETE CASCADE,
+        entry_id   TEXT NOT NULL,
+        row_date   TEXT NOT NULL,
+        kind       TEXT NOT NULL,
+        title_en   TEXT NOT NULL,
+        title_kn   TEXT,
+        provenance TEXT NOT NULL
+            CHECK (provenance IN ('calendar', 'manual', 'locked', 'generated')),
+        PRIMARY KEY (run_id, entry_id)
+    )
+    """
+
+
+def _entry_provenance_allows_generated(connection: sqlite3.Connection) -> bool:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'generation_entry'"
+    ).fetchone()
+    return row is not None and "'generated'" in (row["sql"] or "")
+
+
+def _apply_migration_6(connection: sqlite3.Connection) -> None:
+    """Let an entry record that the generator placed it from the activity catalogue.
+
+    SQLite cannot widen a ``CHECK`` constraint in place, so the table is rebuilt and
+    its rows copied across verbatim; a trigger on the table is dropped with it and
+    recreated here, inside the same transaction. The copy is verified against the row
+    count it started from, because a rebuild that silently loses a record would be
+    discovered only when the office opened a finished month.
+    """
+
+    if _entry_provenance_allows_generated(connection):
+        return
+
+    before = connection.execute("SELECT COUNT(*) AS n FROM generation_entry").fetchone()[0]
+    connection.execute("DROP TABLE IF EXISTS generation_entry_schema6")
+    connection.execute(
+        _GENERATION_ENTRY_TABLE_SQL.replace(
+            "generation_entry", "generation_entry_schema6", 1
+        )
+    )
+    connection.execute(
+        """
+        INSERT INTO generation_entry_schema6
+            (run_id, entry_id, row_date, kind, title_en, title_kn, provenance)
+        SELECT run_id, entry_id, row_date, kind, title_en, title_kn, provenance
+        FROM generation_entry
+        """
+    )
+    connection.execute("DROP TABLE generation_entry")
+    connection.execute("ALTER TABLE generation_entry_schema6 RENAME TO generation_entry")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_entry_run_date "
+        "ON generation_entry (run_id, row_date)"
+    )
+    # The rebuild dropped the triggers that live on this table; the rest of the
+    # content tables keep theirs.
+    for statement in _immutability_triggers():
+        if " ON generation_entry " in statement.split("WHEN", 1)[0]:
+            connection.execute(statement)
+    after = connection.execute("SELECT COUNT(*) AS n FROM generation_entry").fetchone()[0]
+    if after != before:
+        raise RuntimeError(
+            "the day entries did not survive the rebuild: "
+            f"{before} row(s) before, {after} after"
+        )
+
+
+_MIGRATION_6 = Migration(
+    version=6,
+    name="a generated activity is recorded as its own provenance",
+    statements=(),
+    apply=_apply_migration_6,
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     _MIGRATION_1,
     _MIGRATION_2,
     _MIGRATION_3,
     _MIGRATION_4,
     _MIGRATION_5,
+    _MIGRATION_6,
 )
 
 

@@ -131,7 +131,7 @@ def a_finalisation(db: sqlite3.Connection, run_id: str, *, month: str = "2026-11
 
 
 def test_the_schema_carries_every_migration(db):
-    assert SCHEMA_VERSION == 5
+    assert SCHEMA_VERSION == 6
     assert applied_versions(db) == tuple(item.version for item in MIGRATIONS)
     tables = {
         row["name"]

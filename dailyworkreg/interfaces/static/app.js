@@ -546,6 +546,8 @@ document.getElementById('gen-run').addEventListener('click', async () => {
     mode,
     seed: Number(document.getElementById('gen-seed').value || 0),
   };
+  const activities = document.getElementById('gen-activities').value;
+  if (activities !== '') payload.activities_per_day = Number(activities);
   if (mode === 'coverage_cycle') {
     payload.cycle_start_month = document.getElementById('gen-cycle-start').value;
     payload.cycle_duration_months = Number(document.getElementById('gen-months-input')?.value || document.getElementById('gen-cycle-months').value || 1);
@@ -565,7 +567,7 @@ document.getElementById('gen-run').addEventListener('click', async () => {
       result,
       kind,
       done.is_draft
-        ? `A draft was generated: ${done.months} month(s), ${done.rows} date row(s), ${done.visits} visit(s).`
+        ? `A draft was generated: ${done.months} month(s), ${done.rows} date row(s), ${done.visits} visit(s), ${done.activities || 0} recorded activit${(done.activities || 0) === 1 ? 'y' : 'ies'}.`
         : `No draft was produced: the allocator reported ${done.status.replace('_', ' ')} for at least one month. The attempt is stored with its evidence.`,
       done.missing_content,
     );

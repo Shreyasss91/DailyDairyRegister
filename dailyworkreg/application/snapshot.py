@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from ..domain.activities import ActivitySpec
 from ..domain.cycle import CoverageCycle, DtcClass, DtcWeights, MonthKey
 from ..domain.validator import (
     Asset,
@@ -28,13 +29,22 @@ from .draft_generation import (
     CalendarDayKind,
     DayEntry,
     DayEntryKind,
+    DayEntryProvenance,
     DraftMode,
     DraftRequest,
 )
 
 #: Bumped when the payload below changes shape. A reader refuses a version it does
 #: not know rather than half-reading it.
-REQUEST_SNAPSHOT_SCHEMA = 1
+#:
+#: Schema 2 adds the activity catalogue the generator places and the count of
+#: activities a day records, so a stored draft can be re-derived exactly. A schema 1
+#: snapshot is still read: it carries no catalogue, so it reproduces the visits-only
+#: draft it was generated as, which is what it recorded.
+REQUEST_SNAPSHOT_SCHEMA = 2
+
+#: Versions this reader understands.
+REQUEST_SNAPSHOT_READABLE = (1, 2)
 
 C_SNAPSHOT_VERSION_UNSUPPORTED = "request_snapshot_version_unsupported"
 C_SNAPSHOT_MALFORMED = "request_snapshot_malformed"
@@ -70,6 +80,20 @@ def _limits(limits: AssetLimits) -> dict[str, Any]:
 
 def _visit(visit: Visit) -> dict[str, Any]:
     return {"asset_id": visit.asset_id, "visit_date": _date(visit.visit_date)}
+
+
+def _activity(item: ActivitySpec) -> dict[str, Any]:
+    return {
+        "activity_id": item.activity_id,
+        "category": item.category,
+        "title_en": item.title_en,
+        "title_kn": item.title_kn,
+        "weight": item.weight,
+        "monthly_min": item.monthly_min,
+        "monthly_max": item.monthly_max,
+        "repeat_gap_days": item.repeat_gap_days,
+        "weekday_mask": item.weekday_mask,
+    }
 
 
 def encode_request(request: DraftRequest) -> dict[str, Any]:
@@ -123,9 +147,16 @@ def encode_request(request: DraftRequest) -> dict[str, Any]:
                 "kind": e.kind.value,
                 "title_en": e.title_en,
                 "title_kn": e.title_kn,
+                "provenance": (
+                    e.provenance.value
+                    if isinstance(e.provenance, DayEntryProvenance)
+                    else str(e.provenance)
+                ),
             }
             for e in request.entries
         ],
+        "activities": [_activity(item) for item in request.activities],
+        "activities_per_day": request.activities_per_day,
         "cycle": (
             None
             if request.cycle is None
@@ -179,12 +210,13 @@ def decode_request(payload: dict[str, Any]) -> DraftRequest:
     """
 
     version = payload.get("schema")
-    if version != REQUEST_SNAPSHOT_SCHEMA:
+    if version not in REQUEST_SNAPSHOT_READABLE:
         raise SnapshotError(
             C_SNAPSHOT_VERSION_UNSUPPORTED,
             (
                 f"this generation was recorded in snapshot schema {version!r}, and "
-                f"this version reads schema {REQUEST_SNAPSHOT_SCHEMA}"
+                "this version reads schema "
+                + ", ".join(str(item) for item in REQUEST_SNAPSHOT_READABLE)
             ),
         )
     try:
@@ -261,9 +293,30 @@ def decode_request(payload: dict[str, Any]) -> DraftRequest:
                     kind=DayEntryKind(item["kind"]),
                     title_en=item["title_en"],
                     title_kn=item["title_kn"],
+                    # Schema 1 did not record provenance, and every entry it stored
+                    # came from the calendar; that is what it meant, so that is what
+                    # it reads back as.
+                    provenance=DayEntryProvenance(
+                        item.get("provenance", DayEntryProvenance.CALENDAR.value)
+                    ),
                 )
                 for item in payload["entries"]
             ),
+            activities=tuple(
+                ActivitySpec(
+                    activity_id=item["activity_id"],
+                    category=item["category"],
+                    title_en=item["title_en"],
+                    title_kn=item["title_kn"],
+                    weight=float(item["weight"]),
+                    monthly_min=int(item["monthly_min"]),
+                    monthly_max=int(item["monthly_max"]),
+                    repeat_gap_days=int(item["repeat_gap_days"]),
+                    weekday_mask=item["weekday_mask"],
+                )
+                for item in payload.get("activities") or ()
+            ),
+            activities_per_day=int(payload.get("activities_per_day") or 0),
             cycle=cycle,
             weights=(
                 None

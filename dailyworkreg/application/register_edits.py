@@ -106,9 +106,14 @@ def save_revision(
     for row in draft.rows:
         for entry in row.entries:
             provenance = entry.provenance
-            if row.day.isoformat() in locks and provenance == DayEntryProvenance.CALENDAR:
+            if row.day.isoformat() in locks and provenance in (
+                DayEntryProvenance.CALENDAR,
+                DayEntryProvenance.GENERATED,
+            ):
                 # On a locked date the entry is preserved rather than re-derived, so it
-                # is stored as such and a later regeneration leaves it alone.
+                # is stored as such and a later regeneration leaves it alone. A place a
+                # generated activity holds on a locked date is preserved for the same
+                # reason: the date was locked, not the sentence.
                 provenance = DayEntryProvenance.LOCKED
             entries.append(
                 revision_state.EntryRow(

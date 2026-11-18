@@ -15,6 +15,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import date
 
+from ..domain.activities import ActivitySpec
 from ..domain.cycle import CoverageCycle, DtcClass, DtcWeights, MonthKey
 from ..domain.validator import (
     Asset,
@@ -36,6 +37,12 @@ from .readiness import Readiness, assess_readiness
 C_MONTHS_NOT_SELECTED = "generation_months_not_selected"
 C_ROSTER_EMPTY = "generation_roster_empty"
 C_LIMITS_INCONSISTENT = "generation_limits_inconsistent"
+C_ACTIVITIES_PER_DAY_INVALID = "activities_per_day_invalid"
+
+#: What the operator's own form starts with: the office asked for at least three
+#: activities a working day. It is a form default rather than a silent platform rule,
+#: because a register is a record of work, not a template applied behind a request.
+DEFAULT_ACTIVITIES_PER_DAY = 3
 
 
 class GenerationInputError(ValueError):
@@ -62,6 +69,11 @@ class GenerationSpec:
     cycle_start_month: MonthKey | None = None
     cycle_duration_months: int = 1
     cycle_visits_per_asset: int = 1
+    #: Regular activities recorded on every eligible working day. ``None`` means "the
+    #: platform default", which is :data:`DEFAULT_ACTIVITIES_PER_DAY` when a catalogue
+    #: is stored and ``0`` when it is not - a range must still generate field visits
+    #: on an office that has not imported activities yet.
+    activities_per_day: int | None = None
     #: Capacity-fallback mode only.
     dtc_target: int | None = None
     area_required: dict[MonthKey, dict[str, int]] = field(default_factory=dict)
@@ -215,7 +227,56 @@ def _config(connection: sqlite3.Connection, roster: tuple[Asset, ...]) -> Feasib
     return FeasibilityConfig(asset_limits=limits)
 
 
-def prepare_generation(connection: sqlite3.Connection, spec: GenerationSpec) -> PreparedGeneration:
+def _activity_catalogue(connection: sqlite3.Connection) -> tuple[ActivitySpec, ...]:
+    """The active activities, in the catalogue's own id order.
+
+    A deactivated activity is left out rather than placed: removing it from the
+    catalogue is how the office stops recording it, and a generator that ignored the
+    flag would keep putting retired work in the register.
+    """
+
+    return tuple(
+        ActivitySpec(
+            activity_id=row.activity_id,
+            category=row.category,
+            title_en=row.description_en,
+            title_kn=row.description_kn or None,
+            weight=row.weight,
+            monthly_min=row.monthly_min,
+            monthly_max=row.monthly_max,
+            repeat_gap_days=row.repeat_gap_days,
+            weekday_mask=row.weekday_mask,
+        )
+        for row in masters.list_activities(connection)
+        if row.active
+    )
+
+
+def _activities_per_day(requested: int | None) -> int:
+    """The count every eligible day carries, or a refusal the operator can act on.
+
+    ``None`` means the caller did not ask for activities, and it stays that: a request
+    that says nothing about activities generates a visits-only draft, exactly as it did
+    before the catalogue existed. The daily count is a decision, so the operator's own
+    form supplies it - and its box starts at :data:`DEFAULT_ACTIVITIES_PER_DAY`.
+    """
+
+    if requested is None:
+        return 0
+    if requested < 0:
+        raise GenerationInputError(
+            C_ACTIVITIES_PER_DAY_INVALID,
+            (
+                "the activities per day cannot be negative; use 0 to leave the days "
+                "to field visits only"
+            ),
+        )
+    return requested
+
+
+def prepare_generation(
+    connection: sqlite3.Connection, spec: GenerationSpec
+) -> PreparedGeneration:
     """Assemble the request, the readiness report and the calendar projection."""
 
     if spec.end < spec.start:
@@ -243,6 +304,9 @@ def prepare_generation(connection: sqlite3.Connection, spec: GenerationSpec) -> 
     projection = project_calendar(connection, spec.start, spec.end)
     entries = projection.entries
 
+    catalogue = _activity_catalogue(connection)
+    per_day = _activities_per_day(spec.activities_per_day)
+
     cycle: CoverageCycle | None = None
     if spec.mode is DraftMode.COVERAGE_CYCLE:
         cycle = CoverageCycle(
@@ -263,6 +327,8 @@ def prepare_generation(connection: sqlite3.Connection, spec: GenerationSpec) -> 
         prior_history=spec.prior_history,
         fixed_by_month=dict(spec.fixed_by_month),
         entries=entries,
+        activities=catalogue,
+        activities_per_day=per_day,
         cycle=cycle,
         weights=weights,
         rotation_offset=spec.rotation_offset,

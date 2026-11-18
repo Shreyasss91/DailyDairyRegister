@@ -26,11 +26,12 @@ rule is how two answers to one question appear:
     declared by the owner.
 
 **Scope of the output.** This produces an allocator-backed draft of the *field
-visit* content only. The regular activity catalogue, the official Karnataka
-holiday baseline and the source DTC roster are separate dependencies that do not
-exist in this repository yet. A month whose visits allocated successfully is
-therefore allocation-complete, not a complete operational diary, and
-:attr:`DraftRegister.missing_content` names the dependencies that are still absent.
+visit* content plus the regular activities the catalogue places on working days (see
+:func:`dailyworkreg.domain.activities.allocate_activities`). The official Karnataka
+holiday baseline and the source DTC roster are separate dependencies; where one is
+absent, :attr:`DraftRegister.missing_content` names it. A month whose visits
+allocated successfully is therefore allocation-complete, not a complete
+operational diary, and the attribute says which dependencies are still missing.
 """
 
 from __future__ import annotations
@@ -41,7 +42,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from enum import Enum
+from typing import Any
 
+from ..domain.activities import (
+    ActivityInfeasible,
+    ActivitySpec,
+    allocate_activities,
+)
 from ..domain.allocator import ALLOCATOR_VERSION
 from ..domain.cycle import CoverageCycle, CycleResolution, DtcWeights, MonthKey
 from ..domain.targeting import (
@@ -89,6 +96,8 @@ C_DISPLAY_METADATA_UNKNOWN_ASSET = "asset_display_metadata_unknown_asset"
 C_DISPLAY_METADATA_DUPLICATE = "asset_display_metadata_duplicate"
 #: A supplied day entry falls outside the selected range.
 C_ENTRY_OUTSIDE_RANGE = "day_entry_outside_range"
+#: The activity catalogue cannot place the requested number of activities per day.
+C_ACTIVITY_ALLOCATION_INFEASIBLE = "activity_allocation_infeasible"
 #: Cycle mode was requested without a declared coverage cycle.
 C_CYCLE_REQUIRED = "coverage_cycle_required"
 #: Fallback mode was requested together with a coverage cycle.
@@ -152,6 +161,10 @@ class DayEntryProvenance(str, Enum):
     CALENDAR = "calendar"
     MANUAL = "manual"
     LOCKED = "locked"
+    #: A placement the generator itself made from the activity catalogue. It is
+    #: re-derived on every generation, unlike a manual entry, and it is never the
+    #: reason a person's correction is dropped.
+    GENERATED = "generated"
 
 
 class DayEntryKind(str, Enum):
@@ -311,6 +324,11 @@ class DraftRequest:
         prior_history: Visits before the range, constraining the revisit gap.
         fixed_by_month: Committed visits, keyed by the month containing them.
         entries: Non-visit day entries (activities, events, safety meetings).
+        activities: The approved activity catalogue the generator places on working
+            days, in the catalogue's own order. Empty is allowed: a request without
+            a catalogue generates visits only.
+        activities_per_day: How many distinct activities every eligible working day
+            records. ``0`` leaves the days to visits alone.
         cycle: Declared coverage cycle, cycle mode only.
         weights: DTC scheduling weights, influence ordering only.
         rotation_offset: Rotation state carried between cycles.
@@ -331,6 +349,8 @@ class DraftRequest:
     prior_history: tuple[Visit, ...] = ()
     fixed_by_month: Mapping[MonthKey, tuple[Visit, ...]] = field(default_factory=dict)
     entries: tuple[DayEntry, ...] = ()
+    activities: tuple[ActivitySpec, ...] = ()
+    activities_per_day: int = 0
     cycle: CoverageCycle | None = None
     weights: DtcWeights | None = None
     rotation_offset: int = 0
@@ -1023,6 +1043,67 @@ def _build_rows(
     return tuple(rows)
 
 
+def _activity_entries(
+    request: DraftRequest, days: Mapping[date, Any]
+) -> tuple[DayEntry, ...]:
+    """The regular activities the catalogue places on this range's working days.
+
+    The placement rule lives in :mod:`dailyworkreg.domain.activities`, which is free
+    of I/O and of this module's projection concerns. This function only turns the
+    placements into day entries, and refuses - rather than quietly under-filling a
+    day - when the catalogue cannot meet the count the operator asked for.
+
+    A working day is the caller's own decision, already projected into the calendar:
+    a Sunday, a General Holiday or a leave day carries no activity, because the office
+    was not working. An entry an operator or the calendar already placed with the same
+    text on the same day is not duplicated.
+    """
+
+    per_day = request.activities_per_day
+    if per_day <= 0:
+        return ()
+
+    eligible = [day for day in sorted(days) if days[day].is_working_day]
+    try:
+        placements = allocate_activities(
+            days=eligible,
+            activities=request.activities,
+            per_day=per_day,
+            seed=request.seed,
+        )
+    except ActivityInfeasible as error:
+        raise InputError(
+            C_ACTIVITY_ALLOCATION_INFEASIBLE,
+            (
+                f"{per_day} activities a day cannot be placed: {error.detail}. "
+                "Lower the activities-per-day count, widen the catalogue, or extend "
+                "the selected range"
+            ),
+        ) from error
+
+    already: set[tuple[date, str]] = {
+        (entry.day, entry.title_en.strip().casefold())
+        for entry in request.entries
+        if entry.kind is DayEntryKind.ACTIVITY
+    }
+    entries: list[DayEntry] = []
+    for placement in placements:
+        key = (placement.day, placement.activity.title_en.strip().casefold())
+        if key in already:
+            continue
+        entries.append(
+            DayEntry(
+                entry_id=f"ACT-{placement.day.isoformat()}-{placement.activity.activity_id}",
+                day=placement.day,
+                kind=DayEntryKind.ACTIVITY,
+                title_en=placement.activity.title_en,
+                title_kn=placement.activity.title_kn,
+                provenance=DayEntryProvenance.GENERATED,
+            )
+        )
+    return tuple(entries)
+
+
 def generate_draft(request: DraftRequest) -> DraftRegister:
     """Generate an allocator-backed draft register for the selected months.
 
@@ -1096,6 +1177,8 @@ def generate_draft(request: DraftRequest) -> DraftRegister:
     entries_by_date: dict[date, list[DayEntry]] = {}
     for entry in request.entries:
         entries_by_date.setdefault(entry.day, []).append(entry)
+    for entry in _activity_entries(request, days):
+        entries_by_date.setdefault(entry.day, []).append(entry)
 
     rows = _build_rows(
         request,
@@ -1166,12 +1249,14 @@ def generate_draft(request: DraftRequest) -> DraftRegister:
     )
 
 
-#: Masters this repository does not yet contain, so a generated draft is an
-#: allocator-backed field-visit draft and not a complete operational diary. Naming
-#: them on every result is deliberate: a caller cannot mistake allocation success
-#: for a finished register if the result says what is still absent.
+#: Masters the platform still expects but does not itself supply, so a generated
+#: draft is an allocator-backed register and not a complete operational diary.
+#: Naming them on every result is deliberate: a caller cannot mistake allocation
+#: success for a finished register if the result says what is still absent. The
+#: activity catalogue is no longer listed here because it is imported from the
+#: office's own approved sheet and the generator now places it.
 MISSING_CONTENT: tuple[str, ...] = (
-    "activity catalogue (regular work activities and Monday safety meetings)",
+    "Monday safety-meeting schedule and other dated calendar events",
     "official Karnataka General Holiday baseline for 2025 and 2026",
     "source 113-SCD roster and asset master data",
 )

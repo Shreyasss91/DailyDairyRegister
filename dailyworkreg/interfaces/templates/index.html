@@ -142,7 +142,9 @@
       <h2>Generate a draft register</h2>
       <p class="muted">
         The result is an allocator-backed draft. It is not verified work and it is not a
-        reviewed register.
+        reviewed register. Activities per working day records that many entries from the
+        approved activity catalogue on every working day; set it to 0 to leave the days
+        to field visits only.
       </p>
       <div class="form">
         <label>From <input type="date" id="gen-start" /></label>
@@ -157,6 +159,9 @@
         <label>Cycle start month <input type="month" id="gen-cycle-start" /></label>
         <label>Cycle months <input type="number" id="gen-cycle-months" value="1" min="1" /></label>
         <label>Visits per asset <input type="number" id="gen-visits" value="1" min="1" /></label>
+        <label>Activities per working day
+          <input type="number" id="gen-activities" value="3" min="0" step="1" />
+        </label>
         <label>DTC target (fallback) <input type="number" id="gen-dtc-target" min="0" /></label>
         <button id="gen-run" class="button button-primary">Generate</button>
       </div>
@@ -236,6 +241,6 @@
 
   </main>
 
-  <script src="/static/app.js?v=review-bulk-ui-4"></script>
+  <script src="/static/app.js?v=activities-1"></script>
 </body>
 </html>

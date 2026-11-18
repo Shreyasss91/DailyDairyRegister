@@ -973,7 +973,11 @@ def test_a_draft_never_claims_to_be_a_complete_operational_diary():
     draft = generate_draft(cycle_request())
     assert draft.missing_content
     assert draft.is_operational_diary is False
-    assert any("activity catalogue" in item for item in draft.missing_content)
+    assert any("roster and asset master" in item for item in draft.missing_content)
+    # The activity catalogue is no longer absent: the office imports it and the
+    # generator places it, so a draft that still named it would be telling the operator
+    # to import something they already imported.
+    assert not any("activity catalogue" in item for item in draft.missing_content)
 
 # --- restricted holidays are not a calendar concept -----------------------
 
