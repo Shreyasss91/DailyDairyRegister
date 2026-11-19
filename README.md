@@ -48,3 +48,21 @@ The first launch creates the default SQLite database when needed and applies pen
 `playwright` is a runtime dependency because the application writes its own PDF files. The Python package is installed with everything else; the Chromium it drives is a separate download that stays outside the virtual environment and outside this repository, and it is installed once per computer with `python -m playwright install chromium`. Skip that step and every other feature still works: the PDF downloads refuse with a sentence naming the step, and the printed page remains available in the browser.
 
 The declared version ranges are compatibility constraints, not an exact dependency lock. See the local development guide for installation and update instructions.
+
+## Preparing the printed registers
+
+An issued month downloads as a PDF that ends with an issued-version
+identification page. To print a run of months as one document, put those PDFs in
+one folder and point the print command at that folder. It drops each file's last
+page and joins the rest in file-name order:
+
+```powershell
+.\.venv\Scripts\dailyworkreg-print.exe "C:\path\to\print\before"
+```
+
+The folder is the only input. The document is written to an `after` folder beside
+it, named after the months it holds - `daily-dairy-register-2025-04-to-2026-10.pdf`
+for example - and the folder that was read is left exactly as it was. A PDF of a
+single page is named rather than merged, because dropping its last page would
+leave nothing of that month. `python -m dailyworkreg.interfaces.print_pdfs <folder>`
+runs the same command without the launcher.
