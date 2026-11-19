@@ -326,7 +326,8 @@ def test_a_visit_reads_as_work_done_at_the_installation(db):
     for day in visited:
         for visit in day.visits:
             assert visit.asset_type in {"DTC", "AREA", "FEEDER"}
-            assert f"[{visit.asset_id}]" in day.activity_text
+            # The identifier is the record's bookkeeping, not what the office files.
+            assert f"[{visit.asset_id}]" not in day.activity_text
     dtc_days = [
         day for day in visited if any(visit.asset_type == "DTC" for visit in day.visits)
     ]
@@ -350,7 +351,8 @@ def test_the_sentence_depends_on_the_kind_of_asset(asset_type, verb):
     text = export._visit_item(visit, LANGUAGE_ENGLISH)
 
     assert text.startswith(verb)
-    assert "Some asset [X-1]" in text
+    assert "Some asset" in text
+    assert "[X-1]" not in text
 
 
 def test_a_record_that_does_not_say_what_it_visited_reads_neutrally():
@@ -363,7 +365,7 @@ def test_a_record_that_does_not_say_what_it_visited_reads_neutrally():
     )
     text = export._visit_item(visit, LANGUAGE_ENGLISH)
 
-    assert text.startswith("Visited Some asset [X-1]")
+    assert text.startswith("Visited Some asset ")
     assert "Inspected" not in text and "Patrolled" not in text
 
 
@@ -399,7 +401,8 @@ def test_the_workbook_carries_the_narrative_and_the_classified_reason(db):
     for day in document.days:
         if day.visits:
             assert cells[day.day] == day.activity_text
-            assert "[SCD-" in cells[day.day] or "[A-01]" in cells[day.day] or "[F-01]" in cells[day.day]
+            # A register is filed with names and sentences, not with row identifiers.
+            assert "[" not in cells[day.day]
 
 
 def test_the_printed_page_carries_the_same_cells(db, database: Path):

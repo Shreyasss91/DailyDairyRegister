@@ -1235,13 +1235,19 @@ value cannot be spelled one way when it is stored and another when it is compare
   once.
 - **A field visit reads as work done.** An asset name alone says where somebody went, not
   what the register is a record of, so a visit is written as a sentence naming the checks
-  for the kind of asset the revision's own roster recorded: `Inspected <name> [SCD-44] for
+  for the kind of asset the revision's own roster recorded: `Inspected <name> for
   transformer loading, oil level and earthing, and checked the consumer supply` for a DTC,
   a patrolling sentence for a feeder, an area sentence for an area. The asset kinds are
   frozen with the month (`asset_types`), a record that does not say which kind it visited
   reads a neutral sentence instead of a guessed verb, and the narrative is presentation
   only: the visit, its date and its asset remain the record. The narrative sentence is
   English in every language; the language setting decides how the asset is named.
+- **The asset identifier is not printed.** `[SCD-44]`, `[A-15]` and `[F-01]` are how the
+  record names the installation it visited, so it can find it again and prove which one it
+  meant; they are not something the office writes in a register it files. A visit prints
+  the name and the sentence and nothing in brackets, in all three languages. The
+  `DocumentVisit` still carries `asset_id` and the stored record still holds it, so the
+  association remains verifiable off the document; only the published cell drops it.
 - **A month closed before this change reads differently.** Its record carries no language
   and no asset kinds, so it is read as the bilingual register it was and its visits read
   the neutral sentence. Reissuing it in another wording is a correction revision

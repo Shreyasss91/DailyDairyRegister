@@ -97,23 +97,24 @@ REASON_KIND_LABELS = wording.REASON_KIND_LABELS
 #: register is a record of. This is presentation - the visit, its date and its asset are the
 #: record - and an asset kind the templates do not know reads the neutral sentence rather
 #: than no sentence.
+#: How a visit reads, by the kind of asset it named. The sentence names the work and the
+#: installation, and deliberately not the asset identifier: the identifier is how the
+#: record finds the asset again, not something the office writes in a register it files.
 VISIT_PHRASES = {
     "DTC": (
-        "Inspected {name} [{asset_id}] for transformer loading, oil level and earthing, "
+        "Inspected {name} for transformer loading, oil level and earthing, "
         "and checked the consumer supply"
     ),
     "FEEDER": (
-        "Patrolled {name} [{asset_id}] feeder for loading, tripping history and "
-        "tree clearance along the route"
+        "Patrolled {name} feeder for loading, tripping history and tree clearance along the route"
     ),
     "AREA": (
-        "Inspected {name} [{asset_id}] area for DTC loading, street-light complaints and "
-        "service connections"
+        "Inspected {name} area for DTC loading, street-light complaints and service connections"
     ),
 }
 
 #: The fallback when a record does not say which kind of asset a visit named.
-GENERIC_VISIT_PHRASE = "Visited {name} [{asset_id}] and checked the supply and complaints there"
+GENERIC_VISIT_PHRASE = "Visited {name} and checked the supply and complaints there"
 
 
 @dataclass(frozen=True)
@@ -448,11 +449,15 @@ def _visit_item(visit: DocumentVisit, language: str = DEFAULT_ENTRY_LANGUAGE) ->
     named in the language the register is being written in. An asset with no stored Kannada
     name keeps its English one rather than printing a blank, and a record that does not say
     which kind of asset it visited reads the neutral sentence instead of a guessed verb.
+
+    The asset identifier is not printed. It is the record's own way of naming the asset - a
+    row's bookkeeping, which the issued document already identifies by fingerprint - and an
+    operator filing a register does not write `[A-15]` after a street's name.
     """
 
     name = _in_language(visit.name_en, visit.name_kn, language).strip()
     template = VISIT_PHRASES.get(visit.asset_type or "", GENERIC_VISIT_PHRASE)
-    return template.format(name=name, asset_id=visit.asset_id).strip()
+    return template.format(name=name).strip()
 
 
 def _entry_item(entry: DocumentEntry, language: str = DEFAULT_ENTRY_LANGUAGE) -> str:

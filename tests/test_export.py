@@ -221,23 +221,21 @@ REASON_LABELS = {
     "other_non_working": "Non-working day",
 }
 
-#: What a visit says, by the kind of asset it named.
+#: What a visit says, by the kind of asset it named. The identifier is not published.
 VISIT_PHRASES = {
     "DTC": (
-        "Inspected {name} [{asset_id}] for transformer loading, oil level and earthing, "
+        "Inspected {name} for transformer loading, oil level and earthing, "
         "and checked the consumer supply"
     ),
     "FEEDER": (
-        "Patrolled {name} [{asset_id}] feeder for loading, tripping history and "
-        "tree clearance along the route"
+        "Patrolled {name} feeder for loading, tripping history and tree clearance along the route"
     ),
     "AREA": (
-        "Inspected {name} [{asset_id}] area for DTC loading, street-light complaints and "
-        "service connections"
+        "Inspected {name} area for DTC loading, street-light complaints and service connections"
     ),
 }
 
-GENERIC_VISIT_PHRASE = "Visited {name} [{asset_id}] and checked the supply and complaints there"
+GENERIC_VISIT_PHRASE = "Visited {name} and checked the supply and complaints there"
 
 
 def in_language(english: str, kannada: str | None, language: str) -> str:
@@ -268,7 +266,7 @@ def expected_activity(content: dict, row: dict) -> str:
     for visit in row["visits"]:
         name = in_language(visit[2], visit[3] if len(visit) > 3 else "", language)
         template = VISIT_PHRASES.get(asset_types.get(visit[0], ""), GENERIC_VISIT_PHRASE)
-        items.append(template.format(name=name, asset_id=visit[0]))
+        items.append(template.format(name=name))
     for entry in row["entries"]:
         items.append(in_language(entry[2], entry[3] if len(entry) > 3 else "", language))
     if language == "en":
@@ -470,7 +468,9 @@ def test_every_stored_value_is_what_the_register_row_shows(client, db):
         assert rows[day]["activity"] == expected_activity(record["content"], stored_row)
 
 
-def test_every_stored_visit_reaches_the_cell_with_its_identifier(client, db):
+def test_every_stored_visit_reaches_the_cell_with_its_name_and_not_its_identifier(
+    client, db
+):
     _, record = issued(db, client)
     stored_rows = record["content"]["rows"]
     visited = {day: row for day, row in stored_rows.items() if row["visits"]}
@@ -482,10 +482,11 @@ def test_every_stored_visit_reaches_the_cell_with_its_identifier(client, db):
     for day, stored_row in visited.items():
         cell = rows[day]["activity"]
         for visit in stored_row["visits"]:
-            # The name and the asset id both survive: a visit without its identifier is
-            # not traceable to an installation.
+            # The name reaches the cell; the identifier does not. The identifier is how
+            # the record finds the asset again, not something the office writes in the
+            # register it files, so a visit prints as a sentence naming a place.
             assert visit[2] in cell
-            assert f"[{visit[0]}]" in cell
+            assert f"[{visit[0]}]" not in cell
 
 
 def test_several_activities_on_one_date_share_one_row_and_one_cell(client, db):
