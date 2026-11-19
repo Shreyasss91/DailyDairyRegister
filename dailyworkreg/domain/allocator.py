@@ -233,6 +233,17 @@ def _drop_date(days: list[date], day: date) -> None:
         del days[position]
 
 
+def _before_commission(commissioned_on: date | None, day: date) -> bool:
+    """Whether ``day`` falls before the asset may be visited at all.
+
+    An asset with no recorded commissioning date is unrestricted. An asset with one
+    is visitable only strictly after it: the day it was commissioned is not one of
+    its visit dates.
+    """
+
+    return commissioned_on is not None and day <= commissioned_on
+
+
 def _weight_of(request: AllocationRequest, asset_id: str) -> float:
     """Scheduling weight for ``asset_id``, or 0.0 when none was supplied.
 
@@ -322,6 +333,12 @@ def _attempt_placement(
     kind_of: dict[str, AssetType] = {
         asset.asset_id: asset.asset_type for asset in request.roster
     }
+    # A date before an asset was commissioned is not a date that asset can be
+    # visited on. It is master data, so it never changes during a run and the
+    # filter is applied once, when the asset's option set is first computed.
+    commissioned: dict[str, date | None] = {
+        asset.asset_id: asset.commissioned_on for asset in request.roster
+    }
 
     # Viable dates by asset, computed on first use and then kept exact. Only the
     # three things that can change membership are acted on below: the placed asset's
@@ -354,6 +371,7 @@ def _attempt_placement(
                     if kind_dates.get(day, 0) < kind_cap
                     and (combined_cap is None or per_date.get(day, 0) < combined_cap)
                     and not _gap_violated(blocked, day, gap)
+                    and not _before_commission(commissioned.get(asset_id), day)
                 ]
                 viable_cache[asset_id] = viable
             if not viable:
@@ -658,7 +676,6 @@ def describe_pressure(request: AllocationRequest) -> tuple[Evidence, ...]:
     owed_by_kind = {kind: 0 for kind in AssetType}
     for asset_id, count in obligations.per_asset.items():
         owed_by_kind[roster[asset_id].asset_type] += count
-    combined_capacity = len(eligible) * request.config.total_capacity_per_day
 
     notes: list[Evidence] = []
     for kind in AssetType:

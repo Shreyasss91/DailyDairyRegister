@@ -70,6 +70,9 @@ C_REVISIT_GAP = "revisit_gap_violated"
 C_ASSET_MINIMUM = "asset_minimum_not_met"
 C_CYCLE_OBLIGATION = "cycle_obligation_not_met"
 C_OUTSIDE_PERIOD = "visit_outside_period"
+C_VISIT_BEFORE_COMMISSION = "visit_before_commissioning_date"
+C_FIXED_VISIT_BEFORE_COMMISSION = "committed_visit_before_commissioning_date"
+C_ASSET_NOT_YET_COMMISSIONED = "asset_not_yet_commissioned"
 C_PERIOD_NOT_WORKING = "period_date_not_working"
 C_MIN_EXCEEDS_MAX = "configured_minimum_exceeds_maximum"
 C_AGG_AREA_CAPACITY = "aggregate_area_capacity_exceeded"
@@ -148,10 +151,28 @@ class Asset:
     asset_id: str
     asset_type: AssetType
     active: bool = True
+    #: The date the asset was commissioned, from the master file. ``None`` means the
+    #: office recorded no date, which is treated as "no restriction" rather than as
+    #: "not yet commissioned": refusing every asset whose date is unknown would make
+    #: an untouched master unusable, and inventing a date would fabricate master data.
+    #:
+    #: An asset is available on a date *later than* this one. The commissioning day
+    #: itself is not a visit date, so a DTC energised on 15-09-2026 is first visitable
+    #: on 16-09-2026.
+    commissioned_on: date | None = None
 
     def __post_init__(self) -> None:
         if not self.asset_id:
             raise ValueError("asset_id must be a non-empty string")
+        if self.commissioned_on is not None and not isinstance(
+            self.commissioned_on, date
+        ):
+            raise ValueError("commissioned_on must be a date or None")
+
+    def is_available_on(self, day: date) -> bool:
+        """Whether this asset exists and may be visited on ``day``."""
+
+        return self.commissioned_on is None or day > self.commissioned_on
 
 
 @dataclass(frozen=True)
@@ -1125,6 +1146,26 @@ def _fixed_visit_violations(
                     offending_dates=(visit.visit_date,),
                 )
             )
+        # A date before the asset existed cannot carry a commitment to it either.
+        # Dropping the commitment quietly would hide work recorded against an asset
+        # that had not been commissioned, so it is reported like any other
+        # impossible commitment.
+        commissioned = asset.commissioned_on
+        if commissioned is not None and not asset.is_available_on(visit.visit_date):
+            violations.append(
+                Violation(
+                    constraint=C_FIXED_VISIT_BEFORE_COMMISSION,
+                    message=(
+                        f"committed visit to {visit.asset_id} on "
+                        f"{visit.visit_date.isoformat()} is before its commissioning "
+                        f"date of {commissioned.isoformat()}"
+                    ),
+                    asset_id=visit.asset_id,
+                    asset_type=asset.asset_type,
+                    visit_date=visit.visit_date,
+                    offending_dates=(visit.visit_date,),
+                )
+            )
     return violations
 
 
@@ -1215,6 +1256,22 @@ def _hard_constraint_violations(
                     asset_id=visit.asset_id,
                     asset_type=asset.asset_type,
                     visit_date=visit.visit_date,
+                )
+            )
+        commissioned = asset.commissioned_on
+        if commissioned is not None and not asset.is_available_on(visit.visit_date):
+            violations.append(
+                Violation(
+                    constraint=C_VISIT_BEFORE_COMMISSION,
+                    message=(
+                        f"{visit.asset_id} was commissioned on "
+                        f"{commissioned.isoformat()}, so it cannot be visited on "
+                        f"{visit.visit_date.isoformat()}"
+                    ),
+                    asset_id=visit.asset_id,
+                    asset_type=asset.asset_type,
+                    visit_date=visit.visit_date,
+                    offending_dates=(visit.visit_date,),
                 )
             )
 
@@ -1670,6 +1727,44 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
 
     evidence: list[Evidence] = []
 
+    # An asset commissioned after the dates it owes cannot carry them. This is
+    # proved before the capacity conditions, because the operator has to move the
+    # range or the cycle, not raise a ceiling: no ceiling makes a date exist.
+    for asset_id in sorted(required):
+        asset = roster[asset_id]
+        if asset.commissioned_on is None:
+            continue
+        usable = tuple(day for day in eligible if asset.is_available_on(day))
+        if required[asset_id] <= len(usable):
+            continue
+        if usable:
+            detail = (
+                f"{asset_id} was commissioned on "
+                f"{asset.commissioned_on.isoformat()}, leaving {len(usable)} "
+                f"eligible date(s) in the month, which cannot hold the "
+                f"{required[asset_id]} visit(s) it owes"
+            )
+        else:
+            detail = (
+                f"{asset_id} was commissioned on "
+                f"{asset.commissioned_on.isoformat()}, after the last eligible "
+                "date of the month, so it cannot be visited in it at all"
+            )
+        evidence.append(
+            Evidence(
+                constraint=C_ASSET_NOT_YET_COMMISSIONED,
+                detail=detail,
+                asset_id=asset_id,
+                asset_type=asset.asset_type,
+                limit=len(usable),
+                actual=required[asset_id],
+                contributing_assets=attribute_assets((asset_id,), roster),
+            )
+        )
+        return FeasibilityResult(
+            status=FeasibilityStatus.INFEASIBLE, evidence=tuple(evidence)
+        )
+
     # An obligation above the effective per-asset maximum cannot be met. The
     # maximum is an upper bound, so this is a configuration contradiction, not
     # a demand that the maximum be reached. The comparison uses the total the
@@ -1820,8 +1915,13 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
             v.visit_date
             for v in blockers_by_asset.get(asset_id, ())
         ]
+        # A date before the asset existed is not a candidate date for it, exactly as
+        # the allocator refuses to offer one.
+        asset_eligible = [
+            day for day in eligible if roster[asset_id].is_available_on(day)
+        ]
         candidates = _candidate_dates(
-            eligible, blocker_dates, limits.revisit_gap_days
+            asset_eligible, blocker_dates, limits.revisit_gap_days
         )
         asset_placements = _placements_for_asset(
             candidates, required[asset_id], limits.revisit_gap_days, node_budget

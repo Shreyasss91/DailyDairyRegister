@@ -101,6 +101,22 @@ DTC_SPEC = DatasetSpec(
         FieldSpec("mdm_code", ("mdm code", "mdmcode", "mdm"), False),
         FieldSpec("kva", ("kva", "capacity", "dtc kva"), False),
         FieldSpec("station", ("station", "station name", "location", "subdivision"), False),
+        # The date the DTC was commissioned. The office's own heading is spelled
+        # "Date of commision", so that spelling is an alias in its own right rather
+        # than a correction: the column is read as supplied.
+        FieldSpec(
+            "commissioned_on",
+            (
+                "date of commision",
+                "date of commissioning",
+                "date of commission",
+                "commissioned on",
+                "commissioning date",
+                "commission date",
+                "commision date",
+            ),
+            False,
+        ),
     ),
 )
 
@@ -209,10 +225,22 @@ def coerce_float(value: str | None, *, field_name: str) -> tuple[float | None, l
 _DATE_FORMATS = ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%d.%m.%Y")
 
 
-def coerce_date(value: str | None) -> tuple[date | None, list[str]]:
+def coerce_date(
+    value: str | None, *, field_name: str | None = None
+) -> tuple[date | None, list[str]]:
+    """Read a date, or say why it could not be read.
+
+    Only formats whose day, month and year cannot be confused are accepted. An
+    ambiguous value such as ``03/04/2026`` is refused rather than guessed, because a
+    wrong reading here moves a visit.
+    """
+
     text = _text(value)
     if text is None:
         return None, []
+    if _marker(value):
+        label = field_name or "the date"
+        return None, [f"{label} is a placeholder ({text}), so no date was read"]
     for pattern in _DATE_FORMATS:
         try:
             from datetime import datetime
@@ -220,6 +248,8 @@ def coerce_date(value: str | None) -> tuple[date | None, list[str]]:
             return datetime.strptime(text, pattern).date(), []
         except ValueError:
             continue
+    if field_name is not None:
+        return None, [f"{field_name} '{text}' is not a recognisable date"]
     return None, [f"'{text}' is not a recognisable date"]
 
 
@@ -304,6 +334,15 @@ def judge_dtc(row: dict[str, str], mapping: dict[str, str], row_number: int) -> 
     if _marker(get("kva")):
         messages.append("the source capacity is a placeholder and was not treated as zero")
 
+    # A DTC commissioned after a month cannot be visited in it, so the date is read
+    # here rather than left in the raw record. A blank or unreadable cell is carried
+    # as no date, which the schedule reads as "no restriction": refusing every DTC
+    # whose date is missing would make an older master unusable.
+    commissioned, commissioned_messages = coerce_date(
+        get("commissioned_on"), field_name="the commissioning date"
+    )
+    messages.extend(commissioned_messages)
+
     payload = {
         "dtc_id": dtc_id,
         "name": name,
@@ -314,6 +353,8 @@ def judge_dtc(row: dict[str, str], mapping: dict[str, str], row_number: int) -> 
         "feeder": _text(get("feeder")),
         "feeder_code": _text(get("feeder_code")),
         "mdm_code": _text(get("mdm_code")),
+        # ISO text, or None when the master recorded no readable date.
+        "commissioned_on": commissioned.isoformat() if commissioned else None,
         # The values exactly as supplied, kept with the row so acceptance can write
         # the source record without knowing this file's column headings. The
         # canonical payload above is our reading; this is the evidence.
@@ -325,6 +366,7 @@ def judge_dtc(row: dict[str, str], mapping: dict[str, str], row_number: int) -> 
             "kva": get("kva") or "",
             "station": get("station") or "",
             "source_class": get("source_class") or "",
+            "commissioned_on": get("commissioned_on") or "",
         },
     }
     severity = SEVERITY_WARNING if messages else SEVERITY_OK

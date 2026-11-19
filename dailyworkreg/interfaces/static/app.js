@@ -292,7 +292,8 @@ const masterFields = {
   dtc: [
     ['dtc_id', 'DTC id'], ['name', 'Name'], ['dtc_class', 'Class (DEPT or SELF_DTC)'],
     ['canonical_feeder_id', 'Canonical feeder'], ['kva', 'kVA'], ['station', 'Station'],
-    ['monthly_max', 'Monthly maximum'], ['revisit_gap_days', 'Revisit gap (days)'],
+    ['commissioned_on', 'Commissioned on'], ['monthly_max', 'Monthly maximum'],
+    ['revisit_gap_days', 'Revisit gap (days)'],
   ],
   area: [
     ['area_id', 'Area id'], ['name_kn', 'Name (Kannada)'], ['name_en', 'Name (English)'],

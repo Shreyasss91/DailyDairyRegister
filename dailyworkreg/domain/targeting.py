@@ -261,9 +261,14 @@ def fallback_dtc_target(
     # month does not come out of this number: the kinds no longer compete for a slot.
     dtc_capacity = len(eligible) * config.dtc_daily_cap
 
-    # A DTC with no room left under its monthly maximum cannot be a candidate.
+    # A DTC with no room left under its monthly maximum cannot be a candidate, and
+    # neither can one commissioned after the whole period: it has no usable date in
+    # it, so selecting it could only produce a month that cannot be allocated.
     eligible_dtcs = [
-        a for a in dtcs if config.limits_for(a.asset_id).monthly_max >= 1
+        a
+        for a in dtcs
+        if config.limits_for(a.asset_id).monthly_max >= 1
+        and any(a.is_available_on(day) for day in eligible)
     ]
 
     target = len(eligible_dtcs)
@@ -346,6 +351,10 @@ class MultiMonthResult:
     #: inventory, and they are what the cycle-level reconciliation was computed
     #: from.
     committed_visits: tuple[Visit, ...] = ()
+    #: Active DTCs the range could not visit at all, each with the reason in words. A
+    #: DTC commissioned after the last date of the range is reported here instead of
+    #: being counted as a transformer the register covered.
+    excluded: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def status(self) -> FeasibilityStatus:
@@ -723,6 +732,7 @@ def run_cycle(
         seed=seed,
         over_covered=over_covered,
         committed_visits=all_fixed,
+        excluded=resolution.excluded,
     )
 
 
@@ -824,7 +834,38 @@ def run_fallback(
         mode=TargetMode.CAPACITY_SUGGESTION,
         months=tuple(plans),
         seed=seed,
+        excluded=_unavailable_dtcs(roster, calendar, ordered_months),
     )
+
+
+def _unavailable_dtcs(
+    roster: Sequence[Asset],
+    calendar: Calendar,
+    months: Sequence[MonthKey],
+) -> dict[str, str]:
+    """Active DTCs with no usable date anywhere in the range, and why.
+
+    Reported rather than dropped: a suggestion that silently left a transformer out
+    would read as a register that covered it.
+    """
+
+    usable: list[date] = []
+    for month in months:
+        period = _period_for(month)
+        usable.extend(_eligible_dates(period, calendar))
+    unavailable: dict[str, str] = {}
+    for asset in roster:
+        if asset.asset_type is not AssetType.DTC or not asset.active:
+            continue
+        if any(asset.is_available_on(day) for day in usable):
+            continue
+        unavailable[asset.asset_id] = (
+            f"commissioned on {asset.commissioned_on.isoformat()}, after the last "
+            f"usable date of {months[-1].label()}"
+            if asset.commissioned_on is not None
+            else f"has no usable date in {months[-1].label()}"
+        )
+    return unavailable
 
 
 def _period_for(month: MonthKey) -> DatePeriod:

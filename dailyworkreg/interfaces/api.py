@@ -403,6 +403,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             monthly_min=payload.get("monthly_min", 0),
             monthly_max=payload.get("monthly_max", 3),
             revisit_gap_days=payload.get("revisit_gap_days", 7),
+            commissioned_on=payload.get("commissioned_on"),
             active=payload.get("active", True),
         )
         return _dtc(row)
@@ -890,6 +891,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 register.entry_language, register.entry_language
             ),
             "missing_content": list(register.missing_content),
+            "uncovered": [
+                {"asset_id": asset_id, "reason": reason}
+                for asset_id, reason in register.uncovered
+            ],
             "is_operational_diary": register.is_operational_diary,
             "months": [
                 {
@@ -1897,6 +1902,7 @@ def _dtc(row: masters.DtcRow) -> dict[str, Any]:
         "monthly_min": row.monthly_min,
         "monthly_max": row.monthly_max,
         "revisit_gap_days": row.revisit_gap_days,
+        "commissioned_on": row.commissioned_on.isoformat() if row.commissioned_on else None,
         "active": row.active,
     }
 

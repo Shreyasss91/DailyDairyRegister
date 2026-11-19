@@ -598,6 +598,11 @@ class DraftRegister:
     #: The language this register was generated in. Part of the draft rather than of the
     #: rendering, because a month is issued in one language and the record has to keep it.
     entry_language: str = DEFAULT_ENTRY_LANGUAGE
+    #: Active transformers this register could not visit at all, each with its reason in
+    #: words: a DTC commissioned after the range has no date in it to be visited on. It is
+    #: stated rather than counted as covered, because a register that silently left a
+    #: transformer out would read as complete coverage of the roster.
+    uncovered: tuple[tuple[str, str], ...] = ()
 
     @property
     def is_allocation_complete(self) -> bool:
@@ -1273,7 +1278,12 @@ def generate_draft(
         rotation_offset=request.rotation_offset,
         attempt_budget=request.attempt_budget,
         roster_fingerprint=_fingerprint(
-            tuple(sorted((a.asset_id, a.asset_type.value, a.active) for a in request.roster))
+            tuple(
+                sorted(
+                    (a.asset_id, a.asset_type.value, a.active, a.commissioned_on)
+                    for a in request.roster
+                )
+            )
         ),
         config_fingerprint=_fingerprint(
             request.config.dtc_daily_cap,
@@ -1312,6 +1322,7 @@ def generate_draft(
         snapshot=snapshot,
         missing_content=MISSING_CONTENT,
         entry_language=request.entry_language,
+        uncovered=tuple(sorted(result.excluded.items())),
     )
 
 

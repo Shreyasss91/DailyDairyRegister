@@ -20,7 +20,7 @@ source of truth for that decision.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from enum import Enum
 from typing import Iterable, Mapping, Sequence
 
@@ -34,6 +34,9 @@ CYCLE_INVALID_VISITS = "cycle_invalid_visits_per_asset"
 CYCLE_UNKNOWN_WEIGHT_ASSET = "cycle_unknown_weight_asset"
 CYCLE_NEGATIVE_WEIGHT = "cycle_negative_weight"
 CYCLE_HEAVIER_CLASSED = "cycle_weight_inconsistent_with_class"
+#: No month of the declared cycle can hold a visit to an asset, which the resolver
+#: excludes before it deals anything.
+CYCLE_MONTH_UNAVAILABLE = "cycle_month_unavailable"
 CYCLE_UNRESOLVED_PARTIAL_MONTH = "cycle_unresolved_partial_month_limits"
 
 DEFAULT_DEPT_MULTIPLIER = 1.00
@@ -258,6 +261,15 @@ class CycleResolution:
     prior_counts: Mapping[str, int] = field(default_factory=dict)
     #: Prior last-visit dates, used to prefer the least recently seen.
     prior_last: Mapping[str, date] = field(default_factory=dict)
+    #: Active DTCs this cycle cannot cover, each with the reason in words. A DTC
+    #: commissioned after the cycle's last usable date is not silently dropped: it is
+    #: recorded here, kept out of the plan, and reported to the operator, because a
+    #: cycle that quietly forgot an asset would look like complete coverage.
+    excluded: Mapping[str, str] = field(default_factory=dict)
+    #: How many units had to be placed outside their month's even share because the
+    #: asset does not exist in the months that still had room. Zero for a cycle whose
+    #: assets carry no commissioning dates, where the distribution is exactly even.
+    availability_forced: int = 0
 
     def plan_for(self, month: MonthKey) -> CycleMonthPlan | None:
         for plan in self.plans:
@@ -268,6 +280,27 @@ class CycleResolution:
     @property
     def total_obligation(self) -> int:
         return sum(self.cycle_totals.values())
+
+
+def _last_day_of(month: MonthKey) -> date:
+    """The last calendar date of ``month``."""
+
+    following = month.next()
+    return date(following.year, following.month, 1) - timedelta(days=1)
+
+
+def _month_usable(asset: Asset, month: MonthKey) -> bool:
+    """Whether ``month`` holds at least one date the asset may be visited on.
+
+    Reserve depends on master data rather than the calendar, so a cycle can be
+    resolved without one: a month is usable when its last calendar date is later
+    than the commissioning date. An asset with no recorded date is usable
+    everywhere.
+    """
+
+    if asset.commissioned_on is None:
+        return True
+    return asset.commissioned_on < _last_day_of(month)
 
 
 def _active_dtcs(roster: Sequence[Asset]) -> tuple[Asset, ...]:
@@ -368,8 +401,29 @@ def resolve_cycle(
     """
 
     weight_model = weights or DtcWeights()
-    assets = _active_dtcs(roster)
     months = cycle.months()
+
+    # An asset commissioned after a month has no usable date in it, so the cycle
+    # cannot serve it there. An asset commissioned after the whole cycle cannot be
+    # served by this cycle at all: it is excluded with a stated reason rather than
+    # silently dropped, and the plan's totals are computed from the assets that
+    # remain so its obligations still add up.
+    usable_months: dict[str, tuple[bool, ...]] = {}
+    excluded: dict[str, str] = {}
+    served: list[Asset] = []
+    for asset in _active_dtcs(roster):
+        flags = tuple(_month_usable(asset, month) for month in months)
+        if not any(flags):
+            excluded[asset.asset_id] = (
+                f"commissioned on {asset.commissioned_on.isoformat()}, after the "
+                f"last usable date of {months[-1].label()}"
+                if asset.commissioned_on is not None
+                else f"has no usable date in {months[-1].label()}"
+            )
+            continue
+        usable_months[asset.asset_id] = flags
+        served.append(asset)
+    assets = tuple(served)
 
     prior_counts: dict[str, int] = {}
     prior_last: dict[str, date] = {}
@@ -413,13 +467,45 @@ def resolve_cycle(
     plans: list[CycleMonthPlan] = []
     assigned: list[list[str]] = [[] for _ in months]
     remaining_units = list(queue)
-    # Each pass takes at most one unit per month, which is what makes the
-    # distribution even rather than grouped.
-    while remaining_units:
-        for index in range(len(months)):
-            if not remaining_units:
-                break
-            assigned[index].append(remaining_units.pop(0))
+    # Each month takes at most its declared share, and a unit is only dealt to a
+    # month in which its asset is usable. The pointer moves on from wherever the last
+    # unit landed, so the deal stays round-robin and a month still holds one visit per
+    # turn: this is what makes a small roster spread across the cycle instead of
+    # stacking into its first months. With no commissioning dates the shares and the
+    # order are exactly what a plain round-robin produces.
+    shares = [base + (1 if index < remainder else 0) for index in range(len(months))]
+    pointer = 0
+    forced = 0
+    for unit in remaining_units:
+        placed_at: int | None = None
+        for step in range(len(months)):
+            candidate = (pointer + step) % len(months)
+            if shares[candidate] <= 0:
+                continue
+            if not usable_months[unit][candidate]:
+                continue
+            placed_at = candidate
+            break
+        if placed_at is None:
+            # No month with a share left can hold it, because the asset does not exist
+            # in those months yet. Availability is master data and the distribution is
+            # only a fairness objective, so the cycle yields and places the visit
+            # where it can exist.
+            for step in range(len(months)):
+                candidate = (pointer + step) % len(months)
+                if usable_months[unit][candidate]:
+                    placed_at = candidate
+                    break
+            if placed_at is None:
+                # Unreachable: an asset with no usable month was excluded above.
+                raise InputError(
+                    CYCLE_MONTH_UNAVAILABLE,
+                    f"no month of the cycle can hold a visit to {unit}",
+                )
+            forced += 1
+        assigned[placed_at].append(unit)
+        shares[placed_at] -= 1
+        pointer = (placed_at + 1) % len(months)
 
     for index, month in enumerate(months):
         chosen = assigned[index]
@@ -448,6 +534,8 @@ def resolve_cycle(
         weights={a.asset_id: weight_model.weight_for(a) for a in assets},
         prior_counts=prior_counts,
         prior_last=prior_last,
+        excluded=excluded,
+        availability_forced=forced,
     )
 
 
@@ -472,12 +560,26 @@ def verify_cycle(resolution: CycleResolution) -> tuple[str, ...]:
     *   ``scheduled`` and ``obligations`` describe the same assignments and
        multiplicities;
     *   monthly totals differ by at most one, the resolver's distribution
-       contract.
+       contract, widened only by the units availability forced out of their month;
+    *   an asset the cycle could not cover is excluded and appears in no month, and
+       an asset that does appear is not excluded.
     """
 
     problems: list[str] = []
     expected = resolution.cycle.visits_per_asset
     roster = set(resolution.roster_ids)
+
+    # 0. The excluded set and the covered set must not overlap, or a month could
+    #    carry obligations for an asset the resolution says it cannot serve.
+    for asset_id in sorted(resolution.excluded):
+        if asset_id in roster:
+            problems.append(
+                f"{asset_id} is both excluded from the cycle and in its roster"
+            )
+        if asset_id in resolution.cycle_totals:
+            problems.append(
+                f"{asset_id} is excluded from the cycle but carries a cycle total"
+            )
 
     # 1. Months must match the declared cycle exactly, in order.
     declared = resolution.cycle.months()
@@ -576,9 +678,13 @@ def verify_cycle(resolution: CycleResolution) -> tuple[str, ...]:
             f"cycle_totals names {asset_id!r}, which is not in the cycle roster"
         )
 
-    # 7. The distribution contract: monthly totals differ by at most one.
+    # 7. The distribution contract: monthly totals differ by at most one. An asset
+    #    commissioned part-way through the cycle cannot use the months before it
+    #    existed, so a unit forced out of its month widens the spread by exactly one;
+    #    the count travels with the resolution rather than being assumed away.
     totals = sorted(plan.total for plan in resolution.plans)
-    if totals and totals[-1] - totals[0] > 1:
+    allowed_spread = 1 + resolution.availability_forced
+    if totals and totals[-1] - totals[0] > allowed_spread:
         problems.append(f"monthly totals are uneven by more than one: {totals}")
 
     # 8. The whole resolution must carry exactly the cycle obligation.

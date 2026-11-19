@@ -487,6 +487,9 @@ def accept_batch(
                     kva=payload.get("kva") if isinstance(payload.get("kva"), (int, float)) else None,
                     station=payload.get("station"),
                     source_class=payload.get("source_class"),
+                    # Carried straight from the judged row: a date the reader could not
+                    # parse is already None here, and is never guessed at acceptance.
+                    commissioned_on=payload.get("commissioned_on"),
                 )
                 inserted += 0 if existed else 1
                 updated += 1 if existed else 0
@@ -627,8 +630,8 @@ def _write_source_record(
         """
         INSERT OR REPLACE INTO dtc_source_record (dtc_id, batch_id, row_number,
             raw_name, raw_feeder, raw_feeder_code, raw_mdm_code, raw_kva,
-            raw_station, raw_class)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            raw_station, raw_class, raw_commissioned_on)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload.get("dtc_id"),
@@ -641,6 +644,7 @@ def _write_source_record(
             source.get("kva"),
             source.get("station"),
             source.get("source_class"),
+            source.get("commissioned_on"),
         ),
     )
 

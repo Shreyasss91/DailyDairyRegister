@@ -215,6 +215,7 @@ The supplied DTC source contains 113 SCD records. Include the 113 SCD records; e
 - DTC identifier: SCD-xx.
 - Display name: source `DTC_Name`.
 - Retain imported source fields, including DTC name, feeder, feeder code, MDM code, kVA, station and original DEPT/MSB/OWN classification.
+- Retain the supplied **date of commissioning** (`Date of commision` in the office's own file) as a canonical date on the DTC record, with the supplied text kept beside it as source evidence. A blank or unreadable value is stored as no date, which the schedule reads as no restriction; it is never treated as "not yet commissioned", because that would make an untouched master unusable. The date bounds the dates the asset may be visited on, as §10.9 states.
 - Preserve blank and `#N/A` source values; do not silently discard records or fabricate missing values.
 - Preserve original imported values and store owner-confirmed feeder assignments as explicit canonical overrides. Do not overwrite source data or silently repair discrepancies.
 - Source import must include a validation/reconciliation view so discrepancies and missing fields can be reviewed.
@@ -450,6 +451,19 @@ This subsection records the input contract the validator enforces. Each clause e
 **Obligation counts are integers, and a boolean is not one.** A visit count must be a non-negative integer. Boolean values are refused even though the language treats a boolean as an integer subtype, because a boolean is a mistaken input and accepting it as a count of one would schedule work nobody asked for.
 
 **Structured diagnostics.** A violation carries the constraint identifier, the affected asset and type, the dates involved, the limit and the observed value as structured fields. A daily-capacity violation additionally names every asset sharing the affected date with its type. A monthly-maximum violation lists every date counted, not merely the most recent. Message text is a readable rendering and is never the source of truth, so no caller needs to parse it.
+
+### 10.9 The commissioning date bounds an asset's visit dates (as built)
+
+Settled 2026-11-18. A DTC did not exist before it was commissioned, so nothing may be scheduled against it for a date up to and including that date.
+
+- **Strictly after.** An asset commissioned on 15-09-2026 is first visitable on 16-09-2026. The commissioning day itself is not a visit date.
+- **No date means no restriction.** A blank cell, an unreadable value or a `#N/A` placeholder leaves the asset unrestricted. It does not make the asset unvisitable, and no date is invented to fill the gap. The value as supplied is still retained with the source record, so an unreadable date stays inspectable.
+- **The rule binds every path, not only generation.** A proposed visit on or before the date is refused as `visit_before_commissioning_date`; a committed visit is refused as `committed_visit_before_commissioning_date` rather than dropped, because a schedule resting on an impossible commitment cannot be correct. The feasibility assessment proves a month infeasible as `asset_not_yet_commissioned` when the asset has fewer usable dates in the month than the visits it owes, naming the date and the number of usable dates that remain.
+- **The allocator never offers such a date.** It is a roster property like `active`, so a placement candidate is filtered once, when that asset's option set is first computed, and the exact assessment's own candidate dates apply the same filter. The two paths therefore agree about which dates exist.
+- **A coverage cycle defers rather than miscounts.** An asset commissioned part-way through a cycle is dealt to a month it exists in; its cycle obligation and the cycle total are unchanged. An asset commissioned after the cycle's last usable date is excluded from that cycle and reported with its date, rather than silently omitted from a plan that claims complete coverage. Where availability forces a unit out of its month's even share, the resolution records how many units were forced; with no commissioning dates in the roster the distribution remains exactly even (113 transformers over three months is still 38, 38 and 37).
+- **A capacity-based suggestion never selects an unvisitable transformer**, and reports every active DTC it could not cover at all, with the reason, beside the draft.
+- **Recorded with the draft.** The request snapshot carries each roster member's date (schema 6). A snapshot written before the field existed holds none, which is exactly what it was generated with.
+- **Not modelled.** There is no rule by which an asset commissioned *during* a month must receive a visit in that month; the cycle obligation, not the calendar of commissioning dates, decides what a month owes.
 
 ## 11. Language and text storage
 

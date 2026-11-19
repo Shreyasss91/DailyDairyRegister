@@ -42,13 +42,14 @@ The remaining files are reference/calculation/capture material. They are **not**
 ### File: `01_dtc_master_roster.csv`
 
 Blank header:
-`DTC ID,DTC Name,Class,Feeder,Feeder Code,MDM Code,kVA,Station`
+`DTC ID,DTC Name,Class,Feeder,Feeder Code,MDM Code,kVA,Station,Date of commision`
 
 - Keep every source row from the original source extract, including SCF/SCE rows. Let the import judge explicitly exclude them; do not pre-filter them.
 - The expected reconciliation is **113 SCD**: 68 DEPT and 45 SELF_DTC (42 MSB + 3 OWN). Expected excluded source records: five SCF and one SCE. These are checks against the source, not target numbers to force by editing.
 - Accepted source classes are DEPT, MSB and OWN. DEPT maps to canonical class DEPT; MSB/OWN map to SELF_DTC while retaining source subgroup. SCF/SCE are excluded. Unknown classes are errors, not guesses.
 - Preserve source DTC name, feeder text, feeder code, MDM code, kVA, station and original source class. The `Feeder` column is source feeder text, not a canonical feeder ID.
 - Blank or `#N/A` kVA must not be treated as zero. It leaves the weight incomplete and should be reviewed.
+- `Date of commision` is the date the transformer was commissioned, as the office's own sheet spells it. A DTC is never scheduled for that day or any day before it. A blank cell, a `#N/A` placeholder or an unreadable value means no restriction - it is not read as "not yet commissioned" - and the supplied text is kept beside the accepted date so an unreadable value stays inspectable.
 - Capture source filename, issuing office, worksheet name, extraction date and source/as-of date in the import batch notes or separate provenance record.
 
 Owner-confirmed canonical overrides applied by the current application on DTC batch acceptance:

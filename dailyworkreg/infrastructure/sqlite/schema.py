@@ -25,7 +25,7 @@ from dataclasses import dataclass
 #: Bumped when the schema below changes. Migrations are applied in order and each
 #: one is idempotent, so re-running is safe and a fresh database simply replays the
 #: list.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 @dataclass(frozen=True)
@@ -946,6 +946,40 @@ _MIGRATION_6 = Migration(
 )
 
 
+# --- migration 7: an asset has a date before which it did not exist ----------
+#
+# Two nullable columns. Existing rows keep NULL, which reads as "no recorded date"
+# and therefore as no restriction: an upgrade must not suddenly declare every
+# transformer in a working register unvisitable. The raw column beside the canonical
+# one keeps the value exactly as the master file supplied it, so a date that could not
+# be read stays readable as evidence.
+#
+# The columns are added only when they are absent. A database can hold the column and
+# still lack the migration record - a copy restored from a half-upgraded backup, which
+# is what the backup tests build - and an unconditional ALTER would then refuse to
+# open it at all.
+def _apply_migration_7(connection: sqlite3.Connection) -> None:
+    for table, column in (
+        ("dtc", "commissioned_on"),
+        ("dtc_source_record", "raw_commissioned_on"),
+    ):
+        present = {
+            row[1] for row in connection.execute(f"PRAGMA table_info({table})")  # noqa: S608 - fixed names
+        }
+        if column not in present:
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN {column} TEXT"  # noqa: S608 - fixed names
+            )
+
+
+_MIGRATION_7 = Migration(
+    version=7,
+    name="record the date each DTC was commissioned",
+    statements=(),
+    apply=_apply_migration_7,
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     _MIGRATION_1,
     _MIGRATION_2,
@@ -953,6 +987,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     _MIGRATION_4,
     _MIGRATION_5,
     _MIGRATION_6,
+    _MIGRATION_7,
 )
 
 

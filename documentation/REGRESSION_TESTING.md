@@ -34,7 +34,7 @@ A non-zero exit code means the validation gate failed. Inspect the failing test 
 Run the directly relevant export and UI tests first:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py
 ```
 
 These modules cover the export/document, PDF, bulk-finalisation and frontend contracts, including:
@@ -85,6 +85,23 @@ These modules cover the export/document, PDF, bulk-finalisation and frontend con
   giving no credit towards the activity minimum, and a snapshot written before the kinds were
   separated reading its total as a whole-date ceiling with the unnamed kinds at their
   defaults.
+- The date a DTC was commissioned: the supplied `Date of commision` column read
+  into a canonical date with the source text kept beside it, a blank cell read as no
+  restriction rather than as "not yet commissioned", a `#N/A` placeholder and an
+  unreadable value reported and carried without a date, a day-first slash date read the
+  way every other date in the platform is read, the date surviving acceptance, a
+  re-import, the source record and the schema migration, an existing row keeping no date
+  and therefore no restriction, an asset visitable only strictly after its date, the
+  commissioning day itself refused as a visit date, the following day accepted, a
+  committed visit before the date reported rather than dropped, a month ending before the
+  date proved infeasible with the date named, a date late in the month leaving too few
+  dates for the visits owed, the allocator never offering such a date, a coverage cycle
+  dealing an asset to a month it exists in and excluding one commissioned after the
+  cycle with its reason, the distribution staying exactly even when no asset carries a
+  date, a generated draft never recording a visit before the transformer existed, a
+  transformer the range could not cover at all being reported beside the draft, and the
+  request snapshot keeping each roster date while a snapshot written before the field
+  existed reads without one.
 - Regular activities on working days: the configured count on every eligible day and none on a Sunday or a recorded holiday, the catalogue's monthly maximum, monthly minimum, repeat gap (across a month boundary) and weekday restriction as hard constraints, a weight unable to override a maximum, a catalogue that cannot fill a day or a month refused with the constraint and date named, determinism from the seed, the count and the catalogue surviving the request snapshot, a schema-1 snapshot still reading as the visits-only request it recorded, and the placed activities reaching the issued page and workbook with their Kannada text.
 
 The PDF module runs its packaging, refusal and read-only tests against a stand-in renderer, so they pass on a machine without Chromium. The two tests that assert a real `%PDF` file are skipped unless a local browser is installed; run `python -m playwright install chromium` before treating PDF rendering as verified.
@@ -97,7 +114,7 @@ From the repository root:
 
 ```powershell
 # 1. Focused API/document, PDF, bulk-finalisation and UI coverage.
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py
 
 # 2. Full regression suite.
 .\.venv\Scripts\python.exe -m pytest

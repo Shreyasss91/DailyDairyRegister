@@ -227,7 +227,13 @@ def _roster(
     for dtc in masters.list_dtcs(connection):
         if not dtc.active:
             continue
-        assets.append(Asset(dtc.dtc_id, _asset_type_for(dtc.dtc_class)))
+        assets.append(
+            Asset(
+                dtc.dtc_id,
+                _asset_type_for(dtc.dtc_class),
+                commissioned_on=dtc.commissioned_on,
+            )
+        )
         display[dtc.dtc_id] = AssetDisplay(asset_id=dtc.dtc_id, name_en=dtc.name)
 
     return tuple(assets), display, model

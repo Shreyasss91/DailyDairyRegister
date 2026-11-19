@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from .database import transaction
 
@@ -38,6 +38,24 @@ class StorageError(ValueError):
 
 def _now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _iso_date(value: date | str | None) -> str | None:
+    """The stored form of a date: ISO text, or ``NULL`` when there is none.
+
+    Accepts a date or the ISO text the import already parsed, so the caller never
+    has to know how the column is stored. It never guesses at an unreadable value:
+    parsing happened when the file was read, and a value that could not be read then
+    is ``None`` here.
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return date.fromisoformat(str(value)).isoformat()
 
 
 def current_version(connection: sqlite3.Connection) -> int:
@@ -339,6 +357,9 @@ class DtcRow:
     monthly_min: int
     monthly_max: int
     revisit_gap_days: int
+    #: The date the asset was commissioned, or ``None`` when the master recorded no
+    #: date. Read as "no restriction" rather than as "not yet commissioned".
+    commissioned_on: date | None
     active: bool
     revision: int
 
@@ -360,6 +381,11 @@ def _dtc_from(row: sqlite3.Row) -> DtcRow:
         monthly_min=int(row["monthly_min"]),
         monthly_max=int(row["monthly_max"]),
         revisit_gap_days=int(row["revisit_gap_days"]),
+        commissioned_on=(
+            date.fromisoformat(row["commissioned_on"])
+            if row["commissioned_on"]
+            else None
+        ),
         active=bool(row["active"]),
         revision=int(row["revision"]),
     )
@@ -391,8 +417,10 @@ def upsert_dtc(
     monthly_min: int = 0,
     monthly_max: int = 3,
     revisit_gap_days: int = 7,
+    commissioned_on: date | str | None = None,
     active: bool = True,
 ) -> DtcRow:
+    stored_commissioned = _iso_date(commissioned_on)
     with transaction(connection):
         version = bump_version(connection)
         existing = connection.execute(
@@ -403,14 +431,16 @@ def upsert_dtc(
                 """
                 INSERT INTO dtc (dtc_id, name, canonical_feeder_id, kva, station,
                                  dtc_class, source_class, individual_adjustment,
-                                 monthly_min, monthly_max, revisit_gap_days, active,
-                                 revision, valid_from_version, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                                 monthly_min, monthly_max, revisit_gap_days,
+                                 commissioned_on, active, revision,
+                                 valid_from_version, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                 """,
                 (
                     dtc_id, name, canonical_feeder_id, kva, station, dtc_class,
                     source_class, individual_adjustment, monthly_min, monthly_max,
-                    revisit_gap_days, int(active), version, _now(),
+                    revisit_gap_days, stored_commissioned, int(active), version,
+                    _now(),
                 ),
             )
         else:
@@ -419,14 +449,14 @@ def upsert_dtc(
                 UPDATE dtc SET name = ?, canonical_feeder_id = ?, kva = ?, station = ?,
                                dtc_class = ?, source_class = ?, individual_adjustment = ?,
                                monthly_min = ?, monthly_max = ?, revisit_gap_days = ?,
-                               active = ?, revision = revision + 1,
+                               commissioned_on = ?, active = ?, revision = revision + 1,
                                valid_from_version = ?, updated_at = ?
                 WHERE dtc_id = ?
                 """,
                 (
                     name, canonical_feeder_id, kva, station, dtc_class, source_class,
                     individual_adjustment, monthly_min, monthly_max, revisit_gap_days,
-                    int(active), version, _now(), dtc_id,
+                    stored_commissioned, int(active), version, _now(), dtc_id,
                 ),
             )
     result = get_dtc(connection, dtc_id)

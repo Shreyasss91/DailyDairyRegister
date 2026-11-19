@@ -374,8 +374,8 @@ def open_month_rows(run_id: str = "run-nov") -> dict[str, str]:
 # --- insertion is a change -------------------------------------------------
 
 
-def test_the_schema_is_at_six_and_covers_insertion(db):
-    assert SCHEMA_VERSION == 6
+def test_the_schema_is_at_seven_and_covers_insertion(db):
+    assert SCHEMA_VERSION == 7
     assert applied_versions(db) == tuple(item.version for item in MIGRATIONS)
     triggers = {
         row["name"]

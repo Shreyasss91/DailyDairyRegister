@@ -57,10 +57,14 @@ from .draft_generation import (
 #: total and an area share; those are read as exactly that - the total is kept as the
 #: whole-date ceiling it was, and the two kinds it did not bound separately take the
 #: platform default - so a stored draft re-generates the schedule it was issued with.
-REQUEST_SNAPSHOT_SCHEMA = 5
+#:
+#: Schema 6 records each DTC's commissioning date with the roster. Schemas 1 to 5 hold
+#: no such dates, which is exactly what they were generated with: a snapshot written
+#: before the date existed could not have excluded any date because of it.
+REQUEST_SNAPSHOT_SCHEMA = 6
 
 #: Versions this reader understands.
-REQUEST_SNAPSHOT_READABLE = (1, 2, 3, 4, 5)
+REQUEST_SNAPSHOT_READABLE = (1, 2, 3, 4, 5, 6)
 
 C_SNAPSHOT_VERSION_UNSUPPORTED = "request_snapshot_version_unsupported"
 C_SNAPSHOT_MALFORMED = "request_snapshot_malformed"
@@ -124,7 +128,12 @@ def encode_request(request: DraftRequest) -> dict[str, Any]:
         "attempt_budget": request.attempt_budget,
         "rotation_offset": request.rotation_offset,
         "roster": [
-            {"asset_id": a.asset_id, "asset_type": a.asset_type.value, "active": a.active}
+            {
+                "asset_id": a.asset_id,
+                "asset_type": a.asset_type.value,
+                "active": a.active,
+                "commissioned_on": _date(a.commissioned_on) if a.commissioned_on else None,
+            }
             for a in request.roster
         ],
         "display": [
@@ -299,6 +308,11 @@ def decode_request(payload: dict[str, Any]) -> DraftRequest:
                     asset_id=item["asset_id"],
                     asset_type=AssetType(item["asset_type"]),
                     active=bool(item["active"]),
+                    commissioned_on=(
+                        date.fromisoformat(item["commissioned_on"])
+                        if item.get("commissioned_on")
+                        else None
+                    ),
                 )
                 for item in payload["roster"]
             ),
