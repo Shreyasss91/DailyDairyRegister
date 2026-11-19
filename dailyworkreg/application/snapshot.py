@@ -351,7 +351,11 @@ def decode_request(payload: dict[str, Any]) -> DraftRequest:
             # A snapshot written before the language existed records a register filed in
             # both, which is exactly what it was. It is not upgraded to today's default,
             # because there was no default then and the draft it describes was bilingual.
-            entry_language=wording.normalise_language(payload.get("entry_language")),
+            # A snapshot written before the field existed recorded a bilingual
+            # register, so an absent language reads as that, not as today's default.
+            entry_language=wording.normalise_language(
+                payload.get("entry_language") or wording.LANGUAGE_BOTH
+            ),
             cycle=cycle,
             weights=(
                 None

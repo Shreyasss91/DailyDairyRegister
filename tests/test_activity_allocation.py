@@ -347,7 +347,7 @@ def db(tmp_path: Path) -> sqlite3.Connection:
     connection.close()
 
 
-def spec(*, months: int = 1, activities_per_day: int | None = 3):
+def spec(*, months: int = 1, activities_per_day: int | None = 3, entry_language: str = "both"):
     start = date(2026, 11, 1)
     end = date(2026, 11, 30) + timedelta(days=0)
     if months == 2:
@@ -361,6 +361,7 @@ def spec(*, months: int = 1, activities_per_day: int | None = 3):
         cycle_duration_months=months,
         cycle_visits_per_asset=1,
         activities_per_day=activities_per_day,
+        entry_language=entry_language,
     )
 
 

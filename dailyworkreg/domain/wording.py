@@ -19,10 +19,11 @@ LANGUAGE_BOTH = "both"
 #: Every language a register may be written in.
 ENTRY_LANGUAGES = (LANGUAGE_ENGLISH, LANGUAGE_KANNADA, LANGUAGE_BOTH)
 
-#: The platform's own default. The office files a bilingual register, so an English
-#: register and a Kannada one are not the same document - but which of the three is filed
-#: is the office's decision, recorded with the generation that produced it.
-DEFAULT_ENTRY_LANGUAGE = LANGUAGE_BOTH
+#: The platform's own default. English, because it is the language the register is audited
+#: in and the one the office asked for; Kannada and bilingual remain one click away, and
+#: whichever is chosen is recorded with the generation that produced it. A closed month
+#: filed before this default existed keeps the wording it was issued in.
+DEFAULT_ENTRY_LANGUAGE = LANGUAGE_ENGLISH
 
 #: How each language is named where an operator chooses it.
 LANGUAGE_LABELS = {

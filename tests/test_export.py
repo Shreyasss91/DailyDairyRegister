@@ -105,7 +105,15 @@ def spec(
     end: date = date(2026, 11, 30),
     seed: int = 7,
     cycle_months: int = 1,
+    entry_language: str = "both",
 ) -> GenerationSpec:
+    """A one-month cycle. Bilingual, because this module pins both texts at once.
+
+    The platform default is now English; this fixture asks for the bilingual register it
+    asserts about, so a test that is about keeping Kannada beside English keeps testing
+    that rather than the default.
+    """
+
     return GenerationSpec(
         start=start,
         end=end,
@@ -114,6 +122,7 @@ def spec(
         cycle_start_month=MonthKey(start.year, start.month),
         cycle_duration_months=cycle_months,
         cycle_visits_per_asset=1,
+        entry_language=entry_language,
     )
 
 
@@ -221,10 +230,11 @@ REASON_LABELS = {
     "other_non_working": "Non-working day",
 }
 
-#: What a visit says, by the kind of asset it named. The identifier is not published.
+#: What a visit says, by the kind of asset it named. Only the DTC entry carries the
+#: roster identifier: transformer work is filed and defended by that number.
 VISIT_PHRASES = {
     "DTC": (
-        "Inspected {name} for transformer loading, oil level and earthing, "
+        "Inspected {name} [{asset_id}] for transformer loading, oil level and earthing, "
         "and checked the consumer supply"
     ),
     "FEEDER": (
@@ -266,7 +276,7 @@ def expected_activity(content: dict, row: dict) -> str:
     for visit in row["visits"]:
         name = in_language(visit[2], visit[3] if len(visit) > 3 else "", language)
         template = VISIT_PHRASES.get(asset_types.get(visit[0], ""), GENERIC_VISIT_PHRASE)
-        items.append(template.format(name=name))
+        items.append(template.format(name=name, asset_id=visit[0]))
     for entry in row["entries"]:
         items.append(in_language(entry[2], entry[3] if len(entry) > 3 else "", language))
     if language == "en":
@@ -468,9 +478,7 @@ def test_every_stored_value_is_what_the_register_row_shows(client, db):
         assert rows[day]["activity"] == expected_activity(record["content"], stored_row)
 
 
-def test_every_stored_visit_reaches_the_cell_with_its_name_and_not_its_identifier(
-    client, db
-):
+def test_every_stored_visit_reaches_the_cell_by_name_and_dtcs_by_number(client, db):
     _, record = issued(db, client)
     stored_rows = record["content"]["rows"]
     visited = {day: row for day, row in stored_rows.items() if row["visits"]}
@@ -478,15 +486,17 @@ def test_every_stored_visit_reaches_the_cell_with_its_name_and_not_its_identifie
 
     _, book = workbook(client, record["finalisation_id"])
     rows = {stamped(row): row for row in register_rows(book)}
+    asset_types = record["content"].get("asset_types") or {}
 
     for day, stored_row in visited.items():
         cell = rows[day]["activity"]
         for visit in stored_row["visits"]:
-            # The name reaches the cell; the identifier does not. The identifier is how
-            # the record finds the asset again, not something the office writes in the
-            # register it files, so a visit prints as a sentence naming a place.
+            # The name always reaches the cell. A DTC's roster number reaches it too,
+            # because transformer work is filed and defended by that number; an area's or
+            # a feeder's identifier does not, because those are named by name.
             assert visit[2] in cell
-            assert f"[{visit[0]}]" not in cell
+            printed = f"[{visit[0]}]" in cell
+            assert printed == (asset_types.get(visit[0]) == "DTC"), visit[0]
 
 
 def test_several_activities_on_one_date_share_one_row_and_one_cell(client, db):

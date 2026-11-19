@@ -98,11 +98,13 @@ REASON_KIND_LABELS = wording.REASON_KIND_LABELS
 #: record - and an asset kind the templates do not know reads the neutral sentence rather
 #: than no sentence.
 #: How a visit reads, by the kind of asset it named. The sentence names the work and the
-#: installation, and deliberately not the asset identifier: the identifier is how the
-#: record finds the asset again, not something the office writes in a register it files.
+#: installation. Only the DTC carries its roster identifier (`SCD-44`): transformer work is
+#: filed, reported and defended by that number, so a DTC entry without it cannot be matched
+#: to the transformer it is about. Areas and feeders are named by their names in a register
+#: the office files, and their identifiers stay in the record alone.
 VISIT_PHRASES = {
     "DTC": (
-        "Inspected {name} for transformer loading, oil level and earthing, "
+        "Inspected {name} [{asset_id}] for transformer loading, oil level and earthing, "
         "and checked the consumer supply"
     ),
     "FEEDER": (
@@ -450,14 +452,16 @@ def _visit_item(visit: DocumentVisit, language: str = DEFAULT_ENTRY_LANGUAGE) ->
     name keeps its English one rather than printing a blank, and a record that does not say
     which kind of asset it visited reads the neutral sentence instead of a guessed verb.
 
-    The asset identifier is not printed. It is the record's own way of naming the asset - a
-    row's bookkeeping, which the issued document already identifies by fingerprint - and an
-    operator filing a register does not write `[A-15]` after a street's name.
+    Only the DTC sentence carries an identifier, and it carries it because the DTC is the
+    one asset the office files by number: `SCD-44` is how transformer work is reported, so
+    an entry without it cannot be matched to the transformer it is about. An area or a
+    feeder is named by its name, and its identifier - `A-15`, `F-01` - is bookkeeping the
+    record keeps and the document does not print.
     """
 
     name = _in_language(visit.name_en, visit.name_kn, language).strip()
     template = VISIT_PHRASES.get(visit.asset_type or "", GENERIC_VISIT_PHRASE)
-    return template.format(name=name).strip()
+    return template.format(name=name, asset_id=visit.asset_id).strip()
 
 
 def _entry_item(entry: DocumentEntry, language: str = DEFAULT_ENTRY_LANGUAGE) -> str:

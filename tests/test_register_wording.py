@@ -141,7 +141,7 @@ def day_of(connection: sqlite3.Connection, finalisation_id: str, day: str):
 
 def test_the_three_languages_are_the_three_the_interface_offers():
     assert ENTRY_LANGUAGES == (LANGUAGE_ENGLISH, LANGUAGE_KANNADA, LANGUAGE_BOTH)
-    assert DEFAULT_ENTRY_LANGUAGE == LANGUAGE_BOTH
+    assert DEFAULT_ENTRY_LANGUAGE == LANGUAGE_ENGLISH
 
 
 def test_an_absent_language_is_the_platform_default():
@@ -326,8 +326,11 @@ def test_a_visit_reads_as_work_done_at_the_installation(db):
     for day in visited:
         for visit in day.visits:
             assert visit.asset_type in {"DTC", "AREA", "FEEDER"}
-            # The identifier is the record's bookkeeping, not what the office files.
-            assert f"[{visit.asset_id}]" not in day.activity_text
+            # A DTC is filed by its roster number, so its entry carries it; an area or a
+            # feeder is named by name and its identifier stays in the record.
+            assert (f"[{visit.asset_id}]" in day.activity_text) == (
+                visit.asset_type == "DTC"
+            )
     dtc_days = [
         day for day in visited if any(visit.asset_type == "DTC" for visit in day.visits)
     ]
@@ -336,10 +339,14 @@ def test_a_visit_reads_as_work_done_at_the_installation(db):
 
 
 @pytest.mark.parametrize(
-    ("asset_type", "verb"),
-    [("DTC", "Inspected "), ("FEEDER", "Patrolled "), ("AREA", "Inspected ")],
+    ("asset_type", "verb", "identifies"),
+    [
+        ("DTC", "Inspected ", True),
+        ("FEEDER", "Patrolled ", False),
+        ("AREA", "Inspected ", False),
+    ],
 )
-def test_the_sentence_depends_on_the_kind_of_asset(asset_type, verb):
+def test_the_sentence_depends_on_the_kind_of_asset(asset_type, verb, identifies):
     visit = export.DocumentVisit(
         asset_id="X-1",
         provenance="fixed",
@@ -352,7 +359,9 @@ def test_the_sentence_depends_on_the_kind_of_asset(asset_type, verb):
 
     assert text.startswith(verb)
     assert "Some asset" in text
-    assert "[X-1]" not in text
+    # A DTC entry is matched to its transformer by the roster number, so it prints it;
+    # an area or a feeder prints the name alone.
+    assert ("[X-1]" in text) is identifies
 
 
 def test_a_record_that_does_not_say_what_it_visited_reads_neutrally():
@@ -401,8 +410,10 @@ def test_the_workbook_carries_the_narrative_and_the_classified_reason(db):
     for day in document.days:
         if day.visits:
             assert cells[day.day] == day.activity_text
-            # A register is filed with names and sentences, not with row identifiers.
-            assert "[" not in cells[day.day]
+            # A DTC entry carries its roster number; an area's and a feeder's
+            # identifiers stay in the record.
+            assert "[A-" not in cells[day.day]
+            assert "[F-" not in cells[day.day]
 
 
 def test_the_printed_page_carries_the_same_cells(db, database: Path):
@@ -481,12 +492,12 @@ def test_the_generation_route_records_the_language_it_was_asked_for(tmp_path: Pa
     assert reported["entry_language_label"] == "Kannada"
 
 
-def test_the_generation_route_defaults_to_both(tmp_path: Path):
+def test_the_generation_route_defaults_to_english(tmp_path: Path):
     client = surface(tmp_path)
     body = ask(client).json()
 
-    assert body["entry_language"] == "both"
-    assert body["entry_language_label"] == "English and Kannada"
+    assert body["entry_language"] == "en"
+    assert body["entry_language_label"] == "English"
 
 
 def test_the_generation_route_refuses_a_language_it_does_not_write(tmp_path: Path):

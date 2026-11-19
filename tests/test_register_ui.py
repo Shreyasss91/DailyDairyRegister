@@ -216,7 +216,7 @@ def test_the_generate_page_offers_the_three_languages(client):
         assert f'name="gen-language" value="{value}"' in answer.text
     assert 'id="gen-language"' in answer.text
     # One is chosen before the operator touches anything, and it is the bilingual one.
-    assert re.search(r'value="both"\s+checked', answer.text)
+    assert re.search(r'value="en"\s+checked', answer.text)
     assert APP_JS.count('document.querySelector(\'input[name="gen-language"]:checked\')') == 1
     assert "payload.entry_language = language" in APP_JS
 

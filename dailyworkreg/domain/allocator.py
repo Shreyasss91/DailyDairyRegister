@@ -25,6 +25,7 @@ asset could use. Ordering is fully determined by the inputs and the seed.
 from __future__ import annotations
 
 import random
+from bisect import bisect_left, insort
 from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Iterable, Mapping, Sequence
@@ -171,7 +172,14 @@ def _eligible_dates(period: DatePeriod, calendar: Calendar) -> tuple[date, ...]:
 def _violates_gap(
     asset_id: str, day: date, placed: Sequence[Visit], gap: int
 ) -> bool:
-    """True when ``day`` is too close to a visit already recorded for the asset."""
+    """True when ``day`` is too close to a visit already recorded for the asset.
+
+    The reference reading of the rule, kept as the definition rather than as the fast
+    path: a visit dated after ``day`` produces a negative elapsed gap, which is below
+    every positive interval, so any later visit of the same asset already blocks the
+    date. :func:`_gap_violated` answers the same question from a sorted index and is
+    what construction uses.
+    """
 
     for visit in placed:
         if visit.asset_id != asset_id:
@@ -179,6 +187,44 @@ def _violates_gap(
         if calendar_day_gap(visit.visit_date, day) < gap:
             return True
     return False
+
+
+def _gap_violated(dates: Sequence[date], day: date, gap: int) -> bool:
+    """The same rule as :func:`_violates_gap`, from dates already sorted.
+
+    Construction asks this question once per (asset, candidate date) pair, and on a
+    ten-month cycle that is tens of millions of asks: scanning every placement each
+    time made generation quadratic in the number of visits and dominated the whole
+    run. Because a visit after ``day`` blocks the date outright and the remaining
+    visits are earlier, only two dates can decide it - the first on or after ``day``,
+    and the last before it - so a binary search answers it exactly.
+
+    ``revisit_gap_days`` is at least one (``AssetLimits`` refuses anything lower), and
+    the general reading is kept as the fallback so a caller outside that contract is
+    still answered correctly rather than optimistically.
+    """
+
+    if not dates:
+        return False
+    if gap < 1:
+        return any(calendar_day_gap(visit_date, day) < gap for visit_date in dates)
+    position = bisect_left(dates, day)
+    if position < len(dates):
+        return True
+    return calendar_day_gap(dates[-1], day) < gap
+
+
+def _drop_date(days: list[date], day: date) -> None:
+    """Remove ``day`` from an ascending list of dates, if it is there.
+
+    Used to keep a cached set of viable dates exact when a date fills up. A list of
+    at most a month's working days is cheaper to filter in place than to rebuild, and
+    removing rather than rebuilding cannot add a date back that a constraint closed.
+    """
+
+    position = bisect_left(days, day)
+    if position < len(days) and days[position] == day:
+        del days[position]
 
 
 def _weight_of(request: AllocationRequest, asset_id: str) -> float:
@@ -214,6 +260,12 @@ def _attempt_placement(
     dates after the placement, then a seed-derived tie key. The last two are what
     make alternative seeds produce different valid schedules instead of repeating
     one greedy path.
+
+    Each asset's viable dates are computed once and then maintained rather than
+    recomputed: a placement can only ever *remove* a date from an asset's options -
+    its own visit closes the dates around it, and a date that fills up closes for
+    everybody - so the sets are filtered as they change. Recomputing all of them at
+    every step made generation quadratic in the number of visits.
     """
 
     roster = {asset.asset_id: asset for asset in request.roster}
@@ -239,6 +291,11 @@ def _attempt_placement(
     gap_source: list[Visit] = (
         list(request.history) + list(request.fixed) + list(request.gap_blockers)
     )
+    # The same visits, by asset, each list sorted, so the gap question is a binary
+    # search rather than a scan of everything placed so far.
+    gap_dates: dict[str, list[date]] = {}
+    for visit in gap_source:
+        insort(gap_dates.setdefault(visit.asset_id, []), visit.visit_date)
 
     per_date: dict[date, int] = {}
     per_date_area: dict[date, int] = {}
@@ -250,6 +307,19 @@ def _attempt_placement(
         if asset is not None and asset.asset_type is AssetType.AREA:
             per_date_area[visit.visit_date] = per_date_area.get(visit.visit_date, 0) + 1
 
+    config = request.config
+    combined_cap = config.combined_daily_cap
+    area_cap = config.area_daily_cap
+    is_area: dict[str, bool] = {
+        asset.asset_id: asset.asset_type is AssetType.AREA for asset in request.roster
+    }
+
+    # Viable dates by asset, computed on first use and then kept exact. Only the
+    # three things that can change membership are acted on below: the placed asset's
+    # own gap set, a date that has just filled up, and an asset reaching its monthly
+    # capacity.
+    viable_cache: dict[str, list[date]] = {}
+
     while any(count > 0 for count in remaining.values()):
         best_asset: str | None = None
         best_dates: list[date] = []
@@ -258,23 +328,23 @@ def _attempt_placement(
         for asset_id, count in remaining.items():
             if count <= 0:
                 continue
-            asset = roster[asset_id]
-            limits = request.config.limits_for(asset_id)
+            limits = config.limits_for(asset_id)
             if per_asset.get(asset_id, 0) >= limits.monthly_max:
                 # No capacity left this month for this asset.
                 continue
-            viable = [
-                day
-                for day in eligible
-                if per_date.get(day, 0) < request.config.combined_daily_cap
-                and (
-                    asset.asset_type is not AssetType.AREA
-                    or per_date_area.get(day, 0) < request.config.area_daily_cap
-                )
-                and not _violates_gap(
-                    asset_id, day, gap_source, limits.revisit_gap_days
-                )
-            ]
+            viable = viable_cache.get(asset_id)
+            if viable is None:
+                gap = limits.revisit_gap_days
+                blocked = gap_dates.get(asset_id, ())
+                area_limited = is_area[asset_id]
+                viable = [
+                    day
+                    for day in eligible
+                    if per_date.get(day, 0) < combined_cap
+                    and (not area_limited or per_date_area.get(day, 0) < area_cap)
+                    and not _gap_violated(blocked, day, gap)
+                ]
+                viable_cache[asset_id] = viable
             if not viable:
                 continue
             rank = (
@@ -308,11 +378,24 @@ def _attempt_placement(
         visit = Visit(best_asset, chosen)
         placed.append(visit)
         gap_source.append(visit)
+        insort(gap_dates.setdefault(best_asset, []), chosen)
         per_date[chosen] = per_date.get(chosen, 0) + 1
         per_asset[best_asset] = per_asset.get(best_asset, 0) + 1
-        if roster[best_asset].asset_type is AssetType.AREA:
+        if is_area[best_asset]:
             per_date_area[chosen] = per_date_area.get(chosen, 0) + 1
         remaining[best_asset] -= 1
+
+        # Keep the cached option sets exact. The placed asset's own options are
+        # rebuilt on its next use, because its visit just closed the dates around it.
+        viable_cache.pop(best_asset, None)
+        if per_date[chosen] >= combined_cap:
+            for days in viable_cache.values():
+                _drop_date(days, chosen)
+        elif is_area[best_asset] and per_date_area[chosen] >= area_cap:
+            # Only area assets lose the date; the cap belongs to them alone.
+            for asset_id, days in viable_cache.items():
+                if is_area[asset_id]:
+                    _drop_date(days, chosen)
 
     return tuple(sorted(placed, key=lambda v: (v.visit_date, v.asset_id)))
 
