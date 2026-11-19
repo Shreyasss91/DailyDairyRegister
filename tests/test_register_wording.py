@@ -42,6 +42,8 @@ from dailyworkreg.domain.wording import (
     LANGUAGE_ENGLISH,
     LANGUAGE_KANNADA,
     REASON_KIND_LABELS,
+    STAFF_ALLOCATION_NOTE,
+    STAFFED_NON_WORKING_KINDS,
     normalise_language,
 )
 from dailyworkreg.infrastructure.sqlite import calendar_records as cal
@@ -285,9 +287,11 @@ def test_a_general_holiday_says_it_is_a_holiday(db):
 
 
 def test_every_kind_a_date_can_carry_has_its_own_word():
+    # The office calls the Second and Fourth Saturdays holidays, not weekly offs: the
+    # section is closed by rule on those days, and the register uses the office's word.
     assert REASON_KIND_LABELS["sunday"] == "Weekly off"
-    assert REASON_KIND_LABELS["second_saturday"] == "Weekly off"
-    assert REASON_KIND_LABELS["fourth_saturday"] == "Weekly off"
+    assert REASON_KIND_LABELS["second_saturday"] == "Holiday"
+    assert REASON_KIND_LABELS["fourth_saturday"] == "Holiday"
     assert REASON_KIND_LABELS["general_holiday"] == "Holiday"
     assert REASON_KIND_LABELS["leave"] == "Leave"
     assert REASON_KIND_LABELS["other_non_working"] == "Non-working day"
@@ -311,7 +315,73 @@ def test_a_reason_carried_twice_is_printed_once():
         entries=(),
         locked=False,
     )
-    assert day.activity_text == "Sunday (Weekly off)"
+    assert day.activity_text == (
+        "Sunday (Weekly off), "
+        "Allocated operational and maintenance works to be done on that day to staff"
+    )
+
+
+# --- what a closed day carries --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["sunday", "second_saturday", "fourth_saturday", "other_weekly_off", "general_holiday"],
+)
+def test_a_closed_day_records_what_was_allocated_to_the_staff(kind):
+    from dailyworkreg.application.export import DocumentDay
+
+    day = DocumentDay(
+        day="2026-11-10",
+        weekday="Tuesday",
+        kind=kind,
+        kind_label=kind,
+        working=False,
+        reasons_en=("Reason",),
+        reasons_kn=(),
+        warnings=(),
+        visits=(),
+        entries=(),
+        locked=False,
+    )
+    assert STAFF_ALLOCATION_NOTE in day.activity_text
+    # The reason stays first: what the day is, then what was done on it.
+    assert day.activity_text.startswith("Reason (")
+
+
+@pytest.mark.parametrize("kind", ["leave", "other_non_working"])
+def test_an_absence_and_an_unexplained_closure_carry_no_allocation_line(kind):
+    from dailyworkreg.application.export import DocumentDay
+
+    day = DocumentDay(
+        day="2026-11-10",
+        weekday="Tuesday",
+        kind=kind,
+        kind_label=kind,
+        working=False,
+        reasons_en=("Reason",),
+        reasons_kn=(),
+        warnings=(),
+        visits=(),
+        entries=(),
+        locked=False,
+    )
+    assert day.activity_text == "Reason (Leave)" or "Allocated" not in day.activity_text
+
+
+def test_a_working_day_carries_no_allocation_line(db):
+    document = export.document(db, issued(db))
+    for day in document.days:
+        if day.working:
+            assert STAFF_ALLOCATION_NOTE not in day.activity_text
+
+
+def test_every_closed_date_of_an_issued_month_carries_the_line(db):
+    document = export.document(db, issued(db))
+    closed = [day for day in document.days if not day.working and day.kind in STAFFED_NON_WORKING_KINDS]
+    assert closed, "the fixture month is meant to hold a weekly off and a holiday"
+    for day in closed:
+        assert day.activity_text.endswith(STAFF_ALLOCATION_NOTE)
 
 
 # --- visits ---------------------------------------------------------------
@@ -405,7 +475,11 @@ def test_the_workbook_carries_the_narrative_and_the_classified_reason(db):
         cells[day] = str(row[2] or "")
 
     sunday = next(day for day in document.days if day.kind == "sunday")
-    assert cells[sunday.day] == "Sunday (Weekly off)"
+    # The workbook and the page carry one projection, so a closed day reads the same in
+    # both: what the day is, then what was allocated to the staff for it.
+    assert cells[sunday.day] == sunday.activity_text
+    assert cells[sunday.day].startswith("Sunday (Weekly off)")
+    assert STAFF_ALLOCATION_NOTE in cells[sunday.day]
     assert "Calendar:" not in " ".join(cells.values())
     for day in document.days:
         if day.visits:

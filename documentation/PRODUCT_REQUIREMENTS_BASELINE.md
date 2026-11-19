@@ -1231,11 +1231,23 @@ value cannot be spelled one way when it is stored and another when it is compare
   register as though its content had changed.
 - **A non-working date says what it is.** The stored reason is kept and the kind of day is
   written beside it in words a reader acts on: `Sunday (Weekly off)`,
-  `Second Saturday (Weekly off)`, `Holiday - <name> (Holiday)`, `<leave type> (Leave)`.
+  `Second Saturday (Holiday)`, `Fourth Saturday (Holiday)`,
+  `Holiday - <name> (Holiday)`, `<leave type> (Leave)`. The Second and Fourth Saturdays are
+  recorded as **holidays**, which is the office's own usage: the section is closed by rule
+  on those days, and the register uses the word the office uses for a day it does not work.
   The old `Calendar:` prefix is gone, because a bare "Sunday" beside a date reads as the
   date rather than as the reason it carries no work. A kind with no label carries no
   parenthetical rather than a guessed one, and a reason carried in both lists is printed
   once.
+- **A closed day the office staffed records what was allocated.** A Sunday, a Second or
+  Fourth Saturday, any other weekly off and a General Holiday carry the office's own line
+  after their reasons: `Allocated operational and maintenance works to be done on that day
+  to staff`. A leave day and a closure that is neither a holiday nor a weekly off do not:
+  those are an individual's absence and an unexplained closure, not a closed section that
+  still carried work. Like a visit's narrative the line is English in every language,
+  because no translation is recorded for it, and an untranslated narrative prints in
+  English rather than as a blank line. It is presentation only - nothing is stored on the
+  date and no obligation is created by it.
 - **A field visit reads as work done.** An asset name alone says where somebody went, not
   what the register is a record of, so a visit is written as a sentence naming the checks
   for the kind of asset the revision's own roster recorded: `Inspected <name> for
@@ -1398,11 +1410,12 @@ answers is "what did the office approve", not "what would the platform arrange t
 - Each date is reduced to one Activity cell, built by `DocumentDay.activity_text` in
   `application/export.py`, and that one value is what both the workbook and the page
   render. The order is fixed: field visits, then activities and other entries, then the
-  calendar reasons, then the recorded warnings; each group keeps its stored order and the
-  separator is a comma and a space. A field visit is printed as its name and its asset
-  identifier, because a visit without the installation it names is not traceable; a stored
-  Kannada name or title is printed beside its English text and is never translated,
-  transliterated or dropped. A calendar reason is labelled `Calendar:` and a warning
+  calendar reasons, then the line a staffed closed day carries, then the recorded warnings;
+  each group keeps its stored order and the separator is a comma and a space. A field visit
+  is printed as a sentence naming the work, with the asset's name and - for a DTC only - its
+  roster number; a stored Kannada name or title is printed beside its English text and is
+  never translated, transliterated or dropped. A calendar reason carries its classification
+  once beside the first reason (`Sunday (Weekly off)`) and a warning is prefixed
   `Warning:` so neither can be mistaken for work performed. A date with nothing recorded
   reads `—`. Because the value is computed once and consumed twice, the two documents
   cannot disagree about what a date says; a test compares them row by row.
@@ -1447,8 +1460,13 @@ answers is "what did the office approve", not "what would the platform arrange t
   section and no per-visit or per-entry heading: a date's items are joined into its one
   cell. The column headings repeat on every content page, a row is kept off a page break
   where the engine allows, and a long activity description wraps rather than being clipped.
-- The identification is one page of its own, started by an explicit page break after the
-  last date row, so it can never begin halfway down the final page of dates. It carries the
+- The identification is one page of its own, so it can never begin halfway down the final
+  page of dates. It is a **sheet of its own** - a sibling of the register sheet in the
+  markup, not a section of it - so the break it relies on is the same one that starts a new
+  month, which browsers and the PDF engine both honour; a break declared on a block that
+  follows a table is not honoured reliably by the engine the PDF is written with. Only one
+  break is declared: a sheet break and a section break stacked would leave a blank page
+  between them. On screen it reads as a second page-like card. It carries the
   register, the month, the issued version and its standing, the revision closed, the
   finalisation id, when it was closed, the content fingerprint, the master version at
   finalisation, the month and allocator status, the correction relationship where one

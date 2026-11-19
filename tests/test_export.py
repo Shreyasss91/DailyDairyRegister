@@ -222,13 +222,23 @@ def printed_table(markup: str) -> str:
 #: rule instead of asking the code what it does.
 REASON_LABELS = {
     "sunday": "Weekly off",
-    "second_saturday": "Weekly off",
-    "fourth_saturday": "Weekly off",
+    "second_saturday": "Holiday",
+    "fourth_saturday": "Holiday",
     "other_weekly_off": "Weekly off",
     "general_holiday": "Holiday",
     "leave": "Leave",
     "other_non_working": "Non-working day",
 }
+
+#: The kinds of closed day the office staffs for maintenance work, and the line they carry.
+STAFFED_KINDS = {
+    "sunday",
+    "second_saturday",
+    "fourth_saturday",
+    "other_weekly_off",
+    "general_holiday",
+}
+STAFFED_NOTE = "Allocated operational and maintenance works to be done on that day to staff"
 
 #: What a visit says, by the kind of asset it named. Only the DTC entry carries the
 #: roster identifier: transformer work is filed and defended by that number.
@@ -297,6 +307,9 @@ def expected_activity(content: dict, row: dict) -> str:
     # reason rather than on every one of them.
     for position, reason in enumerate(kept):
         items.append(f"{reason} ({label})" if label and position == 0 else reason)
+    # A closed day the office staffed carries the line saying so, after its reasons.
+    if row["kind"] in STAFFED_KINDS:
+        items.append(STAFFED_NOTE)
     for constraint, detail in row["warnings"]:
         if constraint and detail:
             items.append(f"Warning: {detail} [{constraint}]")
@@ -748,16 +761,25 @@ def test_the_identification_page_starts_on_a_page_of_its_own(client, db):
     markup = client.get(f"/finalisations/{record['finalisation_id']}/print").text
     after_table = markup.split('<table class="register">')[1].split("</table>")[1]
     metadata = markup.split('<section class="metadata">')[1]
-    rules = markup.split("section.metadata {")
 
-    # The metadata follows the last date row rather than being mixed into the register,
-    # and the page break is explicit in both spellings the engines honour.
-    assert after_table.strip().startswith('<section class="metadata">')
+    # The identification is its own sheet, which is what puts it on a fresh page: the
+    # break that starts a new sheet is the rule every engine honours, whereas a break on a
+    # section that follows a table is not. So the sheet closes after the last date and a
+    # new one opens for the identification, and no separate section break is stacked on
+    # top of it - two breaks in a row would leave a blank page between them.
+    assert markup.split('<table class="register">')[1].split("</article>")[0].count(
+        '<article class="sheet identification">'
+    ) == 0
+    assert after_table.strip().startswith("</article>")
+    assert '<article class="sheet identification">' in after_table
+    assert after_table.index("</article>") < after_table.index(
+        '<article class="sheet identification">'
+    )
     assert metadata.index("Issued version identification") < metadata.index(
         record["finalisation_id"]
     )
-    assert any("break-before: page" in rule[: rule.find("}")] for rule in rules[1:])
-    assert any("page-break-before: always" in rule[: rule.find("}")] for rule in rules[1:])
+    assert ".sheet + .sheet { break-before: page; page-break-before: always; }" in markup
+    assert "section.metadata { break-before: page" not in markup
     # Metadata is on that page once, not repeated as a footer under the last dates.
     assert markup.count(record["fingerprint"]) == 1
     assert markup.count(record["finalisation_id"]) == 1

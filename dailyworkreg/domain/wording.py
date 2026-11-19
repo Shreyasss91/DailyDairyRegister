@@ -44,15 +44,40 @@ LANGUAGE_DESCRIPTIONS = {
 #: ("Weekly off", "Holiday"), because a bare "Sunday" beside a date reads as the date
 #: itself rather than as the reason it carries no work. A kind absent from this map carries
 #: no parenthetical rather than a guessed one.
+#:
+#: The Second and Fourth Saturdays are recorded here as **holidays**, which is the office's
+#: own usage: the section is closed by rule on those days, and the register says so in the
+#: word the office uses for a day the section does not work. The Sundays and any other
+#: recurring off day remain weekly offs.
 REASON_KIND_LABELS = {
     "sunday": "Weekly off",
-    "second_saturday": "Weekly off",
-    "fourth_saturday": "Weekly off",
+    "second_saturday": "Holiday",
+    "fourth_saturday": "Holiday",
     "other_weekly_off": "Weekly off",
     "general_holiday": "Holiday",
     "leave": "Leave",
     "other_non_working": "Non-working day",
 }
+
+#: The non-working kinds the office staffs for other work, so the register records what was
+#: allocated on a day the section was closed. Leave and a non-working day that is neither a
+#: holiday nor a weekly off are deliberately absent: those are an individual's absence and an
+#: unexplained closure, not a closed section that still carried maintenance work.
+STAFFED_NON_WORKING_KINDS = (
+    "sunday",
+    "second_saturday",
+    "fourth_saturday",
+    "other_weekly_off",
+    "general_holiday",
+)
+
+#: What a staffed non-working date carries beside its reason. The office's own sentence,
+#: spelled for a filed document. It is a narrative like a visit's, so it is written in the
+#: language the register is filed in only where a translation exists; none is recorded for
+#: it, and an untranslated narrative prints in English rather than as a blank line.
+STAFF_ALLOCATION_NOTE = (
+    "Allocated operational and maintenance works to be done on that day to staff"
+)
 
 
 def normalise_language(value: str | None) -> str:

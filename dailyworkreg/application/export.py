@@ -69,10 +69,10 @@ EMPTY_DAY_TEXT = "\u2014"
 #: The order in which one date's recorded items are written into its single Activity cell.
 #: Fixed rather than incidental, so the same issued version always reads the same way: the
 #: field visits that were scheduled first, then the activities and other entries recorded
-#: against the date, then the calendar reasons that explain the date, then the warnings the
-#: draft carried. Nothing is dropped for being unusual, and nothing is added for a date
-#: that recorded nothing.
-DISPLAY_ITEM_ORDER = ("visits", "entries", "reasons", "warnings")
+#: against the date, then the calendar reasons that explain the date, then what the office
+#: allocated on a closed day, then the warnings the draft carried. Nothing is dropped for
+#: being unusual, and nothing is added for a date that recorded nothing.
+DISPLAY_ITEM_ORDER = ("visits", "entries", "reasons", "staffed", "warnings")
 
 #: The separator between two items of one date, as the register prints them.
 ACTIVITY_SEPARATOR = ", "
@@ -90,6 +90,10 @@ LANGUAGE_LABELS = wording.LANGUAGE_DESCRIPTIONS
 #: How a calendar reason is classified in the register, shared with the generation
 #: request so the two cannot disagree about what a Sunday is.
 REASON_KIND_LABELS = wording.REASON_KIND_LABELS
+
+#: The non-working kinds that carry the office's staffing line, and the line itself.
+STAFFED_NON_WORKING_KINDS = wording.STAFFED_NON_WORKING_KINDS
+STAFF_ALLOCATION_NOTE = wording.STAFF_ALLOCATION_NOTE
 
 #: What a field visit says when it is written out. A visit is work, not an entry in a list,
 #: so the register names what was done at the installation rather than only the installation:
@@ -189,6 +193,11 @@ class DocumentDay:
                 label = REASON_KIND_LABELS.get(self.kind)
                 for position, reason in enumerate(self._printable_reasons()):
                     items.append(_reason_item(reason, label if position == 0 else None))
+            elif name == "staffed":
+                # A closed section still carries work, and the register says what was
+                # allocated to the staff for it. A day that is not closed carries nothing.
+                if self.kind in STAFFED_NON_WORKING_KINDS:
+                    items.append(STAFF_ALLOCATION_NOTE)
             elif name == "warnings":
                 items.extend(_warning_item(*warning) for warning in self.warnings)
         return tuple(item for item in items if item)
