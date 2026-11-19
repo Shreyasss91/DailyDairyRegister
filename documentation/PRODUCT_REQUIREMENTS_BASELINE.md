@@ -1277,25 +1277,37 @@ many regular activities it records. They are separate - an activity never consum
 visit slot - and both are now stated in the generation request, because a generation used
 to be refused by a number the operator could neither see nor change.
 
-- **Field visits per working day.** `field_visits_per_day` on the request, `maximum` on the
-  form, default 3 (the platform's earlier constant). `area_visits_per_day` states how much
-  of that limit may be area visits, default 2. Internally these are the validator's
+- **Total visits per working day.** `field_visits_per_day` on the request (the wire name is
+  kept so existing requests and snapshots keep working), **Total visits** on the form,
+  default 3 (the platform's earlier constant). It is the day's total: transformer, area and
+  feeder visits counted together. `area_visits_per_day` states how much of that total may be
+  area visits, default 2, and can never raise it. Internally these are the validator's
   `combined_daily_cap` and `area_daily_cap`; the request names them in the operator's words
   because a form that carried a constraint's identifier would be the browser restating a
   rule.
+- **The words say total, because "field visits" was read as excluding area visits.** The
+  label used to read *Field visits per working day*, and an office reading 2 and 2 took it
+  to mean two field visits **plus** up to two area visits, i.e. four a date. It has always
+  been the other way - the area share is a subset of the total - so a month needing 3.1
+  visits a date was refused while the operator believed the form allowed 4. The label now
+  says Total, the form states in one sentence that the area ceiling is inside it, and the
+  refusals say "the total limit is N per working day". The behaviour did not change; what
+  changed is that the number cannot be read as something it never was. The constraint
+  identifiers (`combined_daily_cap_exceeded`, `aggregate_combined_capacity_exceeded`) are
+  unchanged because they are stored in evidence and in snapshots.
 - **Why it had to move.** The caps were platform constants read from nowhere, although
   §10 already records them as configurable with those initial defaults. An office whose own
   masters ask for more monthly visits than `3 x working days` had a month refused with
   `aggregate_combined_capacity_exceeded` and no way to act on it. On the office's own files,
   113 DTCs over a ten-month cycle cannot be placed at three visits a day; at six the same
   request generates 543 visits over 224 working days.
-- **What is refused.** A field-visit limit below 1, a negative area share, and an area
-  share above the field-visit limit (`daily_visit_cap_invalid`), each in a sentence that
+- **What is refused.** A total-visit limit below 1, a negative area share, and an area
+  share above the total (`daily_visit_cap_invalid`), each in a sentence that
   says which number is wrong. Nothing is silently clamped, and an absent value keeps the
   platform default rather than becoming zero.
 - **A capacity refusal names the limit that would fit the month.**
   `aggregate_combined_capacity_exceeded` and `aggregate_area_capacity_exceeded` end with
-  "at least N field visits a working day would fit them", computed as the ceiling of demand
+  "at least N visits a working day would fit them", computed as the ceiling of demand
   over eligible dates, so the operator is told the number to enter instead of dividing the
   shortfall themselves.
 - **Both are recorded with the draft.** The caps live in the request snapshot's existing

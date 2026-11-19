@@ -27,7 +27,9 @@ from datetime import date
 from enum import Enum
 from typing import Iterable, Mapping, Sequence
 
-#: Default combined field-visit limit per working day (areas + DTCs + feeders).
+#: Default total visit limit per working day (areas + DTCs + feeders counted
+#: together). The identifier keeps the word "combined" because evidence and
+#: snapshots already carry it; the operator reads it as the day's total.
 DEFAULT_COMBINED_DAILY_CAP = 3
 
 #: Default area-only visits permitted on a single working day.
@@ -800,8 +802,9 @@ def _daily_cap_violations(
                 Violation(
                     constraint=C_COMBINED_DAILY_CAP,
                     message=(
-                        f"{combined} field visits on {day.isoformat()}; "
-                        f"the combined limit is {config.combined_daily_cap} per working day"
+                        f"{combined} visits on {day.isoformat()}; "
+                        f"the total limit is {config.combined_daily_cap} per working "
+                        "day, every kind of visit counted together"
                     ),
                     visit_date=day,
                     offending_dates=(day,),
@@ -1699,10 +1702,10 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                 detail=(
                     f"{total_demand} visits are required in the month "
                     f"({total_required} to place plus {fixed_total} committed), "
-                    f"exceeding the combined limit of "
+                    f"exceeding the total limit of "
                     f"{context.config.combined_daily_cap} per working day across "
                     f"{working_days} eligible dates; at least "
-                    f"{_per_day_needed(total_demand, working_days)} field visits a "
+                    f"{_per_day_needed(total_demand, working_days)} visits a "
                     "working day would fit them"
                 ),
                 limit=context.config.combined_daily_cap * working_days,

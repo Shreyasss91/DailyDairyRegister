@@ -1719,7 +1719,7 @@ def _spec(payload: dict[str, Any]) -> GenerationSpec:
         activities_per_day=_activities_per_day(payload.get("activities_per_day")),
         activities_per_day_min=_activities_per_day(payload.get("activities_per_day_min")),
         activities_per_day_max=_activities_per_day(payload.get("activities_per_day_max")),
-        combined_daily_cap=_daily_cap(payload.get("field_visits_per_day"), "field visits"),
+        combined_daily_cap=_daily_cap(payload.get("field_visits_per_day"), "total visits"),
         area_daily_cap=_daily_cap(payload.get("area_visits_per_day"), "area visits"),
         entry_language=_entry_language(payload.get("entry_language")),
         dtc_target=payload.get("dtc_target"),
@@ -1750,14 +1750,17 @@ def _activities_per_day(value: Any) -> int | None:
 
 
 def _daily_cap(value: Any, what: str) -> int | None:
-    """A per-working-day field-visit limit, or ``None`` to keep the platform default.
+    """A per-working-day visit limit, or ``None`` to keep the platform default.
 
     Absent means "this request did not decide", which is the platform's own default and
     not zero: a caller that predates the limit must keep generating the register it did.
 
-    The request names it in the operator's words - ``field_visits_per_day`` and
-    ``area_visits_per_day`` - because the validator's own name for it is a constraint,
-    and a form that carried a constraint's name would be the browser restating a rule.
+    ``field_visits_per_day`` in the payload is the day's **total**, every kind of visit
+    counted together, not the visits that are not area visits; ``area_visits_per_day`` says
+    how much of that total may be area visits and can never raise it. The wire name is kept
+    because requests and snapshots already carry it, while the words the operator reads
+    (the form, the refusals, the baseline) call it the total, which is what it is: a form
+    labelled "field visits" read as though area visits came on top of the number.
     """
 
     if value is None or value == "":

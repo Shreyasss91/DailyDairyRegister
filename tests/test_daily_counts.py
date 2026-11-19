@@ -4,8 +4,11 @@ The office asked for *at least* three activities a working day. A minimum is a f
 so the daily count became a range whose two ends are both hard: no working day falls
 below the minimum, none rises above the maximum, and the day's own count is drawn
 between them. The number that refused a month - "71 visits are required ... exceeding
-the combined limit of 3 per working day" - was a field-visit ceiling the operator could
-not see, let alone change, so both halves of that number are now stated in the request.
+the total limit of 3 per working day" - was a visit ceiling the operator could not see,
+let alone change, so both halves of that number are now stated in the request. The
+first of the two is the whole of a date's work, not the part of it that is not an area
+visit: it is labelled Total because reading it as "field visits, plus area visits" is
+how an office came to believe the form allowed twice what it did.
 
 These tests hold the contract at the layer that owns each part: the allocator for the
 range, the request builder for the ceiling, the snapshot for what a stored draft
@@ -330,10 +333,10 @@ def test_the_month_that_was_refused_generates_once_the_ceiling_is_raised(db):
     assert refused.status == DraftStatus.INFEASIBLE
     evidence = refused.months[0].evidence[0]
     assert evidence.constraint == C_AGG_COMBINED_CAPACITY
-    assert "exceeding the combined limit of 1 per working day" in evidence.detail
+    assert "exceeding the total limit of 1 per working day" in evidence.detail
     # The refusal names the ceiling that would work, so the operator is not left to
     # divide the shortfall by the working days themselves.
-    assert "at least 3 field visits a working day would fit them" in evidence.detail
+    assert "at least 3 visits a working day would fit them" in evidence.detail
 
     raised = generate_draft(
         prepare_generation(db, spec(combined_daily_cap=3, area_daily_cap=2)).request
@@ -609,7 +612,11 @@ def test_the_generate_form_offers_the_two_visit_ceilings():
     html = page()
     assert 'id="gen-visit-cap"' in html
     assert 'id="gen-area-cap"' in html
-    assert "Field visits per working day" in html
+    assert "Total visits per working day" in html
+    assert "Field visits per working day" not in html
+    # The form states in one sentence that the area ceiling lives inside the total,
+    # because a label reading "field visits" was taken to exclude area visits.
+    assert "counted together" in html
     assert "Area visits per working day" in html
 
 

@@ -147,6 +147,11 @@
         maximum the ceiling it never exceeds, so the day's own count is drawn between
         them. Set both to 0 to leave the days to field visits only.
       </p>
+      <p class="muted">
+        The two visit ceilings bound one date. The first is the total the day may hold -
+        transformer, area and feeder visits counted together - and the second says how many
+        of that total may be area visits, so it can never raise the first.
+      </p>
       <div class="form">
         <label>From <input type="date" id="gen-start" /></label>
         <label>To <input type="date" id="gen-end" /></label>
@@ -166,7 +171,7 @@
         <label>Regular activities per working day - maximum
           <input type="number" id="gen-activities-max" value="5" min="0" step="1" />
         </label>
-        <label>Field visits per working day - maximum
+        <label>Total visits per working day - maximum
           <input type="number" id="gen-visit-cap" value="3" min="1" step="1" />
         </label>
         <label>Area visits per working day - maximum

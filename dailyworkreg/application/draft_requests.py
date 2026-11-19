@@ -352,7 +352,12 @@ def _daily_activity_range(spec: GenerationSpec) -> tuple[int, int]:
 
 
 def _daily_visit_caps(spec: GenerationSpec) -> tuple[int, int]:
-    """The field-visit ceiling per working day and the area share of it.
+    """The day's total visit ceiling and the area share of it.
+
+    The first number is the whole of what a date may hold - transformer, area and feeder
+    visits together - and the second says how much of that total may be area visits. The
+    area share is the smaller of two bounds on one date's work, never an allowance beside
+    it, which is why it may not exceed the total.
 
     Left unset they are the platform defaults, because a request that predates the
     choice must keep the register it used to get. They are read here rather than inside
@@ -372,7 +377,7 @@ def _daily_visit_caps(spec: GenerationSpec) -> tuple[int, int]:
         raise GenerationInputError(
             C_DAILY_VISIT_CAP_INVALID,
             (
-                "the field visits per working day must be at least 1; a register "
+                "the total visits per working day must be at least 1; a register "
                 "that may hold no visit at all cannot record the month's obligations"
             ),
         )
@@ -385,7 +390,7 @@ def _daily_visit_caps(spec: GenerationSpec) -> tuple[int, int]:
         raise GenerationInputError(
             C_DAILY_VISIT_CAP_INVALID,
             (
-                f"the area visits per working day ({area}) cannot exceed the field "
+                f"the area visits per working day ({area}) cannot exceed the total "
                 f"visits per working day ({combined}); the area share is part of that "
                 "limit, not a second allowance"
             ),
