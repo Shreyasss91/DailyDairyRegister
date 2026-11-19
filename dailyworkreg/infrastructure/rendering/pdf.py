@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator, Mapping
+from io import BytesIO
 from typing import Any
 
 C_PDF_RENDERER_UNAVAILABLE = "pdf_renderer_unavailable"
@@ -118,3 +119,116 @@ def render_document(html: str) -> bytes:
     """Render one document to a PDF."""
 
     return render_documents({"document": html})["document"]
+
+
+# --- pages, rather than whole documents -------------------------------------
+#
+# Two callers need the same two page operations: the print command in
+# ``interfaces/print_pdfs.py``, which works over a folder of files the operator
+# exported earlier, and the print document route on ``interfaces/api.py``, which
+# works over documents rendered in this process. Keeping the arithmetic here is
+# what stops the two from disagreeing about which page is the identification page.
+
+_MISSING_PYPFOR_PAGES = (
+    "reading and joining PDF pages needs the 'pypdf' package, which this "
+    "installation does not have; install it with 'python -m pip install pypdf'"
+)
+
+
+def _pypdf():
+    """Import pypdf, or refuse in the words that name the step."""
+
+    try:
+        from pypdf import PdfReader, PdfWriter
+    except ImportError as missing:  # pragma: no cover - depends on the installation
+        raise RenderError(C_PDF_RENDERER_UNAVAILABLE, _MISSING_PYPFOR_PAGES) from missing
+    return PdfReader, PdfWriter
+
+
+def identification_page_count() -> int:
+    """How many pages at the end of a rendered month are its identification page.
+
+    One, and the number is named here rather than written as ``-1`` in two places.
+    ``application/export.py`` starts the identification on a fresh page after the last
+    date row, so position is the contract and the page is never recognised by reading
+    its text - a month whose wording differs would otherwise keep its hashes attached
+    to the printed register.
+    """
+
+    return 1
+
+
+def count_pages(pdf: bytes) -> int:
+    """How many pages a PDF holds."""
+
+    reader_class, _ = _pypdf()
+    return len(reader_class(BytesIO(pdf)).pages)
+
+
+def without_identification_page(pdf: bytes) -> bytes:
+    """One rendered month with its issued-version identification page left out.
+
+    Args:
+        pdf: A rendered month, identification page last.
+
+    Returns:
+        The same document without that page.
+
+    Raises:
+        RenderError: The document has no page besides its identification page, so
+            leaving it out would leave a month that prints as nothing.
+    """
+
+    reader_class, writer_class = _pypdf()
+    reader = reader_class(BytesIO(pdf))
+    keep = len(reader.pages) - identification_page_count()
+
+    if keep < 1:
+        raise RenderError(
+            C_PDF_RENDERING_FAILED,
+            (
+                "this register holds no page besides its issued-version "
+                "identification page, so it cannot be printed as a register"
+            ),
+        )
+
+    writer = writer_class()
+    for page in reader.pages[:keep]:
+        writer.add_page(page)
+    return _written(writer)
+
+
+def join_pdfs(pdfs: list[bytes]) -> bytes:
+    """Concatenate PDFs, in the order given.
+
+    Args:
+        pdfs: The documents to join, already in the order they should read.
+
+    Returns:
+        One PDF holding every page of every document.
+
+    Raises:
+        RenderError: No document was given, because an empty download that looks
+            like a document is worse than a refusal.
+    """
+
+    if not pdfs:
+        raise RenderError(
+            C_PDF_RENDERING_FAILED,
+            "there is no register to join into one document",
+        )
+
+    reader_class, writer_class = _pypdf()
+    writer = writer_class()
+    for pdf in pdfs:
+        for page in reader_class(BytesIO(pdf)).pages:
+            writer.add_page(page)
+    return _written(writer)
+
+
+def _written(writer: Any) -> bytes:
+    """Serialise a writer to bytes."""
+
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()

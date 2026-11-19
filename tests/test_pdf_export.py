@@ -495,6 +495,8 @@ def test_the_page_offers_the_pdf_and_excel_packages_side_by_side():
 
     assert "exports/pdf.zip" in script
     assert "exports/excel.zip" in script
+    assert "exports/print.pdf" in script
+    assert "Single PDF with no metadata" in script
     assert "Download PDFs — all months" in script
     assert "Download Excel — all months" in script
     # The mixed package stays, so an older bookmark is not broken by the new buttons.

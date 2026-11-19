@@ -63,7 +63,10 @@ The identification page is not recognised by reading its text. A month whose
 wording differs would then be merged with its hashes still attached, and the
 mistake would be discovered at the press. It is the last page by construction -
 ``application.export`` starts it on a fresh page after the final date row - so
-position is the contract this tool relies on.
+position is the contract this tool relies on. The two page operations themselves
+live in ``infrastructure/rendering/pdf.py``, shared with the print document the
+application serves from ``/api/registers/{id}/exports/print.pdf``, so the command
+and the button cannot disagree about which page is left out.
 """
 
 from __future__ import annotations
@@ -73,6 +76,9 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from ..infrastructure import rendering
+from ..infrastructure.rendering.pdf import RenderError
 
 # The exported names carry the month, and that is the only ordering information
 # this tool has. It is also what makes the output file name self-describing.
@@ -93,8 +99,6 @@ MISSING_ENGINE_SENTENCE = (
     "Writing and joining PDFs needs the 'pypdf' package, which this installation does not "
     "have. Install it with: python -m pip install pypdf"
 )
-
-
 @dataclass
 class SkippedFile:
     """A source PDF that could not contribute a page, and why."""
@@ -170,13 +174,9 @@ def strip_and_merge(source: Path, report=print) -> PrintResult:
     Raises:
         FileNotFoundError: The folder does not exist.
         NotADirectoryError: The path given is a file.
-        RuntimeError: ``pypdf`` is not installed.
+        RenderError: ``pypdf`` is not installed, or a file holds no page besides
+            its identification page.
     """
-    try:
-        from pypdf import PdfReader, PdfWriter
-    except ImportError as error:  # pragma: no cover - depends on the install
-        raise RuntimeError(MISSING_ENGINE_SENTENCE) from error
-
     if not source.exists():
         raise FileNotFoundError(f"There is no folder at {source}")
     if not source.is_dir():
@@ -191,33 +191,37 @@ def strip_and_merge(source: Path, report=print) -> PrintResult:
         raise FileNotFoundError(f"There is no PDF to merge in {source}")
 
     result = PrintResult()
-    merged = PdfWriter()
+    kept: list[bytes] = []
 
     for path in sources:
-        reader = PdfReader(path)
-        page_count = len(reader.pages)
-        result.pages_before += page_count
+        body = path.read_bytes()
+        page_count = rendering.count_pages(body)
 
-        if page_count < 2:
-            reason = f"only {page_count} page, so its identification page is all it has"
+        # Answered from the page count, not from a failed call: a file whose only
+        # page is its identification page would print as nothing of that month, so
+        # it is named here instead of being merged as an empty contribution.
+        if page_count <= rendering.identification_page_count():
+            reason = "only its identification page, so nothing of that month would print"
             result.skipped.append(SkippedFile(name=path.name, reason=reason))
             report(f"SKIP  {path.name}: {reason}")
             continue
 
-        for page in reader.pages[:-1]:
-            merged.add_page(page)
+        result.pages_before += page_count
+        kept.append(rendering.without_identification_page(body))
         result.files_merged += 1
         report(f"      {path.name}: {page_count} -> {page_count - 1} page(s)")
 
-    if result.files_merged == 0:
-        raise FileNotFoundError(f"No PDF in {source} has a page left once its last one is dropped")
+    if not kept:
+        raise FileNotFoundError(
+            f"No PDF in {source} has a page left once its last one is dropped"
+        )
 
     destination.mkdir(parents=True, exist_ok=True)
     result.output_path = destination / output_name_for(sources)
-    result.pages_merged = len(merged.pages)
+    joined = rendering.join_pdfs(kept)
+    result.pages_merged = rendering.count_pages(joined)
 
-    with result.output_path.open("wb") as handle:
-        merged.write(handle)
+    result.output_path.write_bytes(joined)
 
     return result
 
@@ -256,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     except (FileNotFoundError, NotADirectoryError) as error:
         print(f"Nothing was written. {error}", file=sys.stderr)
         return 2
-    except RuntimeError as error:
+    except RenderError as error:
         print(f"Nothing was written. {error}", file=sys.stderr)
         return 1
 

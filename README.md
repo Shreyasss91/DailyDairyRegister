@@ -52,9 +52,18 @@ The declared version ranges are compatibility constraints, not an exact dependen
 ## Preparing the printed registers
 
 An issued month downloads as a PDF that ends with an issued-version
-identification page. To print a run of months as one document, put those PDFs in
-one folder and point the print command at that folder. It drops each file's last
-page and joins the rest in file-name order:
+identification page. That page is the archive's proof of what was issued and it
+stays in the per-month download and in the PDF package, but it is not part of the
+register the office prints, so there are two ways to get a document without it.
+
+The month panel's `Single PDF with no metadata` writes one PDF holding every
+issued month, in month order, with each month's identification page left out. It
+needs no folder, no command and no second step - one download, straight from the
+browser.
+
+To prepare months that were already exported, put those PDFs in one folder and
+point the print command at that folder. It drops each file's last page and joins
+the rest in file-name order:
 
 ```powershell
 .\.venv\Scripts\dailyworkreg-print.exe "C:\path\to\print\before"
@@ -66,3 +75,7 @@ for example - and the folder that was read is left exactly as it was. A PDF of a
 single page is named rather than merged, because dropping its last page would
 leave nothing of that month. `python -m dailyworkreg.interfaces.print_pdfs <folder>`
 runs the same command without the launcher.
+
+Both leave out the identification page by the same rule, which lives in one place
+(`dailyworkreg/infrastructure/rendering/pdf.py`), so a month that is pressed from
+the button and the same month pressed from the folder produce the same register.

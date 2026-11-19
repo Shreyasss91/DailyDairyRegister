@@ -85,6 +85,37 @@ def pdf_filename(document: RegisterDocument) -> str:
     return xlsx_filename(document).removesuffix(".xlsx") + ".pdf"
 
 
+def print_range_filename(documents: list[RegisterDocument]) -> str:
+    """The name for one document holding several issued months in reading order.
+
+    Named after the months it holds rather than after the register, so a file that
+    arrives in a downloads folder says which run of registers it is without being
+    opened. One month reads as itself rather than as a range of one.
+
+    Args:
+        documents: The months the document holds, in the order they are printed.
+
+    Returns:
+        A filename safe on Windows: no character outside a month's digits and
+        hyphens reaches it, for the same reason :func:`xlsx_filename` is guarded.
+    """
+
+    months = [_safe_month(document) for document in documents]
+    if len(months) == 1:
+        return f"daily-dairy-register-{months[0]}.pdf"
+    return f"daily-dairy-register-{months[0]}-to-{months[-1]}.pdf"
+
+
+def _safe_month(document: RegisterDocument) -> str:
+    """One document's month reduced to the characters a filename may carry."""
+
+    return "".join(
+        character
+        for character in document.month
+        if character.isdigit() or character == "-"
+    )
+
+
 def workbook_bytes(document: RegisterDocument) -> bytes:
     """The workbook for one issued version, as bytes.
 

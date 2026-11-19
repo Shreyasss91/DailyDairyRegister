@@ -1874,10 +1874,18 @@ async function renderMonths(registerId, runId) {
   target.append(await bulkFinalisationPanel(registerId, runId));
   const issuedCount = months.filter((month) => month.latest_finalisation_id).length;
   if (issuedCount > 0) {
-    // Three downloads, each naming exactly what it contains. A package that promises
+    // Four downloads, each naming exactly what it contains. A package that promises
     // PDFs and holds an HTML file sends the operator looking for a fault in their own
-    // reader, so the printed and the spreadsheet packages are separate buttons.
+    // reader, so the printed and the spreadsheet packages are separate buttons, and the
+    // one document the office prints is its own button rather than a package of one file
+    // per month.
     target.append(el('div', { class: 'actions export-actions' }, [
+      el('a', {
+        class: 'button button-primary',
+        href: `/api/registers/${registerId}/exports/print.pdf`,
+        download: '',
+        text: `Single PDF with no metadata (${issuedCount})`,
+      }),
       el('a', {
         class: 'button button-primary',
         href: `/api/registers/${registerId}/exports/pdf.zip`,
@@ -1899,9 +1907,12 @@ async function renderMonths(registerId, runId) {
     ]));
     target.append(el('p', {
       class: 'muted',
-      text: 'The PDF package holds one PDF for each issued month, laid out on this '
-        + 'computer. The Excel package holds one workbook for each. The third holds the '
-        + 'workbooks plus one combined print-ready page and is kept for older links.',
+      text: 'The single PDF holds every issued month in month order, joined into one '
+        + 'document with each month\'s issued-version identification page left out, so it '
+        + 'prints as the register alone. The PDF package holds one PDF for each issued '
+        + 'month, identification page included. The Excel package holds one workbook for '
+        + 'each. The last holds the workbooks plus one combined print-ready page and is '
+        + 'kept for older links.',
     }));
   }
   months.forEach((month) => target.append(monthCard(registerId, runId, month)));

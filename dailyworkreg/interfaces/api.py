@@ -1476,6 +1476,49 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         )
         return _zip_response(entries, "daily-dairy-register-issued-months-pdf.zip")
 
+    @app.get("/api/registers/{register_id}/exports/print.pdf")
+    def export_every_issued_month_as_one_printable_pdf(
+        register_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> Response:
+        """Every issued month as one PDF, with no identification page in it.
+
+        This is the file the office prints and files. Each month is laid out here as
+        it always is, its issued-version identification page - the version, the
+        fingerprint, the finalisation id and the evidence - is left out of this copy,
+        and the rest is joined in month order. The identification page is unchanged in
+        the archive: the single-month download and the PDF package still carry it.
+        """
+
+        _, issued = _issued_months(db, register_id)
+        issued_documents = [
+            documents_source.document(db, item["latest_finalisation_id"])
+            for item in issued
+        ]
+        template = templates.env.get_template("print_register.html")
+        rendered = rendering.render_documents(
+            {
+                documents.pdf_filename(document): template.render(document=document)
+                for document in issued_documents
+            }
+        )
+
+        # Month order, and one engine for the whole download: render_documents
+        # answers in the order it was given, and month_lifecycle lists months
+        # chronologically, so the joined document reads as the register does.
+        kept = [
+            rendering.without_identification_page(body) for body in rendered.values()
+        ]
+        return Response(
+            content=rendering.join_pdfs(kept),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": (
+                    "attachment; filename="
+                    f'"{documents.print_range_filename(issued_documents)}"'
+                )
+            },
+        )
+
     @app.get("/api/registers/{register_id}/exports/excel.zip")
     def export_every_issued_month_as_excel(
         register_id: str, db: sqlite3.Connection = Depends(get_db)
