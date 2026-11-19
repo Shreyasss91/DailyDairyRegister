@@ -331,8 +331,11 @@ class DraftRequest:
         activities: The approved activity catalogue the generator places on working
             days, in the catalogue's own order. Empty is allowed: a request without
             a catalogue generates visits only.
-        activities_per_day: How many distinct activities every eligible working day
-            records. ``0`` leaves the days to visits alone.
+        activities_per_day_min: The floor of the regular-activity count on every
+            eligible working day. A day never records fewer.
+        activities_per_day_max: The ceiling of that count. A day never records more,
+            and between the two ends the day's own count is drawn from the seed.
+            ``0`` for both leaves the days to visits alone.
         entry_language: Which language the register is written in - ``en``, ``kn`` or
             ``both``. It is recorded with the draft so an issued month keeps the
             language it was approved in, and it changes presentation only: the same
@@ -358,7 +361,8 @@ class DraftRequest:
     fixed_by_month: Mapping[MonthKey, tuple[Visit, ...]] = field(default_factory=dict)
     entries: tuple[DayEntry, ...] = ()
     activities: tuple[ActivitySpec, ...] = ()
-    activities_per_day: int = 0
+    activities_per_day_min: int = 0
+    activities_per_day_max: int = 0
     entry_language: str = DEFAULT_ENTRY_LANGUAGE
     cycle: CoverageCycle | None = None
     weights: DtcWeights | None = None
@@ -1081,7 +1085,8 @@ def _activity_entries(
     The placement rule lives in :mod:`dailyworkreg.domain.activities`, which is free
     of I/O and of this module's projection concerns. This function only turns the
     placements into day entries, and refuses - rather than quietly under-filling a
-    day - when the catalogue cannot meet the count the operator asked for.
+    day or over-filling it - when the catalogue cannot meet the count the operator
+    asked for.
 
     A working day is the caller's own decision, already projected into the calendar:
     a Sunday, a General Holiday or a leave day carries no activity, because the office
@@ -1089,8 +1094,9 @@ def _activity_entries(
     text on the same day is not duplicated.
     """
 
-    per_day = request.activities_per_day
-    if per_day <= 0:
+    low = request.activities_per_day_min
+    high = request.activities_per_day_max
+    if high <= 0:
         return ()
 
     eligible = [day for day in sorted(days) if days[day].is_working_day]
@@ -1098,16 +1104,17 @@ def _activity_entries(
         placements = allocate_activities(
             days=eligible,
             activities=request.activities,
-            per_day=per_day,
+            per_day_min=low,
+            per_day_max=high,
             seed=request.seed,
         )
     except ActivityInfeasible as error:
         raise InputError(
             C_ACTIVITY_ALLOCATION_INFEASIBLE,
             (
-                f"{per_day} activities a day cannot be placed: {error.detail}. "
-                "Lower the activities-per-day count, widen the catalogue, or extend "
-                "the selected range"
+                f"between {low} and {high} activities a day cannot be placed: "
+                f"{error.detail}. Lower the daily minimum or maximum, widen the "
+                "catalogue, or extend the selected range"
             ),
         ) from error
 

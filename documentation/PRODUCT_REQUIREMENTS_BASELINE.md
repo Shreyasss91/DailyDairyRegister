@@ -1154,31 +1154,44 @@ register by generation, so a generated month records regular work and not only f
 visits. The rule lives in `dailyworkreg/domain/activities.py`, which performs no I/O and
 reads no clock.
 
-- **The count is the operator's, and it is configurable.** The generation request carries
-  `activities_per_day`; the generate form starts at 3, which is the office's own "at least
-  three activities a day". The count is exact rather than a floor: a day carries that many
-  distinct activities. `0` leaves every day to field visits, and a request that does not
-  mention the field at all records no activities - it does not inherit a platform default,
-  so an older caller keeps exactly the draft it used to get.
-- **Hard constraints.** The count per eligible working day; the catalogue's monthly
-  maximum per calendar month; its monthly minimum per calendar month; its minimum repeat
-  gap, counted in calendar days and carried across month boundaries; its weekday
+- **The count is the operator's, and it is a range with two hard ends.** The generation
+  request carries `activities_per_day_min` and `activities_per_day_max` (an earlier caller's
+  single `activities_per_day` is the range whose two ends are equal, and still produces the
+  flat month it used to). The generate form starts at a minimum of 3 - the office's own "at
+  least three activities a day" - and a maximum of 5. No eligible working day falls below
+  the minimum, none rises above the maximum, and each day's own count is drawn between them,
+  so a month varies instead of repeating one number. `0` for both leaves every day to field
+  visits, and a request that does not mention the field at all records no activities - it
+  does not inherit a platform default, so an older caller keeps exactly the draft it used to
+  get.
+- **The minimum is a floor and the maximum is a ceiling, and neither is a target.** A day
+  drawn at the floor still takes work the catalogue still owes for that month, by borrowing
+  its own headroom up to the ceiling; a day can never be filled past the ceiling to satisfy
+  an obligation, and a ceiling wider than the catalogue is simply drawn under rather than
+  demanded. What a day records is therefore between the two ends, and always at least the
+  floor.
+- **Hard constraints.** The floor and the ceiling per eligible working day; the catalogue's
+  monthly maximum per calendar month; its monthly minimum per calendar month; its minimum
+  repeat gap, counted in calendar days and carried across month boundaries; its weekday
   restriction; and never two placements of one activity on one day.
 - **A weight is a preference and nothing more.** It orders the choice among the
   activities the hard constraints already permit. It cannot raise a maximum, shorten a
   gap, open a restricted weekday or fill a day that has no permitted candidate.
 - **A constraint that cannot hold is refused, never relaxed.** The refusal names the
   constraint and the month, and the day where one is responsible:
-  `activity_placement_has_no_candidate` (nothing to place, or fewer activities than the
-  count requires), `activity_placement_cannot_fill_a_day`,
+  `activity_placement_has_no_candidate` (nothing to place, or a floor above the number of
+  activities the catalogue holds), `activity_placement_cannot_fill_a_day`,
+  `activity_daily_range_invalid` (a minimum above the maximum, or a negative count),
   `activity_monthly_minimum_unsatisfiable`, `activity_monthly_maximum_below_minimum`,
   `activity_weekday_mask_unreadable` and `activity_limits_inconsistent` (one activity
-  recorded twice). Generation itself refuses with
-  `activity_allocation_infeasible` and a sentence asking for a lower count, a wider
-  catalogue or a longer range.
-- **Deterministic.** The draw is seeded from the generation seed and the month and
-  candidates are ordered by activity id, so the same request produces the same month and a
-  new seed produces a different, equally valid one.
+  recorded twice). Generation itself refuses with `activity_allocation_infeasible` and a
+  sentence naming both ends of the range and asking for a lower floor, a wider catalogue or
+  a longer range.
+- **Deterministic, and the shape of the month is separate from its content.** The draw is
+  seeded from the generation seed and the month and candidates are ordered by activity id,
+  so the same request produces the same month and a new seed produces a different, equally
+  valid one. The daily counts are drawn from their own stream, so editing the catalogue's
+  weights changes which activities a day holds without also changing how many it holds.
 - **A placement is a day entry.** It carries `kind=activity`, the catalogue's English
   description and its Kannada text unchanged, and `provenance=generated`, with the stable
   identifier `ACT-<date>-<activity id>`. A non-working day carries none: a Sunday, a
@@ -1234,17 +1247,48 @@ value cannot be spelled one way when it is stored and another when it is compare
   the neutral sentence. Reissuing it in another wording is a correction revision
   generated under this contract, not an act the platform performs on a closed month.
 
-### 24.10 What is not modelled
+### 24.10 The two daily numbers the generate tab sets (as built)
+
+A working day carries two independent quantities: how much field work it holds, and how
+many regular activities it records. They are separate - an activity never consumes a field
+visit slot - and both are now stated in the generation request, because a generation used
+to be refused by a number the operator could neither see nor change.
+
+- **Field visits per working day.** `field_visits_per_day` on the request, `maximum` on the
+  form, default 3 (the platform's earlier constant). `area_visits_per_day` states how much
+  of that limit may be area visits, default 2. Internally these are the validator's
+  `combined_daily_cap` and `area_daily_cap`; the request names them in the operator's words
+  because a form that carried a constraint's identifier would be the browser restating a
+  rule.
+- **Why it had to move.** The caps were platform constants read from nowhere, although
+  §10 already records them as configurable with those initial defaults. An office whose own
+  masters ask for more monthly visits than `3 x working days` had a month refused with
+  `aggregate_combined_capacity_exceeded` and no way to act on it. On the office's own files,
+  113 DTCs over a ten-month cycle cannot be placed at three visits a day; at six the same
+  request generates 543 visits over 224 working days.
+- **What is refused.** A field-visit limit below 1, a negative area share, and an area
+  share above the field-visit limit (`daily_visit_cap_invalid`), each in a sentence that
+  says which number is wrong. Nothing is silently clamped, and an absent value keeps the
+  platform default rather than becoming zero.
+- **A capacity refusal names the limit that would fit the month.**
+  `aggregate_combined_capacity_exceeded` and `aggregate_area_capacity_exceeded` end with
+  "at least N field visits a working day would fit them", computed as the ceiling of demand
+  over eligible dates, so the operator is told the number to enter instead of dividing the
+  shortfall themselves.
+- **Both are recorded with the draft.** The caps live in the request snapshot's existing
+  `config`, and the activity range has its own snapshot fields: schema 4 replaces the single
+  `activities_per_day` with `activities_per_day_min` and `activities_per_day_max`. A schema 1 to 3 snapshot is still read, and its one count is read as the range whose ends are equal.
+
+### 24.11 What is not modelled
 
 - Partial-month generation, and therefore the use of the section 23 proration rule to
   build a schedule. A part-month is still refused.
 - Reopening a finalised month, in place or by any other act.
 - Prorating the catalogue's monthly activity minimums and maximums for a partial month,
   which the requirements ask for once partial months exist (§6).
-- A *range* of activities per day. The requirements describe a default of three to six
-  and the office asks for at least three; what is implemented is one configured count,
-  chosen once per generation, from which every eligible day records exactly that number.
-  Randomising within a range is not implemented, and neither is a per-weekday count.
+- A variety rule for the daily activity range beyond the seeded draw, and no per-weekday
+  count: the requirement's "three to six" is implemented as one floor and one ceiling for
+  every eligible working day, drawn per day from the seed.
 - An activity's applicability to particular areas, feeders or DTCs: the catalogue has no
   such column, so a placement is office-wide.
 - A Kannada narrative sentence for a visit, and Kannada names for feeders, which the

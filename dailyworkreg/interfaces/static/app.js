@@ -558,8 +558,14 @@ document.getElementById('gen-run').addEventListener('click', async () => {
     mode,
     seed: Number(document.getElementById('gen-seed').value || 0),
   };
-  const activities = document.getElementById('gen-activities').value;
-  if (activities !== '') payload.activities_per_day = Number(activities);
+  const activitiesMin = document.getElementById('gen-activities-min').value;
+  if (activitiesMin !== '') payload.activities_per_day_min = Number(activitiesMin);
+  const activitiesMax = document.getElementById('gen-activities-max').value;
+  if (activitiesMax !== '') payload.activities_per_day_max = Number(activitiesMax);
+  const visitCap = document.getElementById('gen-visit-cap').value;
+  if (visitCap !== '') payload.field_visits_per_day = Number(visitCap);
+  const areaCap = document.getElementById('gen-area-cap').value;
+  if (areaCap !== '') payload.area_visits_per_day = Number(areaCap);
   const language = chosenLanguage();
   if (language) payload.entry_language = language;
   if (mode === 'coverage_cycle') {
@@ -581,7 +587,7 @@ document.getElementById('gen-run').addEventListener('click', async () => {
       result,
       kind,
       done.is_draft
-        ? `A draft was generated: ${done.months} month(s), ${done.rows} date row(s), ${done.visits} visit(s), ${done.activities || 0} recorded activit${(done.activities || 0) === 1 ? 'y' : 'ies'}, written in ${done.entry_language_label || 'English and Kannada'}.`
+        ? `A draft was generated: ${done.months} month(s), ${done.rows} date row(s), ${done.visits} visit(s), ${done.activities || 0} recorded activit${(done.activities || 0) === 1 ? 'y' : 'ies'} (${done.activities_per_day_min}\u2013${done.activities_per_day_max} a working day), written in ${done.entry_language_label || 'English and Kannada'}.`
         : `No draft was produced: the allocator reported ${done.status.replace('_', ' ')} for at least one month. The attempt is stored with its evidence.`,
       done.missing_content,
     );

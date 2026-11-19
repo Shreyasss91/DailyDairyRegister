@@ -16,9 +16,11 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from ..domain import wording
-from ..domain.activities import ActivitySpec
+from ..domain.activities import C_ACTIVITY_DAILY_RANGE_INVALID, ActivitySpec
 from ..domain.cycle import CoverageCycle, DtcClass, DtcWeights, MonthKey
 from ..domain.validator import (
+    DEFAULT_AREA_DAILY_CAP,
+    DEFAULT_COMBINED_DAILY_CAP,
     Asset,
     AssetLimits,
     AssetType,
@@ -41,11 +43,17 @@ C_MONTHS_NOT_SELECTED = "generation_months_not_selected"
 C_ROSTER_EMPTY = "generation_roster_empty"
 C_LIMITS_INCONSISTENT = "generation_limits_inconsistent"
 C_ACTIVITIES_PER_DAY_INVALID = "activities_per_day_invalid"
+C_DAILY_VISIT_CAP_INVALID = "daily_visit_cap_invalid"
 
 #: What the operator's own form starts with: the office asked for at least three
 #: activities a working day. It is a form default rather than a silent platform rule,
 #: because a register is a record of work, not a template applied behind a request.
 DEFAULT_ACTIVITIES_PER_DAY = 3
+
+#: The form's own starting ceiling. Five is not a policy - the office chose "at least
+#: three, sometimes more", and a range needs an upper end to draw against - and it is
+#: editable, so a heavier day is the operator's decision rather than this constant's.
+DEFAULT_ACTIVITIES_PER_DAY_MAX = 5
 
 
 class GenerationInputError(ValueError):
@@ -77,7 +85,15 @@ class GenerationSpec:
     #: about activities generates a visits-only draft. The daily count is a decision, so
     #: the operator's own form supplies it and its box starts at
     #: :data:`DEFAULT_ACTIVITIES_PER_DAY`.
+    #:
+    #: ``activities_per_day`` is the exact count an earlier caller could ask for, and it
+    #: says the same thing as a range whose two ends are equal. ``activities_per_day_min``
+    #: and ``_max`` state the range directly: the floor a day never falls below and the
+    #: ceiling it never exceeds. A range wins when both are present, because one request
+    #: cannot mean two counts.
     activities_per_day: int | None = None
+    activities_per_day_min: int | None = None
+    activities_per_day_max: int | None = None
     #: Which language the register is written in. Left unset it is the platform default,
     #: because a register has always been filed in both languages and a caller that predates
     #: the choice must keep the document it used to get.
@@ -89,6 +105,12 @@ class GenerationSpec:
     #: Carried from an earlier run or entered by the operator. Never invented here.
     fixed_by_month: dict[MonthKey, tuple[Visit, ...]] = field(default_factory=dict)
     prior_history: tuple[Visit, ...] = ()
+    #: Field-visit caps per working day. ``None`` keeps the platform default rather than
+    #: a number this layer invented, and the cap is stated in the request because it is
+    #: the one number that decides whether a month's obligations fit at all: the office's
+    #: own monthly maximums are what they are, and a cap too low refuses the month.
+    combined_daily_cap: int | None = None
+    area_daily_cap: int | None = None
 
     def months(self) -> tuple[MonthKey, ...]:
         keys: list[MonthKey] = []
@@ -201,14 +223,25 @@ def _roster(
     return tuple(assets), display, model
 
 
-def _config(connection: sqlite3.Connection, roster: tuple[Asset, ...]) -> FeasibilityConfig:
+def _config(
+    connection: sqlite3.Connection,
+    roster: tuple[Asset, ...],
+    spec: GenerationSpec,
+) -> FeasibilityConfig:
     """Configured caps and per-asset limits, read from the masters that hold them.
 
     The limits map is restricted to the assets actually in the roster. A stored limit
     for an asset that is no longer active would otherwise name an asset the validator
     has never heard of, and the every-other generation would be refused for a reason
     that has nothing to do with the request.
+
+    The two daily visit caps come from the request, not from the masters: they are the
+    operator's decision about how much field work one working day holds. Until this was
+    stated in the request they were platform constants a register could be refused by
+    without the operator being able to see, let alone change, them.
     """
+
+    combined_cap, area_cap = _daily_visit_caps(spec)
 
     wanted = {asset.asset_id for asset in roster}
     limits: dict[str, AssetLimits] = {}
@@ -232,7 +265,11 @@ def _config(connection: sqlite3.Connection, roster: tuple[Asset, ...]) -> Feasib
         )
     for dtc in masters.list_dtcs(connection):
         record(dtc.dtc_id, dtc.monthly_max, dtc.monthly_min, dtc.revisit_gap_days)
-    return FeasibilityConfig(asset_limits=limits)
+    return FeasibilityConfig(
+        asset_limits=limits,
+        combined_daily_cap=combined_cap,
+        area_daily_cap=area_cap,
+    )
 
 
 def _activity_catalogue(connection: sqlite3.Connection) -> tuple[ActivitySpec, ...]:
@@ -261,7 +298,7 @@ def _activity_catalogue(connection: sqlite3.Connection) -> tuple[ActivitySpec, .
 
 
 def _activities_per_day(requested: int | None) -> int:
-    """The count every eligible day carries, or a refusal the operator can act on.
+    """One daily activity count, or a refusal the operator can act on.
 
     ``None`` means the caller did not ask for activities, and it stays that: a request
     that says nothing about activities generates a visits-only draft, exactly as it did
@@ -280,6 +317,80 @@ def _activities_per_day(requested: int | None) -> int:
             ),
         )
     return requested
+
+
+def _daily_activity_range(spec: GenerationSpec) -> tuple[int, int]:
+    """The floor and the ceiling of the regular-activity count, in that order.
+
+    A request may state a range or the exact count it used to state; the exact count is
+    the range whose ends are equal, so there is one rule for both and no second meaning
+    to drift. An absent range is no activities at all, and a reversed one is refused
+    here rather than inside the allocator, so the operator's form hears about its own
+    numbers in the platform's own words.
+    """
+
+    if spec.activities_per_day_min is not None or spec.activities_per_day_max is not None:
+        low = _activities_per_day(spec.activities_per_day_min)
+        high = (
+            low
+            if spec.activities_per_day_max is None
+            else _activities_per_day(spec.activities_per_day_max)
+        )
+    else:
+        low = high = _activities_per_day(spec.activities_per_day)
+
+    if high < low:
+        raise GenerationInputError(
+            C_ACTIVITY_DAILY_RANGE_INVALID,
+            (
+                f"the daily activity minimum of {low} is above the maximum of {high}; "
+                "the minimum is the floor no working day falls below, so it cannot "
+                "be the larger of the two"
+            ),
+        )
+    return low, high
+
+
+def _daily_visit_caps(spec: GenerationSpec) -> tuple[int, int]:
+    """The field-visit ceiling per working day and the area share of it.
+
+    Left unset they are the platform defaults, because a request that predates the
+    choice must keep the register it used to get. They are read here rather than inside
+    the validator because they come from the request: the caps are the operator's
+    decision about how much field work one day can hold, not a property of the office's
+    master data.
+    """
+
+    combined = (
+        DEFAULT_COMBINED_DAILY_CAP
+        if spec.combined_daily_cap is None
+        else spec.combined_daily_cap
+    )
+    area = DEFAULT_AREA_DAILY_CAP if spec.area_daily_cap is None else spec.area_daily_cap
+
+    if combined < 1:
+        raise GenerationInputError(
+            C_DAILY_VISIT_CAP_INVALID,
+            (
+                "the field visits per working day must be at least 1; a register "
+                "that may hold no visit at all cannot record the month's obligations"
+            ),
+        )
+    if area < 0:
+        raise GenerationInputError(
+            C_DAILY_VISIT_CAP_INVALID,
+            "the area visits per working day cannot be negative",
+        )
+    if area > combined:
+        raise GenerationInputError(
+            C_DAILY_VISIT_CAP_INVALID,
+            (
+                f"the area visits per working day ({area}) cannot exceed the field "
+                f"visits per working day ({combined}); the area share is part of that "
+                "limit, not a second allowance"
+            ),
+        )
+    return combined, area
 
 
 def _entry_language(requested: str | None) -> str:
@@ -333,7 +444,7 @@ def prepare_generation(
     entries = projection.entries
 
     catalogue = _activity_catalogue(connection)
-    per_day = _activities_per_day(spec.activities_per_day)
+    activities_per_day_min, activities_per_day_max = _daily_activity_range(spec)
 
     cycle: CoverageCycle | None = None
     if spec.mode is DraftMode.COVERAGE_CYCLE:
@@ -350,13 +461,14 @@ def prepare_generation(
         roster=roster,
         display=tuple(display.values()),
         calendar_days=projection.days,
-        config=_config(connection, roster),
+        config=_config(connection, roster, spec),
         seed=spec.seed,
         prior_history=spec.prior_history,
         fixed_by_month=dict(spec.fixed_by_month),
         entries=entries,
         activities=catalogue,
-        activities_per_day=per_day,
+        activities_per_day_min=activities_per_day_min,
+        activities_per_day_max=activities_per_day_max,
         entry_language=_entry_language(spec.entry_language),
         cycle=cycle,
         weights=weights,

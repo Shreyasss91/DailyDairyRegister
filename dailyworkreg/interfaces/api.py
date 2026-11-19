@@ -741,6 +741,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             "entry_language_label": LANGUAGE_DESCRIPTIONS.get(
                 prepared.request.entry_language, prepared.request.entry_language
             ),
+            "activities_per_day_min": prepared.request.activities_per_day_min,
+            "activities_per_day_max": prepared.request.activities_per_day_max,
+            "field_visits_per_day": prepared.request.config.combined_daily_cap,
+            "area_visits_per_day": prepared.request.config.area_daily_cap,
             "exceptions": len(draft.exceptions),
             "missing_content": list(prepared.readiness.missing_content),
         }
@@ -1620,6 +1624,10 @@ def _spec(payload: dict[str, Any]) -> GenerationSpec:
         cycle_duration_months=int(payload.get("cycle_duration_months", 1)),
         cycle_visits_per_asset=int(payload.get("cycle_visits_per_asset", 1)),
         activities_per_day=_activities_per_day(payload.get("activities_per_day")),
+        activities_per_day_min=_activities_per_day(payload.get("activities_per_day_min")),
+        activities_per_day_max=_activities_per_day(payload.get("activities_per_day_max")),
+        combined_daily_cap=_daily_cap(payload.get("field_visits_per_day"), "field visits"),
+        area_daily_cap=_daily_cap(payload.get("area_visits_per_day"), "area visits"),
         entry_language=_entry_language(payload.get("entry_language")),
         dtc_target=payload.get("dtc_target"),
         area_required=_counts(payload.get("area_required")),
@@ -1636,12 +1644,33 @@ def _activities_per_day(value: Any) -> int | None:
     catalogue has not asked for activities and keeps the visits-only draft it used to get,
     while the platform's three-a-day default belongs to the form an operator uses. Reading
     one as the other would silently change somebody's register.
+
+    The same reader serves the exact count and each end of the range, because all three
+    are the same thing: a whole number of distinct activities a day, or nothing said.
     """
 
     if value is None or value == "":
         return None
     if isinstance(value, bool):
         raise ValueError("activities_per_day must be a whole number")
+    return int(value)
+
+
+def _daily_cap(value: Any, what: str) -> int | None:
+    """A per-working-day field-visit limit, or ``None`` to keep the platform default.
+
+    Absent means "this request did not decide", which is the platform's own default and
+    not zero: a caller that predates the limit must keep generating the register it did.
+
+    The request names it in the operator's words - ``field_visits_per_day`` and
+    ``area_visits_per_day`` - because the validator's own name for it is a constraint,
+    and a form that carried a constraint's name would be the browser restating a rule.
+    """
+
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"the {what} per working day must be a whole number")
     return int(value)
 
 

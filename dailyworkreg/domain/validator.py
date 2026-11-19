@@ -707,6 +707,20 @@ def visits_by_asset(visits: Iterable[Visit]) -> dict[str, list[Visit]]:
     return grouped
 
 
+def _per_day_needed(demand: int, working_days: int) -> int:
+    """The smallest whole per-day limit that would hold ``demand`` across those days.
+
+    It exists so a capacity refusal can name the number to change instead of leaving an
+    operator to work it out from a product: a register refused for a limit of three
+    visits a day should say that four would fit it. Ceiling division, in integers, so
+    the answer is exact rather than a float that rounds down.
+    """
+
+    if working_days <= 0:
+        return demand
+    return -(-demand // working_days)
+
+
 def attribute_assets(
     asset_ids: Iterable[str], roster: Mapping[str, Asset]
 ) -> tuple[tuple[str, AssetType], ...]:
@@ -1659,7 +1673,9 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                     f"({area_required} to place plus {fixed_area} committed), "
                     f"exceeding the area limit of "
                     f"{context.config.area_daily_cap} per working day across "
-                    f"{working_days} eligible dates"
+                    f"{working_days} eligible dates; at least "
+                    f"{_per_day_needed(area_demand, working_days)} area visits a "
+                    "working day would fit them"
                 ),
                 limit=context.config.area_daily_cap * working_days,
                 actual=area_demand,
@@ -1685,7 +1701,9 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                     f"({total_required} to place plus {fixed_total} committed), "
                     f"exceeding the combined limit of "
                     f"{context.config.combined_daily_cap} per working day across "
-                    f"{working_days} eligible dates"
+                    f"{working_days} eligible dates; at least "
+                    f"{_per_day_needed(total_demand, working_days)} field visits a "
+                    "working day would fit them"
                 ),
                 limit=context.config.combined_daily_cap * working_days,
                 actual=total_demand,

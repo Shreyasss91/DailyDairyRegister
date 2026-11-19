@@ -46,10 +46,14 @@ from .draft_generation import (
 #: Schema 3 adds the language the register is written in. Schema 1 and 2 snapshots are
 #: still read, and they hold no language because the register was filed in both then, so
 #: that is what they are read as - the document they were issued as.
-REQUEST_SNAPSHOT_SCHEMA = 3
+#:
+#: Schema 4 replaces the single daily activity count with the floor and ceiling the
+#: office now sets. Schemas 1 to 3 recorded one count, which is the range whose two
+#: ends are equal, so they are read as exactly that and reproduce the draft they were.
+REQUEST_SNAPSHOT_SCHEMA = 4
 
 #: Versions this reader understands.
-REQUEST_SNAPSHOT_READABLE = (1, 2, 3)
+REQUEST_SNAPSHOT_READABLE = (1, 2, 3, 4)
 
 C_SNAPSHOT_VERSION_UNSUPPORTED = "request_snapshot_version_unsupported"
 C_SNAPSHOT_MALFORMED = "request_snapshot_malformed"
@@ -161,7 +165,8 @@ def encode_request(request: DraftRequest) -> dict[str, Any]:
             for e in request.entries
         ],
         "activities": [_activity(item) for item in request.activities],
-        "activities_per_day": request.activities_per_day,
+        "activities_per_day_min": request.activities_per_day_min,
+        "activities_per_day_max": request.activities_per_day_max,
         "entry_language": request.entry_language,
         "cycle": (
             None
@@ -198,6 +203,21 @@ def encode_request(request: DraftRequest) -> dict[str, Any]:
         },
         "dtc_target": request.dtc_target,
     }
+
+
+def _daily_count(payload: dict[str, Any], name: str, legacy: str) -> int:
+    """One end of the daily activity range, read from what the snapshot recorded.
+
+    Schemas 1 to 3 recorded a single ``activities_per_day``: the count every working
+    day carried, which is the range whose two ends are equal. Reading it as both ends
+    reproduces those drafts exactly, and a snapshot that recorded nothing keeps the
+    visits-only draft it was.
+    """
+
+    value = payload.get(name)
+    if value is None:
+        value = payload.get(legacy)
+    return int(value or 0)
 
 
 def _asset_limits(payload: dict[str, Any]) -> AssetLimits:
@@ -322,7 +342,12 @@ def decode_request(payload: dict[str, Any]) -> DraftRequest:
                 )
                 for item in payload.get("activities") or ()
             ),
-            activities_per_day=int(payload.get("activities_per_day") or 0),
+            activities_per_day_min=_daily_count(
+                payload, "activities_per_day_min", "activities_per_day"
+            ),
+            activities_per_day_max=_daily_count(
+                payload, "activities_per_day_max", "activities_per_day"
+            ),
             # A snapshot written before the language existed records a register filed in
             # both, which is exactly what it was. It is not upgraded to today's default,
             # because there was no default then and the draft it describes was bilingual.

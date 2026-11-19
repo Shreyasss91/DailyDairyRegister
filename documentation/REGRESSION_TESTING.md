@@ -34,7 +34,7 @@ A non-zero exit code means the validation gate failed. Inspect the failing test 
 Run the directly relevant export and UI tests first:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py
 ```
 
 These modules cover the export/document, PDF, bulk-finalisation and frontend contracts, including:
@@ -55,6 +55,18 @@ These modules cover the export/document, PDF, bulk-finalisation and frontend con
 - Refusing a PDF request with a stable setup message when the local layout engine is missing, and refusing a failed render without sending a partial package.
 - The bulk close: the target set derived from the revision, the preflight writing nothing, one blocked month refusing the whole act, a forced failure rolling back the months already written, and the page refusing a second submission.
 - Register wording: the three languages and that the choice is recorded with the generation and frozen into the closed month, an absent choice read as the platform default rather than a remembered one, an unknown language refused at both the request and the domain boundary, a Kannada register keeping English where no Kannada is stored, a weekly off, holiday or leave date classified in words beside its stored reason instead of a bare `Calendar:` prefix, a reason carried twice printed once, a visit reading as the work done at the installation with the sentence chosen by the asset kind the roster recorded, a record that does not say which kind it visited reading a neutral sentence, and the language and asset kinds staying outside the month fingerprint so a month closed before they existed is still recognised as itself.
+- The two daily numbers a working day is built from: the activity range's floor met on
+  every eligible day and its ceiling never exceeded, the day-to-day spread the draw
+  produces, an equal-ended range reproducing the flat count an earlier request asked for,
+  a reversed or negative range refused at both the domain and the request boundary, a
+  ceiling wider than the catalogue drawn under rather than demanded, an outstanding
+  monthly minimum borrowing a day's headroom but never passing the ceiling, the field-visit
+  and area-visit ceilings reaching the request and the snapshot, an unstated ceiling keeping
+  the platform default, a limit below one and an area share above the whole limit refused,
+  a month that was refused generating once its ceiling is raised, a capacity refusal naming
+  the ceiling that would fit the month, the range and the ceilings reaching the route and
+  being echoed in its answer, and the generate form offering both ends of the range and both
+  ceilings while the client sends them.
 - Regular activities on working days: the configured count on every eligible day and none on a Sunday or a recorded holiday, the catalogue's monthly maximum, monthly minimum, repeat gap (across a month boundary) and weekday restriction as hard constraints, a weight unable to override a maximum, a catalogue that cannot fill a day or a month refused with the constraint and date named, determinism from the seed, the count and the catalogue surviving the request snapshot, a schema-1 snapshot still reading as the visits-only request it recorded, and the placed activities reaching the issued page and workbook with their Kannada text.
 
 The PDF module runs its packaging, refusal and read-only tests against a stand-in renderer, so they pass on a machine without Chromium. The two tests that assert a real `%PDF` file are skipped unless a local browser is installed; run `python -m playwright install chromium` before treating PDF rendering as verified.
@@ -67,7 +79,7 @@ From the repository root:
 
 ```powershell
 # 1. Focused API/document, PDF, bulk-finalisation and UI coverage.
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py
 
 # 2. Full regression suite.
 .\.venv\Scripts\python.exe -m pytest

@@ -100,7 +100,7 @@ def per_day(placements) -> dict[date, int]:
 def test_every_eligible_day_carries_the_configured_count():
     days = working_days(date(2026, 11, 1), date(2026, 11, 30))
     plan = allocate_activities(
-        days=days, activities=catalogue(), per_day=3, seed=7
+        days=days, activities=catalogue(), per_day_min=3, per_day_max=3, seed=7
     )
     assert set(per_day(plan).values()) == {3}
     assert len(plan) == 3 * len(days)
@@ -113,19 +113,19 @@ def test_the_count_is_configurable(count):
     # further candidate per day of that gap, so the catalogue has to be wide enough for
     # the count being asked for.
     items = catalogue(max(8, 2 * count))
-    plan = allocate_activities(days=days, activities=items, per_day=count, seed=7)
+    plan = allocate_activities(days=days, activities=items, per_day_min=count, per_day_max=count, seed=7)
     assert set(per_day(plan).values()) == {count}
 
 
 def test_a_count_of_zero_records_nothing():
     days = working_days(date(2026, 11, 1), date(2026, 11, 30))
-    plan = allocate_activities(days=days, activities=catalogue(), per_day=0, seed=7)
+    plan = allocate_activities(days=days, activities=catalogue(), per_day_min=0, per_day_max=0, seed=7)
     assert plan == ()
 
 
 def test_a_day_never_carries_one_activity_twice():
     days = working_days(date(2026, 11, 1), date(2026, 11, 30))
-    plan = allocate_activities(days=days, activities=catalogue(), per_day=3, seed=7)
+    plan = allocate_activities(days=days, activities=catalogue(), per_day_min=3, per_day_max=3, seed=7)
     for day in days:
         ids = [p.activity.activity_id for p in plan if p.day == day]
         assert len(ids) == len(set(ids))
@@ -133,7 +133,7 @@ def test_a_day_never_carries_one_activity_twice():
 
 def test_a_day_outside_the_eligible_list_carries_nothing():
     days = working_days(date(2026, 11, 1), date(2026, 11, 30))
-    plan = allocate_activities(days=days, activities=catalogue(), per_day=3, seed=7)
+    plan = allocate_activities(days=days, activities=catalogue(), per_day_min=3, per_day_max=3, seed=7)
     sundays = {
         date(2026, 11, 1) + timedelta(days=offset)
         for offset in range(30)
@@ -150,7 +150,7 @@ def test_the_monthly_maximum_is_respected():
     # a maximum of two can carry twelve - so the cap binds without starving the days.
     days = working_days(date(2026, 11, 2), date(2026, 11, 7))
     items = catalogue(6, monthly_max=2)
-    plan = allocate_activities(days=days, activities=items, per_day=2, seed=7)
+    plan = allocate_activities(days=days, activities=items, per_day_min=2, per_day_max=2, seed=7)
     assert len(plan) == 2 * len(days)
     counts: dict[str, int] = {}
     for placement in plan:
@@ -166,7 +166,7 @@ def test_the_monthly_minimum_is_met():
         item.__class__(**{**item.__dict__, "monthly_min": 4 if index % 2 else 0})
         for index, item in enumerate(catalogue())
     )
-    plan = allocate_activities(days=days, activities=items, per_day=3, seed=7)
+    plan = allocate_activities(days=days, activities=items, per_day_min=3, per_day_max=3, seed=7)
     counts: dict[str, int] = {}
     for placement in plan:
         counts[placement.activity.activity_id] = (
@@ -182,7 +182,7 @@ def test_the_repeat_gap_is_respected_across_a_month_boundary():
         item.__class__(**{**item.__dict__, "repeat_gap_days": 10})
         for item in catalogue(45)
     )
-    plan = allocate_activities(days=days, activities=items, per_day=3, seed=7)
+    plan = allocate_activities(days=days, activities=items, per_day_min=3, per_day_max=3, seed=7)
     by_activity: dict[str, list[date]] = {}
     for placement in plan:
         by_activity.setdefault(placement.activity.activity_id, []).append(placement.day)
@@ -200,7 +200,7 @@ def test_a_weekday_restriction_is_respected():
         else item
         for index, item in enumerate(catalogue())
     )
-    plan = allocate_activities(days=days, activities=items, per_day=3, seed=7)
+    plan = allocate_activities(days=days, activities=items, per_day_min=3, per_day_max=3, seed=7)
     restricted = [
         placement
         for placement in plan
@@ -214,7 +214,7 @@ def test_two_records_for_one_activity_are_refused():
     days = working_days(date(2026, 11, 2), date(2026, 11, 6))
     items = catalogue(2) + catalogue(2)
     with pytest.raises(ActivityInfeasible) as error:
-        allocate_activities(days=days, activities=items, per_day=2, seed=7)
+        allocate_activities(days=days, activities=items, per_day_min=2, per_day_max=2, seed=7)
     assert error.value.constraint == C_ACTIVITY_LIMITS_INCONSISTENT
 
 
@@ -237,7 +237,7 @@ def test_a_month_whose_minimums_exceed_its_slots_is_refused():
         item.__class__(**{**item.__dict__, "monthly_min": 22}) for item in catalogue()
     )
     with pytest.raises(ActivityInfeasible) as error:
-        allocate_activities(days=days, activities=items, per_day=3, seed=7)
+        allocate_activities(days=days, activities=items, per_day_min=3, per_day_max=3, seed=7)
     assert error.value.constraint == C_ACTIVITY_MONTH_MIN_UNSATISFIABLE
     assert error.value.month == MonthKey(2026, 11)
 
@@ -248,7 +248,7 @@ def test_a_day_that_cannot_be_filled_is_refused():
         item.__class__(**{**item.__dict__, "monthly_max": 1}) for item in catalogue(3)
     )
     with pytest.raises(ActivityInfeasible) as error:
-        allocate_activities(days=days, activities=items, per_day=3, seed=7)
+        allocate_activities(days=days, activities=items, per_day_min=3, per_day_max=3, seed=7)
     assert error.value.constraint in {
         C_ACTIVITY_DAY_SHORT,
     C_ACTIVITY_LIMITS_INCONSISTENT,
@@ -259,7 +259,7 @@ def test_a_day_that_cannot_be_filled_is_refused():
 def test_a_count_above_the_catalogue_size_is_refused():
     days = working_days(date(2026, 11, 1), date(2026, 11, 30))
     with pytest.raises(ActivityInfeasible) as error:
-        allocate_activities(days=days, activities=catalogue(2), per_day=3, seed=7)
+        allocate_activities(days=days, activities=catalogue(2), per_day_min=3, per_day_max=3, seed=7)
     assert error.value.constraint == C_ACTIVITY_NONE_ALLOWED
     assert "only 2 active activities" in error.value.detail
 
@@ -267,7 +267,7 @@ def test_a_count_above_the_catalogue_size_is_refused():
 def test_an_empty_catalogue_is_refused_rather_than_silently_ignored():
     days = working_days(date(2026, 11, 1), date(2026, 11, 30))
     with pytest.raises(ActivityInfeasible) as error:
-        allocate_activities(days=days, activities=(), per_day=3, seed=7)
+        allocate_activities(days=days, activities=(), per_day_min=3, per_day_max=3, seed=7)
     assert error.value.constraint == C_ACTIVITY_NONE_ALLOWED
 
 
@@ -276,15 +276,15 @@ def test_an_empty_catalogue_is_refused_rather_than_silently_ignored():
 
 def test_the_same_seed_produces_the_same_plan():
     days = working_days(date(2026, 11, 1), date(2026, 11, 30))
-    first = allocate_activities(days=days, activities=catalogue(), per_day=3, seed=7)
-    second = allocate_activities(days=days, activities=catalogue(), per_day=3, seed=7)
+    first = allocate_activities(days=days, activities=catalogue(), per_day_min=3, per_day_max=3, seed=7)
+    second = allocate_activities(days=days, activities=catalogue(), per_day_min=3, per_day_max=3, seed=7)
     assert first == second
 
 
 def test_a_different_seed_produces_a_different_plan():
     days = working_days(date(2026, 11, 1), date(2026, 11, 30))
-    first = allocate_activities(days=days, activities=catalogue(), per_day=3, seed=7)
-    second = allocate_activities(days=days, activities=catalogue(), per_day=3, seed=8)
+    first = allocate_activities(days=days, activities=catalogue(), per_day_min=3, per_day_max=3, seed=7)
+    second = allocate_activities(days=days, activities=catalogue(), per_day_min=3, per_day_max=3, seed=8)
     assert first != second
 
 
@@ -303,7 +303,7 @@ def test_the_weight_does_not_override_a_maximum():
             repeat_gap_days=2,
         ),
     ) + catalogue(7)[1:]
-    plan = allocate_activities(days=days, activities=items, per_day=3, seed=7)
+    plan = allocate_activities(days=days, activities=items, per_day_min=3, per_day_max=3, seed=7)
     assert len([p for p in plan if p.activity.activity_id == "ACT-001"]) == 2
 
 
@@ -485,15 +485,17 @@ def test_an_office_without_a_catalogue_is_refused_when_activities_are_asked_for(
 # --- the request snapshot -------------------------------------------------
 
 
-def test_the_daily_count_and_the_catalogue_survive_a_snapshot_round_trip(db):
+def test_the_daily_range_and_the_catalogue_survive_a_snapshot_round_trip(db):
     prepared = prepare_generation(db, spec())
     encoded = snapshot.encode_request(prepared.request)
     assert encoded["schema"] == snapshot.REQUEST_SNAPSHOT_SCHEMA
-    assert encoded["activities_per_day"] == 3
+    assert encoded["activities_per_day_min"] == 3
+    assert encoded["activities_per_day_max"] == 3
     assert len(encoded["activities"]) == 12
 
     restored = snapshot.decode_request(encoded)
-    assert restored.activities_per_day == 3
+    assert restored.activities_per_day_min == 3
+    assert restored.activities_per_day_max == 3
     assert restored.activities == prepared.request.activities
     assert {entry["provenance"] for entry in encoded["entries"]} <= {
         "calendar",
@@ -509,7 +511,8 @@ def test_a_schema_one_snapshot_still_reads_as_a_visits_only_request(db):
     old = dict(encoded)
     old["schema"] = 1
     old.pop("activities")
-    old.pop("activities_per_day")
+    old.pop("activities_per_day_min")
+    old.pop("activities_per_day_max")
     old["entries"] = [
         {key: value for key, value in item.items() if key != "provenance"}
         for item in encoded["entries"]
@@ -517,7 +520,8 @@ def test_a_schema_one_snapshot_still_reads_as_a_visits_only_request(db):
 
     restored = snapshot.decode_request(old)
     assert restored.activities == ()
-    assert restored.activities_per_day == 0
+    assert restored.activities_per_day_min == 0
+    assert restored.activities_per_day_max == 0
     assert {entry.provenance for entry in restored.entries} == {
         DayEntryProvenance.CALENDAR
     }
