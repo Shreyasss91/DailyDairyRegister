@@ -223,7 +223,18 @@ The supplied DTC source contains 113 SCD records. Include the 113 SCD records; e
 Owner-confirmed canonical feeder assignments:
 - SCD-5 → MRS F-1 OLDTOWN
 - SCD-12 → Mandli F-22 GANDHIBAZAAR
-- SCD-107, SCD-108, SCD-109 and SCD-110 → MRS F-1 OLDTOWN
+- SCD-107 and SCD-108 → Mandli F-22 GANDHIBAZAAR (settled 2026-11-19)
+- SCD-109 and SCD-110 → MRS F-1 OLDTOWN
+
+The owner's own rule, settled 2026-11-19, governs where the two disagree: **the imported
+roster file is what the office goes by.** The confirmed assignments above are therefore
+the feeder the roster itself names, and an import that agrees with them reassigns
+nothing and reports nothing. The table is kept because a later file that contradicts
+these records must be announced before the batch is accepted rather than discovered
+afterwards, and the supplied text is stored beside the canonical feeder either way.
+SCD-107 and SCD-108 were previously recorded as MRS F-1 OLDTOWN; that is superseded,
+and `apply_approved_feeder_overrides` corrects those two rows on the next seed or
+acceptance, so a database imported under the old reading converges.
 
 DTC priority and weight:
 - DEPT has higher priority.
@@ -244,7 +255,7 @@ DTC priority and weight:
 The office roster has been read and reconciled through the import workflow. What it contains, and what the tool now checks:
 
 - 113 SCD rows, numbered SCD-1 to SCD-113 with no gap and no duplicate: 68 DEPT and 45 SELF_DTC (42 MSB + 3 OWN). Every row carries a capacity and a station, so this file contains no blank and no `#N/A`. The reconciliation is a check on the source, not a target to be reached by editing it.
-- Two of the six owner-confirmed assignments disagree with the supplied feeder text: SCD-107 and SCD-108 arrive naming Mandli F-22 GANDHIBAZAAR and are assigned to MRS F-1 OLDTOWN. Both facts are kept and are stored apart; the register reads the canonical assignment. The remaining four agree with the supplied text.
+- All six owner-confirmed assignments agree with the supplied feeder text as the roster is now supplied, so an import of it produces no reassignment notice. Two of them (SCD-107 and SCD-108, both Mandli F-22 GANDHIBAZAAR) were recorded as MRS F-1 OLDTOWN in an earlier reading and are corrected under the rule above. The supplied text is stored apart from the canonical feeder, so a future file that contradicts a confirmed record is reported during review and neither value overwrites the other.
 - A row whose canonical assignment differs from what its supplied text resolves to is announced before acceptance, naming the DTC, the assignment, the assignment's feeder id and the supplied text. The operator reviews the reassignment rather than discovering it afterwards.
 - A batch whose assignment names a feeder the master does not carry is refused, under the existing rule that an error blocks an import. Accepting it would store DTCs with no canonical feeder and leave every feeder's derived capacity short while reporting success. Import the feeder master first.
 - Because a working day then allowed at most three field visits in total (the policy in force when this was measured, since replaced by a per-kind ceiling for DTCs), and a cycle owes one visit per active DTC, one calendar month cannot hold this roster: 113 required against roughly 25 eligible dates. A one-month DTC coverage cycle is refused as `INFEASIBLE` with the capacity named, never truncated to fit. A two-month cycle was then run over 2026-01-01 to 2026-02-28 and allocated the whole roster: 113 visits for 113 distinct DTCs, one each, across 59 day rows, with no visit on a non-working day. That is evidence for those two months, not a general claim about every longer cycle: what a cycle of three months or more allocates has not been run, and the paragraph above is the only reason to expect it to hold.

@@ -58,12 +58,12 @@ Owner-confirmed canonical overrides applied by the current application on DTC ba
 |---|---|---|
 | SCD-5 | MRS F-1 OLDTOWN | F-01 |
 | SCD-12 | Mandli F-22 GANDHIBAZAAR | F-03 |
-| SCD-107 | MRS F-1 OLDTOWN | F-01 |
-| SCD-108 | MRS F-1 OLDTOWN | F-01 |
+| SCD-107 | Mandli F-22 GANDHIBAZAAR | F-03 |
+| SCD-108 | Mandli F-22 GANDHIBAZAAR | F-03 |
 | SCD-109 | MRS F-1 OLDTOWN | F-01 |
 | SCD-110 | MRS F-1 OLDTOWN | F-01 |
 
-Keep the supplied feeder string unchanged. The override sets the canonical feeder separately.
+Keep the supplied feeder string unchanged. The override sets the canonical feeder separately. Every assignment above now names the feeder the roster itself supplies, because the owner settled on 2026-11-19 that the imported file is what the office goes by: an agreeing file reassigns nothing, and a contradicting one is announced during review before the batch is accepted.
 
 ## 4. Karnataka General Holidays 2025–2026
 

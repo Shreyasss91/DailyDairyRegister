@@ -67,11 +67,19 @@ APPROVED_LEAVE_TYPES: tuple[tuple[str, str], ...] = (
 #: Owner-confirmed canonical feeder assignments from requirements §8. Applied when
 #: the DTC exists, so an import that supplies the records can then be reconciled
 #: against the approved overrides rather than the reverse.
+#:
+#: SCD-107 and SCD-108 were confirmed to MRS F-1 OLDTOWN, and on 2026-11-19 the owner
+#: corrected that to Mandli F-22 GANDHIBAZAAR - the feeder the roster itself names -
+#: with the instruction that the imported file is what the office goes by. They are
+#: therefore recorded as the file states them. All six now agree with the supplied
+#: text, so an ordinary roster import reassigns nothing; the table is kept because a
+#: later file that contradicts it must be reported before it is accepted, not
+#: discovered afterwards.
 APPROVED_FEEDER_OVERRIDES: dict[str, str] = {
     "SCD-5": "MRS F-1 OLDTOWN",
     "SCD-12": "Mandli F-22 GANDHIBAZAAR",
-    "SCD-107": "MRS F-1 OLDTOWN",
-    "SCD-108": "MRS F-1 OLDTOWN",
+    "SCD-107": "Mandli F-22 GANDHIBAZAAR",
+    "SCD-108": "Mandli F-22 GANDHIBAZAAR",
     "SCD-109": "MRS F-1 OLDTOWN",
     "SCD-110": "MRS F-1 OLDTOWN",
 }

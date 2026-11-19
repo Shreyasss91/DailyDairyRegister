@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import re
+from calendar import monthrange
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
@@ -224,6 +225,33 @@ def coerce_float(value: str | None, *, field_name: str) -> tuple[float | None, l
 
 _DATE_FORMATS = ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%d.%m.%Y")
 
+#: The same accepted orders as bare fields, so a value whose fields are all present
+#: can be told apart from one that is not a date at all. `31-09-2026` reads against no
+#: format, yet it is not gibberish: it names a day September does not have, and an
+#: operator told it is "not a recognisable date" goes looking for a wrong format
+#: instead of a wrong day.
+_DATE_SHAPES: tuple[tuple[re.Pattern[str], bool], ...] = (
+    (re.compile(r"^(\d{1,2})[-/.]?(\d{1,2})[-/.]?(\d{4})$"), True),
+    (re.compile(r"^(\d{4})[-/.]?(\d{1,2})[-/.]?(\d{1,2})$"), False),
+)
+
+_MONTH_NAMES = (
+    "January", "February", "March", "April", "May", "June", "July",
+    "August", "September", "October", "November", "December",
+)
+
+
+def _impossible_date_reason(day: int, month: int, year: int) -> str:
+    """Why a day, month and year that were all supplied cannot be a date."""
+
+    if not 1 <= month <= 12:
+        return f"there is no month {month}"
+    days = monthrange(year, month)[1]
+    if not 1 <= day <= days:
+        name = _MONTH_NAMES[month - 1]
+        return f"{name} {year} has {days} days, so there is no {day:02d}"
+    return "the value cannot be a date"
+
 
 def coerce_date(
     value: str | None, *, field_name: str | None = None
@@ -248,6 +276,17 @@ def coerce_date(
             return datetime.strptime(text, pattern).date(), []
         except ValueError:
             continue
+    label = field_name or "the date"
+    for shape, day_first in _DATE_SHAPES:
+        match = shape.match(text)
+        if match is None:
+            continue
+        first, second, third = (int(part) for part in match.groups())
+        day, month, year = (first, second, third) if day_first else (third, second, first)
+        return None, [
+            f"{label} '{text}' is not a real calendar date: "
+            f"{_impossible_date_reason(day, month, year)}"
+        ]
     if field_name is not None:
         return None, [f"{field_name} '{text}' is not a recognisable date"]
     return None, [f"'{text}' is not a recognisable date"]

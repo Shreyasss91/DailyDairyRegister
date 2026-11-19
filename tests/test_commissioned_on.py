@@ -117,8 +117,41 @@ def test_a_placeholder_commissioning_date_is_reported_and_carried_as_none():
     assert any("placeholder" in message for message in row.messages)
 
 
-def test_an_unreadable_commissioning_date_is_reported_rather_than_guessed():
+def test_a_date_that_cannot_exist_is_named_rather_than_called_unreadable():
+    # 31-09-2026 has the shape of a date and a day September does not have. Saying
+    # "not a recognisable date" sends the operator looking for a wrong format when
+    # the fault is a wrong day.
+    row = judged("SCD-1,Alpha,DEPT,,250,,31-09-2026")
+    assert row.payload["commissioned_on"] is None
+    message = " ".join(row.messages)
+    assert "not a real calendar date" in message
+    assert "September 2026 has 30 days, so there is no 31" in message
+
+
+def test_an_impossible_month_is_named_as_such():
     row = judged("SCD-1,Alpha,DEPT,,250,,31/31/2020")
+    assert row.payload["commissioned_on"] is None
+    assert any("there is no month 31" in message for message in row.messages)
+
+
+def test_a_february_that_is_not_a_leap_year_is_named_with_its_own_length():
+    row = judged("SCD-1,Alpha,DEPT,,250,,29-02-2025")
+    assert row.payload["commissioned_on"] is None
+    assert any("February 2025 has 28 days" in message for message in row.messages)
+
+
+def test_an_impossible_date_still_includes_the_row_and_imposes_nothing():
+    # The row is bad data on one column, not a reason to lose a transformer: it is
+    # imported with no date, which the schedule reads as no restriction.
+    row = judged("SCD-1,Alpha,DEPT,,250,,31-09-2026")
+    assert row.decision == "include"
+    assert row.severity in {"warning", "error"}
+    assert row.severity == "warning"
+    assert row.payload["commissioned_on"] is None
+
+
+def test_a_value_that_is_not_a_date_at_all_is_still_unreadable():
+    row = judged("SCD-1,Alpha,DEPT,,250,,next month")
     assert row.payload["commissioned_on"] is None
     assert any("not a recognisable date" in message for message in row.messages)
 

@@ -53,6 +53,10 @@ OFFICE_ROSTER = (
 MRS = "MRS F-1 OLDTOWN"
 MANDLI_13 = "Mandli F-13 MANDLI BYEPASS"
 MANDLI_22 = "Mandli F-22 GANDHIBAZAAR"
+
+#: Rows this fixture supplies a feeder that contradicts the confirmed assignment,
+#: so the review notice is tested. The office file itself contradicts none of them.
+CONFLICTING_SOURCE = {"SCD-109": MANDLI_22, "SCD-110": MANDLI_22}
 NT_ROAD = "Mandli F-3 NT ROAD"
 
 
@@ -79,13 +83,14 @@ def _roster_rows() -> list[tuple[str, str, str, str, str, str]]:
     rows.append(("SCF-140", "SECTION FEEDER 140", "SCF", NT_ROAD, "100", "110/11KV MRS"))
     rows.append(("SCE-3", "SECTION CONSUMER 3", "SCE", NT_ROAD, "100", "110/11KV MRS"))
 
-    # Of the six owner-confirmed assignments, four agree with the supplied feeder
-    # text and two (SCD-107, SCD-108) disagree with it. That is the shape of the
-    # office file, and it is what makes the override visible rather than a no-op.
+    # Every one of the six owner-confirmed assignments agrees with the supplied
+    # feeder text, which is the shape of the office file as it stands. Two rows are
+    # deliberately made to disagree anyway, so the notice that reports a disagreement
+    # before acceptance is exercised instead of quietly becoming dead code.
     for dtc_id, feeder_name in APPROVED_FEEDER_OVERRIDES.items():
         index = int(dtc_id.split("-")[1]) - 1
         dtc_id, name, source_class, _, capacity, station = rows[index]
-        supplied = MANDLI_22 if dtc_id in ("SCD-107", "SCD-108") else feeder_name
+        supplied = CONFLICTING_SOURCE.get(dtc_id, feeder_name)
         rows[index] = (dtc_id, name, source_class, supplied, capacity, station)
     return rows
 
@@ -144,7 +149,7 @@ def test_the_whole_roster_reconciles_to_the_settled_counts(db: sqlite3.Connectio
         for outcome in included
         if any("owner-confirmed assignment" in m for m in outcome.messages)
     }
-    assert set(notices) == {"SCD-107", "SCD-108"}
+    assert set(notices) == set(CONFLICTING_SOURCE)
 
 
 def test_staging_the_roster_changes_no_canonical_row(db: sqlite3.Connection) -> None:
@@ -214,11 +219,10 @@ def test_the_batch_names_the_file_it_came_from(db: sqlite3.Connection) -> None:
 def test_the_six_settled_assignments_win_over_conflicting_source_text(
     db: sqlite3.Connection,
 ) -> None:
-    """SCD-107 and SCD-108 are the two the source text disagrees about.
+    """A row whose supplied text contradicts its assignment keeps both facts.
 
-    Their supplied feeder is Mandli F-22, and the settled assignment is MRS F-1.
     The import must keep the supplied text and set the canonical feeder apart from
-    it, so both facts survive.
+    it, so neither is overwritten by the other.
     """
 
     batch, _ = _stage_roster(db)
@@ -229,15 +233,47 @@ def test_the_six_settled_assignments_win_over_conflicting_source_text(
         wanted = masters.find_feeder_by_name(db, feeder_name)
         assert stored[dtc_id].canonical_feeder_id == wanted.feeder_id, dtc_id
 
-    assert stored["SCD-107"].canonical_feeder_id == "F-01"
-    kept = db.execute(
-        "SELECT raw_feeder FROM dtc_source_record WHERE batch_id = ? AND dtc_id = ?",
-        (batch.batch_id, "SCD-107"),
-    ).fetchone()
-    assert kept[0] == MANDLI_22
-    # The other four source rows already agree with their assignment, so only the
-    # two that disagree are rewritten.
-    assert result.feeder_overrides_applied == 2
+    for dtc_id in CONFLICTING_SOURCE:
+        kept = db.execute(
+            "SELECT raw_feeder FROM dtc_source_record WHERE batch_id = ? AND dtc_id = ?",
+            (batch.batch_id, dtc_id),
+        ).fetchone()
+        assert kept[0] == CONFLICTING_SOURCE[dtc_id]
+        assert stored[dtc_id].canonical_feeder_id == "F-01"
+    # Only the rows whose supplied text disagrees are rewritten.
+    assert result.feeder_overrides_applied == len(CONFLICTING_SOURCE)
+
+
+def test_a_roster_that_agrees_with_every_assignment_reports_no_reassignment(
+    db: sqlite3.Connection,
+) -> None:
+    """The office file names the same feeder as every confirmed assignment.
+
+    Nothing is overridden, so the operator reading the review sees no reassignment
+    notice at all - which is what the owner asked for when they said the imported
+    file is what the office goes by.
+    """
+
+    rows = _roster_rows()
+    for dtc_id, feeder_name in APPROVED_FEEDER_OVERRIDES.items():
+        index = int(dtc_id.split("-")[1]) - 1
+        dtc_id, name, source_class, _, capacity, station = rows[index]
+        rows[index] = (dtc_id, name, source_class, feeder_name, capacity, station)
+    batch, verdict = _stage_roster(db, rows)
+
+    notices = [
+        outcome.payload["dtc_id"]
+        for outcome in verdict.outcomes
+        if any("owner-confirmed assignment" in message for message in outcome.messages)
+    ]
+    assert notices == []
+
+    result = accept_batch(db, batch.batch_id)
+    assert result.feeder_overrides_applied == 0
+    stored = {row.dtc_id: row for row in masters.list_dtcs(db)}
+    # SCD-107 and SCD-108 are Mandli F-22 in the file the office maintains.
+    assert stored["SCD-107"].canonical_feeder_id == "F-03"
+    assert stored["SCD-108"].canonical_feeder_id == "F-03"
 
 
 def test_an_unmapped_feeder_stays_a_warning_and_assigns_nothing(
@@ -415,10 +451,14 @@ def test_the_office_copy_reconciles_when_it_is_present(db: sqlite3.Connection) -
         for outcome in included
         if any("owner-confirmed assignment" in m for m in outcome.messages)
     ]
-    assert notices == ["SCD-107", "SCD-108"]
+    assert notices == []
     stored = {row.dtc_id: row for row in masters.list_dtcs(db)}
     for dtc_id, feeder_name in APPROVED_FEEDER_OVERRIDES.items():
         wanted = masters.find_feeder_by_name(db, feeder_name)
         assert stored[dtc_id].canonical_feeder_id == wanted.feeder_id, dtc_id
     assert all(row.canonical_feeder_id for row in stored.values())
     assert all(row.kva is not None for row in stored.values())
+    # The office's own file names Mandli F-22 for these two, and the owner settled
+    # that the file is what the office goes by.
+    assert stored["SCD-107"].canonical_feeder_id == "F-03"
+    assert stored["SCD-108"].canonical_feeder_id == "F-03"
