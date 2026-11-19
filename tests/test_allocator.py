@@ -100,7 +100,7 @@ def test_two_area_visits_plus_one_dtc_on_the_same_date():
     result = allocate_month(request_for(required, roster))
     revalidate(result, required, roster)
     dates = result.per_date()
-    assert max(dates.values()) <= CONFIG.combined_daily_cap
+    assert max(dates.values()) <= CONFIG.total_capacity_per_day
 
 
 def test_two_area_visits_plus_one_feeder_on_the_same_date():
@@ -108,7 +108,7 @@ def test_two_area_visits_plus_one_feeder_on_the_same_date():
     required = {"AREA-01": 1, "AREA-02": 1, "FEEDER-01": 1}
     result = allocate_month(request_for(required, roster))
     revalidate(result, required, roster)
-    assert max(result.per_date().values()) <= CONFIG.combined_daily_cap
+    assert max(result.per_date().values()) <= CONFIG.total_capacity_per_day
 
 
 def test_three_areas_on_one_date_is_impossible_and_is_not_forced():
@@ -128,13 +128,22 @@ def test_three_areas_on_one_date_is_impossible_and_is_not_forced():
     assert all(count <= CONFIG.area_daily_cap for count in areas_per_date.values())
 
 
-def test_combined_cap_of_three_is_enforced_across_all_categories():
+def test_each_kind_is_bounded_by_its_own_ceiling_and_not_by_a_total():
+    """The day holds up to each kind's ceiling, so the total is their sum."""
+
     roster = roster_of(areas=3, dtcs=2, feeders=1)
     required = {a.asset_id: 1 for a in roster}
     result = allocate_month(request_for(required, roster))
     revalidate(result, required, roster)
     assert len(result.visits) == 6
-    assert max(result.per_date().values()) <= CONFIG.combined_daily_cap
+    assert max(result.per_date().values()) <= CONFIG.total_capacity_per_day
+    kinds = {a.asset_id: a.asset_type for a in roster}
+    per_date_kind: dict[tuple, int] = {}
+    for visit in result.visits:
+        key = (visit.visit_date, kinds[visit.asset_id])
+        per_date_kind[key] = per_date_kind.get(key, 0) + 1
+    for (_, kind), count in per_date_kind.items():
+        assert count <= CONFIG.cap_for(kind)
 
 
 # --- per-asset limits and gaps -------------------------------------------
@@ -213,7 +222,7 @@ def test_fixed_visits_consume_capacity_and_discharge_obligations():
     # The commits discharge their obligations, so only AREA-01 needs one more.
     assert result.per_asset()["AREA-01"] == 2
     assert result.per_asset()["SCD-001"] == 1
-    assert max(result.per_date().values()) <= CONFIG.combined_daily_cap
+    assert max(result.per_date().values()) <= CONFIG.total_capacity_per_day
 
 
 def test_locked_visits_remain_unchanged_in_the_output():

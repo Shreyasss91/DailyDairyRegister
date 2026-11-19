@@ -180,8 +180,9 @@ class DayEntryKind(str, Enum):
     """A non-visit entry on a date row.
 
     These are projected for display and are never visit capacity: an event or a
-    safety meeting is not a field visit and does not consume the combined or area
-    daily cap on the allocator's behalf.
+    safety meeting is not a visit and does not consume any kind's daily ceiling on
+    the allocator's behalf. Nor is it one of the activities a day records, so the
+    Monday meeting leaves the activity count on that date exactly as it would be.
     """
 
     ACTIVITY = "activity"
@@ -1275,8 +1276,10 @@ def generate_draft(
             tuple(sorted((a.asset_id, a.asset_type.value, a.active) for a in request.roster))
         ),
         config_fingerprint=_fingerprint(
-            request.config.combined_daily_cap,
+            request.config.dtc_daily_cap,
             request.config.area_daily_cap,
+            request.config.feeder_daily_cap,
+            request.config.combined_daily_cap,
             request.config.default_asset_limits,
             tuple(sorted(request.config.asset_limits.items())),
             request.config.search_node_limit,

@@ -128,8 +128,10 @@ def partial_month_config(
 
     new_default = default
     return FeasibilityConfig(
-        combined_daily_cap=config.combined_daily_cap,
+        dtc_daily_cap=config.dtc_daily_cap,
         area_daily_cap=config.area_daily_cap,
+        feeder_daily_cap=config.feeder_daily_cap,
+        combined_daily_cap=config.combined_daily_cap,
         default_asset_limits=new_default,
         asset_limits=merged,
         search_node_limit=config.search_node_limit,
@@ -337,8 +339,10 @@ def prorated_config(
         for asset_id in asset_ids
     }
     return FeasibilityConfig(
-        combined_daily_cap=config.combined_daily_cap,
+        dtc_daily_cap=config.dtc_daily_cap,
         area_daily_cap=config.area_daily_cap,
+        feeder_daily_cap=config.feeder_daily_cap,
+        combined_daily_cap=config.combined_daily_cap,
         default_asset_limits=prorated_limits(config.default_asset_limits, inputs),
         asset_limits=merged,
         search_node_limit=config.search_node_limit,

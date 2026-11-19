@@ -622,10 +622,12 @@ document.getElementById('gen-run').addEventListener('click', async () => {
   if (activitiesMin !== '') payload.activities_per_day_min = Number(activitiesMin);
   const activitiesMax = document.getElementById('gen-activities-max').value;
   if (activitiesMax !== '') payload.activities_per_day_max = Number(activitiesMax);
-  const visitCap = document.getElementById('gen-visit-cap').value;
-  if (visitCap !== '') payload.field_visits_per_day = Number(visitCap);
+  const dtcCap = document.getElementById('gen-dtc-cap').value;
+  if (dtcCap !== '') payload.dtc_visits_per_day = Number(dtcCap);
   const areaCap = document.getElementById('gen-area-cap').value;
   if (areaCap !== '') payload.area_visits_per_day = Number(areaCap);
+  const feederCap = document.getElementById('gen-feeder-cap').value;
+  if (feederCap !== '') payload.feeder_visits_per_day = Number(feederCap);
   const language = chosenLanguage();
   if (language) payload.entry_language = language;
   if (mode === 'coverage_cycle') {

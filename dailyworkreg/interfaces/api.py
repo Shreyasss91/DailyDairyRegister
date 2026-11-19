@@ -756,8 +756,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             ),
             "activities_per_day_min": prepared.request.activities_per_day_min,
             "activities_per_day_max": prepared.request.activities_per_day_max,
-            "field_visits_per_day": prepared.request.config.combined_daily_cap,
+            "dtc_visits_per_day": prepared.request.config.dtc_daily_cap,
             "area_visits_per_day": prepared.request.config.area_daily_cap,
+            "feeder_visits_per_day": prepared.request.config.feeder_daily_cap,
+            "total_visits_per_day": prepared.request.config.total_capacity_per_day,
             "exceptions": len(draft.exceptions),
             "missing_content": list(prepared.readiness.missing_content),
         }
@@ -1719,8 +1721,13 @@ def _spec(payload: dict[str, Any]) -> GenerationSpec:
         activities_per_day=_activities_per_day(payload.get("activities_per_day")),
         activities_per_day_min=_activities_per_day(payload.get("activities_per_day_min")),
         activities_per_day_max=_activities_per_day(payload.get("activities_per_day_max")),
-        combined_daily_cap=_daily_cap(payload.get("field_visits_per_day"), "total visits"),
+        dtc_daily_cap=_daily_cap(payload.get("dtc_visits_per_day"), "DTC visits"),
         area_daily_cap=_daily_cap(payload.get("area_visits_per_day"), "area visits"),
+        feeder_daily_cap=_daily_cap(payload.get("feeder_visits_per_day"), "feeder visits"),
+        # A request written before the per-kind ceilings states one total instead. It
+        # is honoured as the whole-date ceiling it was, so an old caller sends its
+        # month exactly as it used to and gets the schedule it used to.
+        combined_daily_cap=_daily_cap(payload.get("field_visits_per_day"), "total visits"),
         entry_language=_entry_language(payload.get("entry_language")),
         dtc_target=payload.get("dtc_target"),
         area_required=_counts(payload.get("area_required")),
@@ -1755,12 +1762,15 @@ def _daily_cap(value: Any, what: str) -> int | None:
     Absent means "this request did not decide", which is the platform's own default and
     not zero: a caller that predates the limit must keep generating the register it did.
 
-    ``field_visits_per_day`` in the payload is the day's **total**, every kind of visit
-    counted together, not the visits that are not area visits; ``area_visits_per_day`` says
-    how much of that total may be area visits and can never raise it. The wire name is kept
-    because requests and snapshots already carry it, while the words the operator reads
-    (the form, the refusals, the baseline) call it the total, which is what it is: a form
-    labelled "field visits" read as though area visits came on top of the number.
+    Each kind of visit states its own ceiling: ``dtc_visits_per_day``,
+    ``area_visits_per_day`` and ``feeder_visits_per_day``. They are independent, so a day
+    of transformer checks cannot spend the areas' allowance or the feeders' allowance.
+
+    ``field_visits_per_day`` is the single total a request written before the per-kind
+    ceilings carries. It is read as a ceiling on the whole date, which is what it always
+    was, and it is no longer defaulted: with three independent ceilings the day's total is
+    their sum, and a fourth bound applying by default would keep refusing months the
+    ceilings allow.
     """
 
     if value is None or value == "":

@@ -21,6 +21,8 @@ from ..domain.cycle import CoverageCycle, DtcClass, DtcWeights, MonthKey
 from ..domain.validator import (
     DEFAULT_AREA_DAILY_CAP,
     DEFAULT_COMBINED_DAILY_CAP,
+    DEFAULT_DTC_DAILY_CAP,
+    DEFAULT_FEEDER_DAILY_CAP,
     Asset,
     AssetLimits,
     AssetType,
@@ -105,12 +107,20 @@ class GenerationSpec:
     #: Carried from an earlier run or entered by the operator. Never invented here.
     fixed_by_month: dict[MonthKey, tuple[Visit, ...]] = field(default_factory=dict)
     prior_history: tuple[Visit, ...] = ()
-    #: Field-visit caps per working day. ``None`` keeps the platform default rather than
-    #: a number this layer invented, and the cap is stated in the request because it is
-    #: the one number that decides whether a month's obligations fit at all: the office's
-    #: own monthly maximums are what they are, and a cap too low refuses the month.
-    combined_daily_cap: int | None = None
+    #: A ceiling per working day, one per kind of visit. ``None`` keeps the platform
+    #: default rather than a number this layer invented, and each cap is stated in the
+    #: request because they are the numbers that decide whether a month's obligations fit
+    #: at all: the office's own monthly maximums are what they are, and a cap too low
+    #: refuses the month. Each kind is bounded on its own, so transformer work cannot
+    #: spend the area allowance or the feeder allowance.
+    dtc_daily_cap: int | None = None
     area_daily_cap: int | None = None
+    feeder_daily_cap: int | None = None
+    #: The single total cap a request written before the per-kind ceilings carried. Not
+    #: offered on the form and not defaulted: with three ceilings the day's total is
+    #: their sum, and a fourth bound applying by default would keep refusing months the
+    #: ceilings allow. Kept so an old request or a stored draft reproduces its schedule.
+    combined_daily_cap: int | None = None
 
     def months(self) -> tuple[MonthKey, ...]:
         keys: list[MonthKey] = []
@@ -241,7 +251,7 @@ def _config(
     without the operator being able to see, let alone change, them.
     """
 
-    combined_cap, area_cap = _daily_visit_caps(spec)
+    dtc_cap, area_cap, feeder_cap, combined_cap = _daily_visit_caps(spec)
 
     wanted = {asset.asset_id for asset in roster}
     limits: dict[str, AssetLimits] = {}
@@ -267,8 +277,10 @@ def _config(
         record(dtc.dtc_id, dtc.monthly_max, dtc.monthly_min, dtc.revisit_gap_days)
     return FeasibilityConfig(
         asset_limits=limits,
-        combined_daily_cap=combined_cap,
+        dtc_daily_cap=dtc_cap,
         area_daily_cap=area_cap,
+        feeder_daily_cap=feeder_cap,
+        combined_daily_cap=combined_cap,
     )
 
 
@@ -351,29 +363,40 @@ def _daily_activity_range(spec: GenerationSpec) -> tuple[int, int]:
     return low, high
 
 
-def _daily_visit_caps(spec: GenerationSpec) -> tuple[int, int]:
-    """The day's total visit ceiling and the area share of it.
+def _daily_visit_caps(spec: GenerationSpec) -> tuple[int, int, int, int | None]:
+    """One ceiling per working day for each kind of visit, plus the legacy total.
 
-    The first number is the whole of what a date may hold - transformer, area and feeder
-    visits together - and the second says how much of that total may be area visits. The
-    area share is the smaller of two bounds on one date's work, never an allowance beside
-    it, which is why it may not exceed the total.
+    Each kind is bounded on its own: the transformer ceiling is spent by transformer
+    checks, the area ceiling by area visits, the feeder ceiling by feeder patrols. A
+    day full of one kind therefore never quietly consumes another kind's allowance,
+    which is what a single combined number did.
 
-    Left unset they are the platform defaults, because a request that predates the
-    choice must keep the register it used to get. They are read here rather than inside
-    the validator because they come from the request: the caps are the operator's
-    decision about how much field work one day can hold, not a property of the office's
-    master data.
+    The fourth value is the whole-date ceiling a request written before the per-kind
+    ceilings carried. ``None`` means the request did not state one, and then the day's
+    total is simply the sum of the three. Defaulting it to a number would re-impose a
+    fourth bound that the per-kind ceilings are meant to replace, and would keep
+    refusing months that the three ceilings allow.
+
+    Left unset, each kind takes the platform default rather than zero, because a
+    request that predates the choice must keep generating the register it used to get.
     """
 
-    combined = (
-        DEFAULT_COMBINED_DAILY_CAP
-        if spec.combined_daily_cap is None
-        else spec.combined_daily_cap
-    )
+    dtc = DEFAULT_DTC_DAILY_CAP if spec.dtc_daily_cap is None else spec.dtc_daily_cap
     area = DEFAULT_AREA_DAILY_CAP if spec.area_daily_cap is None else spec.area_daily_cap
+    feeder = (
+        DEFAULT_FEEDER_DAILY_CAP
+        if spec.feeder_daily_cap is None
+        else spec.feeder_daily_cap
+    )
+    combined = spec.combined_daily_cap
 
-    if combined < 1:
+    for label, value in (("DTC", dtc), ("area", area), ("feeder", feeder)):
+        if value < 0:
+            raise GenerationInputError(
+                C_DAILY_VISIT_CAP_INVALID,
+                f"the {label} visits per working day cannot be negative",
+            )
+    if combined is not None and combined < 1:
         raise GenerationInputError(
             C_DAILY_VISIT_CAP_INVALID,
             (
@@ -381,21 +404,16 @@ def _daily_visit_caps(spec: GenerationSpec) -> tuple[int, int]:
                 "that may hold no visit at all cannot record the month's obligations"
             ),
         )
-    if area < 0:
-        raise GenerationInputError(
-            C_DAILY_VISIT_CAP_INVALID,
-            "the area visits per working day cannot be negative",
-        )
-    if area > combined:
+    if dtc + area + feeder < 1:
         raise GenerationInputError(
             C_DAILY_VISIT_CAP_INVALID,
             (
-                f"the area visits per working day ({area}) cannot exceed the total "
-                f"visits per working day ({combined}); the area share is part of that "
-                "limit, not a second allowance"
+                "at least one kind of visit must be allowed on a working day; three "
+                "ceilings of zero leave no day able to record any of the month's "
+                "obligations"
             ),
         )
-    return combined, area
+    return dtc, area, feeder, combined
 
 
 def _entry_language(requested: str | None) -> str:

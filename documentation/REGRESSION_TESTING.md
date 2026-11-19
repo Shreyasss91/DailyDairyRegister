@@ -34,7 +34,7 @@ A non-zero exit code means the validation gate failed. Inspect the failing test 
 Run the directly relevant export and UI tests first:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py
 ```
 
 These modules cover the export/document, PDF, bulk-finalisation and frontend contracts, including:
@@ -64,18 +64,27 @@ These modules cover the export/document, PDF, bulk-finalisation and frontend con
   run in progress named, a report arriving after the end being ignored, the oldest records
   dropped, the watched route answering exactly what the direct route answers, and the page
   drawing the server's percentage into a bar that is still there for a second run.
-- The two daily numbers a working day is built from: the activity range's floor met on
+- The daily numbers a working day is built from: the activity range's floor met on
   every eligible day and its ceiling never exceeded, the day-to-day spread the draw
   produces, an equal-ended range reproducing the flat count an earlier request asked for,
   a reversed or negative range refused at both the domain and the request boundary, a
   ceiling wider than the catalogue drawn under rather than demanded, an outstanding
-  monthly minimum borrowing a day's headroom but never passing the ceiling, the field-visit
-  and area-visit ceilings reaching the request and the snapshot, an unstated ceiling keeping
-  the platform default, a limit below one and an area share above the whole limit refused,
-  a month that was refused generating once its ceiling is raised, a capacity refusal naming
-  the ceiling that would fit the month, the range and the ceilings reaching the route and
-  being echoed in its answer, and the generate form offering both ends of the range and both
-  ceilings while the client sends them.
+  monthly minimum borrowing a day's headroom but never passing the ceiling, each visit
+  kind's own ceiling reaching the request and the snapshot, an unstated ceiling keeping the
+  platform default and no whole-date total being imposed, a negative ceiling and three
+  ceilings of zero refused, a month that was refused generating once its kind's ceiling is
+  raised, a capacity refusal naming the kind and the ceiling that would fit the month, the
+  range and the ceilings reaching the route and being echoed in its answer, and the generate
+  form offering both ends of the range and a ceiling for each kind while the client sends
+  them.
+- One ceiling per kind, and nothing else counted against them: a date holding each kind up to
+  its own ceiling, the day capacity being their sum, a stated total acting as one further
+  ceiling over all kinds, the day-level and aggregate refusals of each kind naming that kind,
+  a committed date judged against its kind's ceiling, a Monday carrying both its safety
+  meeting and its full day of visits, the meeting not consuming an activity slot, the meeting
+  giving no credit towards the activity minimum, and a snapshot written before the kinds were
+  separated reading its total as a whole-date ceiling with the unnamed kinds at their
+  defaults.
 - Regular activities on working days: the configured count on every eligible day and none on a Sunday or a recorded holiday, the catalogue's monthly maximum, monthly minimum, repeat gap (across a month boundary) and weekday restriction as hard constraints, a weight unable to override a maximum, a catalogue that cannot fill a day or a month refused with the constraint and date named, determinism from the seed, the count and the catalogue surviving the request snapshot, a schema-1 snapshot still reading as the visits-only request it recorded, and the placed activities reaching the issued page and workbook with their Kannada text.
 
 The PDF module runs its packaging, refusal and read-only tests against a stand-in renderer, so they pass on a machine without Chromium. The two tests that assert a real `%PDF` file are skipped unless a local browser is installed; run `python -m playwright install chromium` before treating PDF rendering as verified.
@@ -88,7 +97,7 @@ From the repository root:
 
 ```powershell
 # 1. Focused API/document, PDF, bulk-finalisation and UI coverage.
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py
 
 # 2. Full regression suite.
 .\.venv\Scripts\python.exe -m pytest

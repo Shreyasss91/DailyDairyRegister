@@ -32,8 +32,9 @@ from typing import Callable, Iterable, Mapping, Sequence
 
 from .prorating import resolve_period_config
 from .validator import (
-    C_AGG_AREA_CAPACITY,
     C_AGG_COMBINED_CAPACITY,
+    KIND_AGGREGATE_CONSTRAINT,
+    KIND_LABEL,
     C_ASSET_MONTHLY_MAX,
     Asset,
     AssetLimits,
@@ -303,26 +304,29 @@ def _attempt_placement(
         insort(gap_dates.setdefault(visit.asset_id, []), visit.visit_date)
 
     per_date: dict[date, int] = {}
-    per_date_area: dict[date, int] = {}
+    per_date_kind: dict[AssetType, dict[date, int]] = {
+        kind: {} for kind in AssetType
+    }
     per_asset: dict[str, int] = {}
     for visit in request.fixed:
         per_date[visit.visit_date] = per_date.get(visit.visit_date, 0) + 1
         per_asset[visit.asset_id] = per_asset.get(visit.asset_id, 0) + 1
         asset = roster.get(visit.asset_id)
-        if asset is not None and asset.asset_type is AssetType.AREA:
-            per_date_area[visit.visit_date] = per_date_area.get(visit.visit_date, 0) + 1
+        if asset is not None:
+            kind_dates = per_date_kind[asset.asset_type]
+            kind_dates[visit.visit_date] = kind_dates.get(visit.visit_date, 0) + 1
 
     config = request.config
+    kind_caps = config.kind_caps()
     combined_cap = config.combined_daily_cap
-    area_cap = config.area_daily_cap
-    is_area: dict[str, bool] = {
-        asset.asset_id: asset.asset_type is AssetType.AREA for asset in request.roster
+    kind_of: dict[str, AssetType] = {
+        asset.asset_id: asset.asset_type for asset in request.roster
     }
 
     # Viable dates by asset, computed on first use and then kept exact. Only the
     # three things that can change membership are acted on below: the placed asset's
-    # own gap set, a date that has just filled up, and an asset reaching its monthly
-    # capacity.
+    # own gap set, a date that has just filled up for its kind, and an asset reaching
+    # its monthly capacity.
     viable_cache: dict[str, list[date]] = {}
 
     while any(count > 0 for count in remaining.values()):
@@ -341,12 +345,14 @@ def _attempt_placement(
             if viable is None:
                 gap = limits.revisit_gap_days
                 blocked = gap_dates.get(asset_id, ())
-                area_limited = is_area[asset_id]
+                kind = kind_of[asset_id]
+                kind_cap = kind_caps[kind]
+                kind_dates = per_date_kind[kind]
                 viable = [
                     day
                     for day in eligible
-                    if per_date.get(day, 0) < combined_cap
-                    and (not area_limited or per_date_area.get(day, 0) < area_cap)
+                    if kind_dates.get(day, 0) < kind_cap
+                    and (combined_cap is None or per_date.get(day, 0) < combined_cap)
                     and not _gap_violated(blocked, day, gap)
                 ]
                 viable_cache[asset_id] = viable
@@ -381,25 +387,27 @@ def _attempt_placement(
         chosen = best_dates[0]
 
         visit = Visit(best_asset, chosen)
+        kind = kind_of[best_asset]
         placed.append(visit)
         gap_source.append(visit)
         insort(gap_dates.setdefault(best_asset, []), chosen)
         per_date[chosen] = per_date.get(chosen, 0) + 1
         per_asset[best_asset] = per_asset.get(best_asset, 0) + 1
-        if is_area[best_asset]:
-            per_date_area[chosen] = per_date_area.get(chosen, 0) + 1
+        kind_dates = per_date_kind[kind]
+        kind_dates[chosen] = kind_dates.get(chosen, 0) + 1
         remaining[best_asset] -= 1
 
         # Keep the cached option sets exact. The placed asset's own options are
         # rebuilt on its next use, because its visit just closed the dates around it.
         viable_cache.pop(best_asset, None)
-        if per_date[chosen] >= combined_cap:
+        if combined_cap is not None and per_date[chosen] >= combined_cap:
             for days in viable_cache.values():
                 _drop_date(days, chosen)
-        elif is_area[best_asset] and per_date_area[chosen] >= area_cap:
-            # Only area assets lose the date; the cap belongs to them alone.
+        elif kind_dates[chosen] >= kind_caps[kind]:
+            # Only assets of that kind lose the date; the ceiling belongs to them
+            # alone, and another kind may still have room on the same day.
             for asset_id, days in viable_cache.items():
-                if is_area[asset_id]:
+                if kind_of[asset_id] is kind:
                     _drop_date(days, chosen)
 
     return tuple(sorted(placed, key=lambda v: (v.visit_date, v.asset_id)))
@@ -647,37 +655,41 @@ def describe_pressure(request: AllocationRequest) -> tuple[Evidence, ...]:
         request.cycle_obligations,
     )
     total = obligations.total_owed
-    area = sum(
-        count
-        for asset_id, count in obligations.per_asset.items()
-        if roster[asset_id].asset_type is AssetType.AREA
-    )
-    combined_capacity = len(eligible) * request.config.combined_daily_cap
-    area_capacity = len(eligible) * request.config.area_daily_cap
+    owed_by_kind = {kind: 0 for kind in AssetType}
+    for asset_id, count in obligations.per_asset.items():
+        owed_by_kind[roster[asset_id].asset_type] += count
+    combined_capacity = len(eligible) * request.config.total_capacity_per_day
 
     notes: list[Evidence] = []
-    if total > combined_capacity:
+    for kind in AssetType:
+        cap = request.config.cap_for(kind)
+        capacity = len(eligible) * cap
+        if owed_by_kind[kind] <= capacity:
+            continue
+        label = KIND_LABEL[kind]
+        notes.append(
+            Evidence(
+                constraint=KIND_AGGREGATE_CONSTRAINT[kind],
+                detail=(
+                    f"{owed_by_kind[kind]} {label} visits are owed but "
+                    f"{len(eligible)} eligible dates at {cap} per date allow "
+                    f"{capacity}"
+                ),
+                limit=capacity,
+                actual=owed_by_kind[kind],
+            )
+        )
+    combined_cap = request.config.combined_daily_cap
+    if combined_cap is not None and total > len(eligible) * combined_cap:
         notes.append(
             Evidence(
                 constraint=C_AGG_COMBINED_CAPACITY,
                 detail=(
                     f"{total} visits are owed but {len(eligible)} eligible dates at "
-                    f"{request.config.combined_daily_cap} per date allow {combined_capacity}"
+                    f"{combined_cap} per date allow {len(eligible) * combined_cap}"
                 ),
-                limit=combined_capacity,
+                limit=len(eligible) * combined_cap,
                 actual=total,
-            )
-        )
-    if area > area_capacity:
-        notes.append(
-            Evidence(
-                constraint=C_AGG_AREA_CAPACITY,
-                detail=(
-                    f"{area} area visits are owed but {len(eligible)} eligible dates at "
-                    f"{request.config.area_daily_cap} per date allow {area_capacity}"
-                ),
-                limit=area_capacity,
-                actual=area,
             )
         )
     return tuple(notes)

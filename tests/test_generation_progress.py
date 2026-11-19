@@ -653,5 +653,8 @@ def test_the_page_is_not_told_to_compute_its_own_progress():
 
 
 def test_the_client_is_loaded_from_a_new_cache_key():
+    # A changed client must not be served from a browser's cached copy. The value
+    # moves whenever app.js does, which is why it is compared against the current
+    # one rather than against the key it had when the progress bar was written.
     keys = re.findall(r"app\.js\?v=([\w-]+)", INDEX)
-    assert keys == ["progress-1"], keys
+    assert keys == ["per-kind-caps-1"], keys

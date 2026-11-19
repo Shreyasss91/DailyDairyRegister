@@ -18,6 +18,8 @@ from ..domain import wording
 from ..domain.activities import ActivitySpec
 from ..domain.cycle import CoverageCycle, DtcClass, DtcWeights, MonthKey
 from ..domain.validator import (
+    DEFAULT_DTC_DAILY_CAP,
+    DEFAULT_FEEDER_DAILY_CAP,
     Asset,
     AssetLimits,
     AssetType,
@@ -50,10 +52,15 @@ from .draft_generation import (
 #: Schema 4 replaces the single daily activity count with the floor and ceiling the
 #: office now sets. Schemas 1 to 3 recorded one count, which is the range whose two
 #: ends are equal, so they are read as exactly that and reproduce the draft they were.
-REQUEST_SNAPSHOT_SCHEMA = 4
+#:
+#: Schema 5 gives each kind of visit its own daily ceiling. Schemas 1 to 4 recorded one
+#: total and an area share; those are read as exactly that - the total is kept as the
+#: whole-date ceiling it was, and the two kinds it did not bound separately take the
+#: platform default - so a stored draft re-generates the schedule it was issued with.
+REQUEST_SNAPSHOT_SCHEMA = 5
 
 #: Versions this reader understands.
-REQUEST_SNAPSHOT_READABLE = (1, 2, 3, 4)
+REQUEST_SNAPSHOT_READABLE = (1, 2, 3, 4, 5)
 
 C_SNAPSHOT_VERSION_UNSUPPORTED = "request_snapshot_version_unsupported"
 C_SNAPSHOT_MALFORMED = "request_snapshot_malformed"
@@ -135,8 +142,10 @@ def encode_request(request: DraftRequest) -> dict[str, Any]:
             for c in request.calendar_days
         ],
         "config": {
-            "combined_daily_cap": request.config.combined_daily_cap,
+            "dtc_daily_cap": request.config.dtc_daily_cap,
             "area_daily_cap": request.config.area_daily_cap,
+            "feeder_daily_cap": request.config.feeder_daily_cap,
+            "combined_daily_cap": request.config.combined_daily_cap,
             "default_asset_limits": _limits(request.config.default_asset_limits),
             "asset_limits": {
                 asset_id: _limits(limits)
@@ -248,8 +257,22 @@ def decode_request(payload: dict[str, Any]) -> DraftRequest:
     try:
         config_payload = payload["config"]
         config = FeasibilityConfig(
-            combined_daily_cap=int(config_payload["combined_daily_cap"]),
+            # Schemas 1 to 4 carry one total and an area share, and no per-kind
+            # ceilings. The total is read as the whole-date ceiling it was; the two
+            # kinds it never bounded separately take the platform default, so the
+            # month re-generates with the schedule it was issued with.
+            dtc_daily_cap=int(
+                config_payload.get("dtc_daily_cap", DEFAULT_DTC_DAILY_CAP)
+            ),
             area_daily_cap=int(config_payload["area_daily_cap"]),
+            feeder_daily_cap=int(
+                config_payload.get("feeder_daily_cap", DEFAULT_FEEDER_DAILY_CAP)
+            ),
+            combined_daily_cap=(
+                None
+                if config_payload.get("combined_daily_cap") is None
+                else int(config_payload["combined_daily_cap"])
+            ),
             default_asset_limits=_asset_limits(config_payload["default_asset_limits"]),
             asset_limits={
                 asset_id: _asset_limits(limits)

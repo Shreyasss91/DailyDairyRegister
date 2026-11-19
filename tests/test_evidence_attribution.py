@@ -258,8 +258,13 @@ def test_aggregate_combined_capacity_names_every_category():
         _context(
             roster,
             required,
+            # A stated total is the only ceiling that can bind here, so the per-kind
+            # ceilings are set above the demand each kind carries. A total refusal is
+            # the one shape that names every category on the same date.
             FeasibilityConfig(
+                dtc_daily_cap=20,
                 area_daily_cap=3,
+                feeder_daily_cap=5,
                 combined_daily_cap=3,
                 asset_limits=limits,
             ),

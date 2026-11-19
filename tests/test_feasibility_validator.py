@@ -18,10 +18,12 @@ import pytest  # noqa: F401  retained for pytest exception and fixture surface
 from dailyworkreg.domain.validator import (
     C_AGG_AREA_CAPACITY,
     C_AGG_COMBINED_CAPACITY,
+    C_AGG_DTC_CAPACITY,
     C_AREA_DAILY_CAP,
     C_ASSET_MINIMUM,
     C_ASSET_MONTHLY_MAX,
     C_COMBINED_DAILY_CAP,
+    C_DTC_DAILY_CAP,
     C_INACTIVE_ASSET,
     C_MIN_EXCEEDS_MAX,
     C_OUTSIDE_PERIOD,
@@ -326,8 +328,9 @@ def test_two_areas_plus_one_feeder_one_date_allowed():
     assert result.valid, result.violations
 
 
-def test_two_areas_plus_dtc_plus_feeder_rejected():
-    """Four visits on one date exceed the combined cap of 3."""
+def test_two_areas_plus_dtc_plus_feeder_fit_because_each_kind_is_bounded_alone():
+    """Two areas, one DTC and one feeder is four visits, and each kind is within
+    its own ceiling: the area ceiling of 2 is not spent by the DTC or the feeder."""
 
     result = _validate([
         Visit(AREA_ID, date(2026, 10, 1)),
@@ -335,14 +338,33 @@ def test_two_areas_plus_dtc_plus_feeder_rejected():
         Visit(DTC_ID, date(2026, 10, 1)),
         Visit(FEEDER_ID, date(2026, 10, 1)),
     ])
+    assert result.valid
+
+
+def test_three_dtc_visits_on_one_date_exceed_the_dtc_ceiling():
+    """A kind is refused by its own ceiling, not by a total that mixes the kinds."""
+
+    roster = tuple(Asset(f"SCD-{i:03d}", AssetType.DTC) for i in range(1, 4))
+    day = date(2026, 10, 1)
+    result = _validate(
+        [
+            Visit("SCD-001", day),
+            Visit("SCD-002", day),
+            Visit("SCD-003", day),
+        ],
+        roster=roster,
+        config=FeasibilityConfig(dtc_daily_cap=2),
+    )
     assert not result.valid
-    assert C_COMBINED_DAILY_CAP in result.violation_constraints
+    assert C_DTC_DAILY_CAP in result.violation_constraints
+    assert C_COMBINED_DAILY_CAP not in result.violation_constraints
+
 
 
 def test_multiple_asset_types_competing_for_same_day_capacity():
-    """Only the combined cap limits mixed categories on a shared date."""
+    """A stated total is an extra ceiling over the per-kind ones."""
 
-    config = FeasibilityConfig(combined_daily_cap=3, area_daily_cap=2)
+    config = FeasibilityConfig(combined_daily_cap=3, area_daily_cap=2, dtc_daily_cap=2)
     allowed = _validate(
         [
             Visit(AREA_ID, date(2026, 10, 1)),
@@ -508,7 +530,7 @@ def _fixture_w25() -> tuple[frozenset[date], DatePeriod]:
 
 
 def test_aggregate_capacity_passes_but_is_not_a_feasibility_proof():
-    """W=23, C=3 gives 69 slots; meeting the bound only passes the aggregate test."""
+    """W=23 at 3 DTC a day gives 69 slots; meeting the bound only passes the aggregate."""
 
     eligible, period = _fixture_w23()
     assert len(eligible) == 23
@@ -519,7 +541,7 @@ def test_aggregate_capacity_passes_but_is_not_a_feasibility_proof():
         period=period,
         calendar=Calendar(eligible),
         roster=roster,
-        config=FeasibilityConfig(search_node_limit=20_000),
+        config=FeasibilityConfig(search_node_limit=20_000, dtc_daily_cap=3),
     )
     # The aggregate bounds are satisfied, so rejection cannot come from them.
     assert all(
@@ -579,7 +601,7 @@ def test_area_capacity_boundary_at_46_passes_aggregate_only():
 
 
 def test_dtc_capacity_excess_rejected_at_76_over_75():
-    """W=25, C=3 creates 75 slots, so 76 DTC obligations are proven infeasible."""
+    """W=25 at 3 DTC a day creates 75 slots, so 76 DTC duties are proven infeasible."""
 
     eligible, period = _fixture_w25()
     assert len(eligible) == 25
@@ -590,11 +612,12 @@ def test_dtc_capacity_excess_rejected_at_76_over_75():
         period=period,
         calendar=Calendar(eligible),
         roster=roster,
+        config=FeasibilityConfig(dtc_daily_cap=3),
     )
     assert sum(1 for _ in roster) == 76
     assert 76 > 3 * 25
     assert result.status is FeasibilityStatus.INFEASIBLE
-    assert any(e.constraint == C_AGG_COMBINED_CAPACITY for e in result.evidence)
+    assert any(e.constraint == C_AGG_DTC_CAPACITY for e in result.evidence)
 
 
 # --- section 10.6 vector: DTC coverage cycle ------------------------------
@@ -694,11 +717,12 @@ def test_declared_cycle_obligation_exceeding_capacity_is_infeasible():
         period=period,
         calendar=Calendar(eligible),
         roster=roster,
+        config=FeasibilityConfig(dtc_daily_cap=3),
     )
     assert sum(1 for _ in roster) == 113
     assert 113 > 3 * 25 == 75
     assert result.status is FeasibilityStatus.INFEASIBLE
-    assert any(e.constraint == C_AGG_COMBINED_CAPACITY for e in result.evidence)
+    assert any(e.constraint == C_AGG_DTC_CAPACITY for e in result.evidence)
 
 
 def test_search_budget_exhaustion_is_indeterminate_not_infeasible():
@@ -771,9 +795,10 @@ def test_solver_never_claims_false_infeasible_or_false_feasible():
             period=DatePeriod(days[0], days[-1]),
             calendar=Calendar(days),
             roster=roster,
+            # A DTC-only roster, so the per-kind ceiling is what the brute force
+            # enumerates: `cap` DTC visits on one date.
             config=FeasibilityConfig(
-                combined_daily_cap=cap,
-                area_daily_cap=min(2, cap),
+                dtc_daily_cap=cap,
                 default_asset_limits=AssetLimits(monthly_max=3),
                 search_node_limit=500_000,
             ),

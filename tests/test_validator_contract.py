@@ -21,6 +21,7 @@ from dailyworkreg.domain.validator import (
     C_ASSET_MINIMUM,
     C_ASSET_MONTHLY_MAX,
     C_COMBINED_DAILY_CAP,
+    C_DTC_DAILY_CAP,
     C_CYCLE_EXCEEDS_MONTHLY,
     C_DUPLICATE_ASSET_ID,
     C_FIXED_VISIT_NON_WORKING,
@@ -52,6 +53,7 @@ AREA_ID = "area-01"
 AREA2_ID = "area-02"
 AREA3_ID = "area-03"
 DTC_ID = "SCD-01"
+DTC2_ID = "SCD-02"
 FEEDER_ID = "feeder-01"
 
 NOVEMBER = DatePeriod(date(2026, 11, 1), date(2026, 11, 30))
@@ -64,6 +66,7 @@ def _roster() -> tuple[Asset, ...]:
         Asset(AREA2_ID, AssetType.AREA),
         Asset(AREA3_ID, AssetType.AREA),
         Asset(DTC_ID, AssetType.DTC),
+        Asset(DTC2_ID, AssetType.DTC),
         Asset(FEEDER_ID, AssetType.FEEDER),
     )
 
@@ -313,11 +316,14 @@ def test_fixed_visits_consume_daily_capacity():
             proposed=(
                 Visit(FEEDER_ID, date(2026, 11, 1)),
                 Visit(AREA2_ID, date(2026, 11, 1)),
+                Visit(AREA3_ID, date(2026, 11, 1)),
             ),
         )
     )
+    # The committed area visit plus two more areas is three on one date, over the
+    # area allowance of two; the committed DTC and the feeder have their own ceilings.
     assert not overflows.valid
-    assert C_COMBINED_DAILY_CAP in overflows.violation_constraints
+    assert C_AREA_DAILY_CAP in overflows.violation_constraints
 
 
 def test_fixed_visits_count_toward_monthly_maximum():
@@ -489,12 +495,14 @@ def test_schedule_only_mode_does_not_require_obligations():
 # --- 5. structured diagnostics ------------------------------------------
 
 
-def test_combined_cap_violation_exposes_contributing_assets_and_types():
-    """A combined-cap violation names every asset sharing the date, with types."""
+def test_a_stated_total_still_names_every_asset_sharing_the_date():
+    """A total ceiling is not the policy any more, but a request that states one is
+    obeyed, and its violation names every asset on the date with its type."""
 
     result = validate_schedule(
         proposal_context(
             roster=_roster(),
+            config=FeasibilityConfig(combined_daily_cap=3),
             proposed=(
                 Visit(AREA_ID, date(2026, 11, 1)),
                 Visit(AREA2_ID, date(2026, 11, 1)),
@@ -514,6 +522,30 @@ def test_combined_cap_violation_exposes_contributing_assets_and_types():
         AREA2_ID: AssetType.AREA,
         DTC_ID: AssetType.DTC,
         FEEDER_ID: AssetType.FEEDER,
+    }
+
+
+def test_each_kind_is_refused_by_its_own_ceiling_and_names_only_that_kind():
+    """A DTC overrun is refused as a DTC overrun, naming the transformers alone."""
+
+    result = validate_schedule(
+        proposal_context(
+            roster=_roster(),
+            config=FeasibilityConfig(dtc_daily_cap=1),
+            proposed=(
+                Visit(DTC_ID, date(2026, 11, 1)),
+                Visit(DTC2_ID, date(2026, 11, 1)),
+            ),
+        )
+    )
+    violation = next(
+        v for v in result.violations if v.constraint == C_DTC_DAILY_CAP
+    )
+    assert violation.limit == 1
+    assert violation.actual == 2
+    assert dict(violation.contributing_assets) == {
+        DTC_ID: AssetType.DTC,
+        DTC2_ID: AssetType.DTC,
     }
     assert violation.contributing_assets == tuple(
         sorted(violation.contributing_assets, key=lambda pair: pair[0])

@@ -33,6 +33,9 @@ from dailyworkreg.application.draft_requests import (
     C_DAILY_VISIT_CAP_INVALID,
     DEFAULT_ACTIVITIES_PER_DAY,
     DEFAULT_ACTIVITIES_PER_DAY_MAX,
+    DEFAULT_AREA_DAILY_CAP,
+    DEFAULT_DTC_DAILY_CAP,
+    DEFAULT_FEEDER_DAILY_CAP,
     GenerationInputError,
     GenerationSpec,
     prepare_generation,
@@ -48,9 +51,7 @@ from dailyworkreg.domain.activities import (
 from dailyworkreg.domain.cycle import MonthKey
 from dailyworkreg.domain.validator import (
     C_AGG_AREA_CAPACITY,
-    C_AGG_COMBINED_CAPACITY,
-    DEFAULT_AREA_DAILY_CAP,
-    DEFAULT_COMBINED_DAILY_CAP,
+    C_AGG_DTC_CAPACITY,
     InputError,
 )
 from dailyworkreg.infrastructure.sqlite import calendar_records as cal
@@ -295,21 +296,48 @@ def spec(**overrides) -> GenerationSpec:
         "cycle_start_month": MonthKey(2026, 11),
         "cycle_duration_months": 1,
         "cycle_visits_per_asset": 1,
+        # The fixture owes thirty feeder visits across twenty-two working dates, so
+        # one a working day would refuse the month before the activity count is ever
+        # reached. The module is about the activity range, not the feeder ceiling.
+        "feeder_daily_cap": 2,
     }
     values.update(overrides)
     return GenerationSpec(**values)
 
 
 def test_an_unstated_visit_ceiling_keeps_the_platform_default(db):
-    prepared = prepare_generation(db, spec())
-    assert prepared.request.config.combined_daily_cap == DEFAULT_COMBINED_DAILY_CAP
-    assert prepared.request.config.area_daily_cap == DEFAULT_AREA_DAILY_CAP
+    prepared = prepare_generation(
+        db,
+        GenerationSpec(
+            start=date(2026, 11, 1),
+            end=date(2026, 11, 30),
+            mode=DraftMode.COVERAGE_CYCLE,
+            seed=7,
+            cycle_start_month=MonthKey(2026, 11),
+            cycle_duration_months=1,
+            cycle_visits_per_asset=1,
+        ),
+    )
+    config = prepared.request.config
+    assert config.dtc_daily_cap == DEFAULT_DTC_DAILY_CAP
+    assert config.area_daily_cap == DEFAULT_AREA_DAILY_CAP
+    assert config.feeder_daily_cap == DEFAULT_FEEDER_DAILY_CAP
+    # No total is imposed by default: the day holds up to each kind's own ceiling.
+    assert config.combined_daily_cap is None
+    assert config.total_capacity_per_day == (
+        DEFAULT_DTC_DAILY_CAP + DEFAULT_AREA_DAILY_CAP + DEFAULT_FEEDER_DAILY_CAP
+    )
 
 
 def test_the_visit_ceilings_reach_the_request_unchanged(db):
-    prepared = prepare_generation(db, spec(combined_daily_cap=6, area_daily_cap=3))
-    assert prepared.request.config.combined_daily_cap == 6
-    assert prepared.request.config.area_daily_cap == 3
+    prepared = prepare_generation(
+        db, spec(dtc_daily_cap=4, area_daily_cap=3, feeder_daily_cap=2)
+    )
+    config = prepared.request.config
+    assert config.dtc_daily_cap == 4
+    assert config.area_daily_cap == 3
+    assert config.feeder_daily_cap == 2
+    assert config.total_capacity_per_day == 9
 
 
 def test_a_ceiling_of_zero_visits_a_day_is_refused(db):
@@ -318,29 +346,34 @@ def test_a_ceiling_of_zero_visits_a_day_is_refused(db):
     assert caught.value.constraint == C_DAILY_VISIT_CAP_INVALID
 
 
-def test_an_area_share_above_the_whole_ceiling_is_refused(db):
+def test_three_kind_ceilings_of_zero_leave_no_day_that_can_hold_a_visit(db):
     with pytest.raises(GenerationInputError) as caught:
-        prepare_generation(db, spec(combined_daily_cap=3, area_daily_cap=4))
+        prepare_generation(
+            db, spec(dtc_daily_cap=0, area_daily_cap=0, feeder_daily_cap=0)
+        )
     assert caught.value.constraint == C_DAILY_VISIT_CAP_INVALID
+
+
+def test_a_negative_kind_ceiling_is_refused(db):
+    for field_name in ("dtc_daily_cap", "area_daily_cap", "feeder_daily_cap"):
+        with pytest.raises(GenerationInputError) as caught:
+            prepare_generation(db, spec(**{field_name: -1}))
+        assert caught.value.constraint == C_DAILY_VISIT_CAP_INVALID
 
 
 def test_the_month_that_was_refused_generates_once_the_ceiling_is_raised(db):
     """The shape of the office's own refusal: more visits owed than a day allows."""
 
-    refused = generate_draft(
-        prepare_generation(db, spec(combined_daily_cap=1, area_daily_cap=1)).request
-    )
+    refused = generate_draft(prepare_generation(db, spec(dtc_daily_cap=1)).request)
     assert refused.status == DraftStatus.INFEASIBLE
     evidence = refused.months[0].evidence[0]
-    assert evidence.constraint == C_AGG_COMBINED_CAPACITY
-    assert "exceeding the total limit of 1 per working day" in evidence.detail
+    assert evidence.constraint == C_AGG_DTC_CAPACITY
+    assert "exceeding the DTC limit of 1 per working day" in evidence.detail
     # The refusal names the ceiling that would work, so the operator is not left to
     # divide the shortfall by the working days themselves.
-    assert "at least 3 visits a working day would fit them" in evidence.detail
+    assert "at least 2 DTC visits a working day would fit them" in evidence.detail
 
-    raised = generate_draft(
-        prepare_generation(db, spec(combined_daily_cap=3, area_daily_cap=2)).request
-    )
+    raised = generate_draft(prepare_generation(db, spec(dtc_daily_cap=3)).request)
     assert raised.status == DraftStatus.ALLOCATION_COMPLETE
 
 
@@ -355,7 +388,6 @@ def test_the_accounts_own_area_limit_names_the_limit_that_would_fit_the_month(db
                 mode=DraftMode.CAPACITY_FALLBACK,
                 cycle_start_month=None,
                 area_required=areas,
-                combined_daily_cap=2,
                 area_daily_cap=1,
             ),
         ).request
@@ -556,11 +588,18 @@ def test_the_route_accepts_a_range_and_reports_the_one_it_used(tmp_path: Path):
 
 def test_the_route_accepts_the_visit_ceilings_and_echoes_them(tmp_path: Path):
     client = surface(tmp_path)
-    answer = generate(client, field_visits_per_day=5, area_visits_per_day=2)
+    answer = generate(
+        client,
+        dtc_visits_per_day=5,
+        area_visits_per_day=2,
+        feeder_visits_per_day=3,
+    )
     assert answer.status_code == 200, answer.text
     body = answer.json()
-    assert body["field_visits_per_day"] == 5
+    assert body["dtc_visits_per_day"] == 5
     assert body["area_visits_per_day"] == 2
+    assert body["feeder_visits_per_day"] == 3
+    assert body["total_visits_per_day"] == 10
 
 
 def test_the_route_refuses_a_reversed_daily_range(tmp_path: Path):
@@ -570,9 +609,9 @@ def test_the_route_refuses_a_reversed_daily_range(tmp_path: Path):
     assert C_ACTIVITY_DAILY_RANGE_INVALID in answer.text
 
 
-def test_the_route_refuses_an_area_share_above_the_field_ceiling(tmp_path: Path):
+def test_the_route_refuses_a_negative_kind_ceiling(tmp_path: Path):
     client = surface(tmp_path)
-    answer = generate(client, field_visits_per_day=2, area_visits_per_day=3)
+    answer = generate(client, dtc_visits_per_day=-2)
     assert answer.status_code == 400
     assert C_DAILY_VISIT_CAP_INVALID in answer.text
 
@@ -608,16 +647,20 @@ def test_the_generate_form_offers_a_minimum_and_a_maximum():
     assert int(maximum.split('value="')[1].split('"')[0]) > 3
 
 
-def test_the_generate_form_offers_the_two_visit_ceilings():
+def test_the_generate_form_offers_a_ceiling_for_each_kind_of_visit():
     html = page()
-    assert 'id="gen-visit-cap"' in html
+    assert 'id="gen-dtc-cap"' in html
     assert 'id="gen-area-cap"' in html
-    assert "Total visits per working day" in html
-    assert "Field visits per working day" not in html
-    # The form states in one sentence that the area ceiling lives inside the total,
-    # because a label reading "field visits" was taken to exclude area visits.
-    assert "counted together" in html
+    assert 'id="gen-feeder-cap"' in html
+    assert "DTC visits per working day" in html
     assert "Area visits per working day" in html
+    assert "Feeder visits per working day" in html
+    # A single total for all kinds is not offered: it was the number that refused
+    # months each kind could hold, and the kinds no longer share one allowance.
+    assert 'id="gen-visit-cap"' not in html
+    assert "Total visits per working day" not in html
+    # The form says the Monday safety meeting is not counted against these numbers.
+    assert "safety" in html.lower()
 
 
 def test_the_client_sends_the_range_and_the_ceilings_it_was_given():
@@ -625,10 +668,12 @@ def test_the_client_sends_the_range_and_the_ceilings_it_was_given():
     for key in (
         "activities_per_day_min",
         "activities_per_day_max",
-        "field_visits_per_day",
+        "dtc_visits_per_day",
         "area_visits_per_day",
+        "feeder_visits_per_day",
     ):
         assert key in script, key
+    assert "field_visits_per_day" not in script
     assert "activities_per_day" not in script.replace("activities_per_day_min", "").replace(
         "activities_per_day_max", ""
     )

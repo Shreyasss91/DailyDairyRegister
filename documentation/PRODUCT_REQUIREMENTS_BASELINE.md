@@ -246,7 +246,7 @@ The office roster has been read and reconciled through the import workflow. What
 - Two of the six owner-confirmed assignments disagree with the supplied feeder text: SCD-107 and SCD-108 arrive naming Mandli F-22 GANDHIBAZAAR and are assigned to MRS F-1 OLDTOWN. Both facts are kept and are stored apart; the register reads the canonical assignment. The remaining four agree with the supplied text.
 - A row whose canonical assignment differs from what its supplied text resolves to is announced before acceptance, naming the DTC, the assignment, the assignment's feeder id and the supplied text. The operator reviews the reassignment rather than discovering it afterwards.
 - A batch whose assignment names a feeder the master does not carry is refused, under the existing rule that an error blocks an import. Accepting it would store DTCs with no canonical feeder and leave every feeder's derived capacity short while reporting success. Import the feeder master first.
-- Because the combined cap allows at most three field visits per working day, and a cycle owes one visit per active DTC, one calendar month cannot hold this roster: 113 required against roughly 25 eligible dates. A one-month DTC coverage cycle is refused as `INFEASIBLE` with the capacity named, never truncated to fit. A two-month cycle was then run over 2026-01-01 to 2026-02-28 and allocated the whole roster: 113 visits for 113 distinct DTCs, one each, across 59 day rows, with no visit on a non-working day. That is evidence for those two months, not a general claim about every longer cycle: what a cycle of three months or more allocates has not been run, and the paragraph above is the only reason to expect it to hold.
+- Because a working day then allowed at most three field visits in total (the policy in force when this was measured, since replaced by a per-kind ceiling for DTCs), and a cycle owes one visit per active DTC, one calendar month cannot hold this roster: 113 required against roughly 25 eligible dates. A one-month DTC coverage cycle is refused as `INFEASIBLE` with the capacity named, never truncated to fit. A two-month cycle was then run over 2026-01-01 to 2026-02-28 and allocated the whole roster: 113 visits for 113 distinct DTCs, one each, across 59 day rows, with no visit on a non-working day. That is evidence for those two months, not a general claim about every longer cycle: what a cycle of three months or more allocates has not been run, and the paragraph above is the only reason to expect it to hold.
 
 ## 9. Feeder master, weighting and scheduling
 
@@ -275,16 +275,32 @@ Feeder weight is derived from the aggregate installed capacity of active DEPT DT
 
 Previously calculated feeder aggregates were provisional and used pre-correction assumptions. They must be recalculated from the validated canonical DTC data; do not treat old totals as authoritative.
 
-## 10. Combined field-visit constraints and target policy
+## 10. Daily visit limits, one per kind, and target policy
 
-### 10.1 Shared field-visit constraints
+### 10.1 One daily maximum per kind of visit
 
-- Area, DTC and feeder visits share one configurable combined daily field-visit limit.
-- Initial default: **3 combined field visits per working day** across area visits, DTC visits and feeder visits. This is a daily aggregate cap and remains configurable.
-- Area-specific maximum: 2 area visits per working day initially, configurable.
+The owner settled this policy on 2026-11-08, replacing the earlier single shared daily
+total. Each kind of visit has its own ceiling on one working day, and the kinds are
+independent: a date filled with transformer checks has not spent what the office reserved
+for areas or feeders.
+
+- **A separate maximum per working day for each of DTC, area and feeder visits.** Initial
+  defaults: **3 DTC, 2 area and 1 feeder** visit per working day. The DTC default is the
+  allowance the retired shared total of three effectively gave transformers, which carry the
+  bulk of the demand; all of these numbers remain configurable (§24.10, §24.11).
+- **The retired shared total is not a fourth default.** A request may still state one
+  whole-date total, and it then applies as an extra ceiling over all kinds at once, so an
+  older caller and an older snapshot keep generating the schedule they were issued with. It
+  is `None` unless something states it, because a separate total applying by default would
+  keep refusing months the per-kind ceilings hold - the defect this change removes.
+- **Only activities carry a daily minimum.** The approved catalogue's floor per working day
+  (§24.8) is the only minimum on a date. No kind of visit has one.
+- **Every visit ceiling counts visits only.** The safety meeting recorded on every Monday is
+  a day entry, not a visit, and it is not one of the day's activities either: it is never
+  counted against any of these maxima and never credited towards the activity minimum.
 - All three visit types occur only on working days.
 - The minimum revisit interval for an individual area, DTC or feeder remains **7 calendar days**, as established in §§7–9. The next visit to the same asset must be at least 7 calendar days after its preceding visit. Do not reinterpret this as 7 working days.
-- Unless an owner-configured value overrides it, the initial default monthly maximum is **3 visits per individual asset per calendar month** for areas, DTCs and feeders. This is a separate per-asset monthly cap, not another expression of the combined daily cap. Both constraints apply independently; a tighter constraint from the calendar-day revisit interval or an explicit owner setting takes precedence.
+- Unless an owner-configured value overrides it, the initial default monthly maximum is **3 visits per individual asset per calendar month** for areas, DTCs and feeders. This is a separate per-asset monthly cap, not another expression of that asset's kind's daily ceiling. Both constraints apply independently; a tighter constraint from the calendar-day revisit interval or an explicit owner setting takes precedence.
 - Per-asset monthly minimums and maximums remain configurable. A configured maximum may be lower or higher than the initial default. The generator must enforce the effective maximum together with the revisit interval and daily caps.
 - Monthly limits are prorated for partial months by eligible working days, with the prorated values shown before generation.
 - Before generation, validate combined feasibility across monthly targets, per-asset limits, calendar-day revisit intervals, per-day limits and actual eligible working dates. Explain infeasibility rather than silently relaxing a constraint.
@@ -298,12 +314,12 @@ Previously calculated feeder aggregates were provisional and used pre-correction
 - DTC weights continue to matter. In cycle mode, where every active DTC has the same per-cycle visit obligation, weights influence visit priority/order and placement within the cycle, not the total number of visits owed to each DTC. In fallback mode, weights influence relative visit allocation.
 - Cycle boundaries do not reset the 7-calendar-day revisit interval. The scheduler must carry the last-visit date across adjacent cycles and must not place a new-cycle visit inside the prohibited interval following a prior-cycle visit.
 - The cycle roster, coverage obligation, weight/configuration snapshot, actual visit history and cycle progress must be retained in the generated revision so the result can be explained and reproduced.
-- If the requested cycle cannot be satisfied under the combined daily cap, the per-asset monthly maximum, the 7-calendar-day revisit interval, the eligible working dates or other configured commitments, report the specific infeasibility. Do not automatically relax the cycle, revisit interval or daily cap.
+- If the requested cycle cannot be satisfied under the daily transformer ceiling, the per-asset monthly maximum, the 7-calendar-day revisit interval, the eligible working dates or other configured commitments, report the specific infeasibility. Do not automatically relax the cycle, revisit interval or daily ceiling.
 
 ### 10.3 DTC fallback mode — no coverage cycle declared
 
 - If the owner has not declared a DTC coverage cycle, use a feasibility-bounded, weight-informed monthly target as a fallback.
-- Calculate the feasible range from the actual working dates in the month, combined daily capacity, configured area/feeder commitments, per-asset monthly maxima and the 7-calendar-day revisit interval. The monthly target recommendation must not exceed the date-level feasible capacity.
+- Calculate the feasible range from the actual working dates in the month, the transformer daily ceiling, per-asset monthly maxima and the 7-calendar-day revisit interval. The monthly target recommendation must not exceed the date-level feasible capacity. Area and feeder commitments do not narrow it: each of those kinds has its own ceiling, so an area visit does not take a transformer's slot.
 - Allocate the fallback target through a deterministic weighted-fair rotation. Use prior visit history/least-recently-visited state as part of selection so that repeated generations do not systematically favour the same DTCs.
 - Label this recommendation as a **capacity-based monthly suggestion**, not as a coverage commitment. Without a declared cycle, the application must explicitly state that it does not guarantee that every active DTC will be visited within a specified period.
 - Display the feasible range, recommended target, active roster size, and the constraints that limit the recommendation. The user may edit the target, but the feasibility validator remains authoritative.
@@ -314,39 +330,47 @@ Previously calculated feeder aggregates were provisional and used pre-correction
 - Area and feeder monthly targets remain configurable and feasibility-checked.
 - No owner-approved default currently requires every one of the 16 canonical areas or all 4 feeders to be visited once every month. Do not infer those minimums from the asset roster size.
 - Where the owner has configured per-asset minimums, maximums or a coverage cadence, the target allocator must honour them. Where these have not been configured, show the feasible range and the basis of any suggested target; do not present an assumed full-roster monthly visit as an approved requirement.
-- Area, DTC and feeder target recommendations must be validated jointly against the shared daily cap. Do not allocate each visit category independently and then assume the resulting category schedules can be added without date-level packing.
+- Area, DTC and feeder target recommendations must be validated together against their own daily ceilings and against any whole-date total a request states, because two kinds may still be packed onto the same date. Do not assume the resulting category schedules can simply be added.
 
 ### 10.5 Feasibility and calendar semantics
 
-- Let `W` denote the number of eligible working dates in the selected month and `C` the combined daily field-visit cap (initially 3). `W × C` is a gross aggregate upper bound on field-visit slots, not a sufficient proof that a particular target is feasible.
-- Exact feasibility must be evaluated against actual dates. Each asset's visit dates must satisfy the 7-calendar-day interval, the effective per-asset monthly maximum, working-day eligibility and any asset-specific restrictions. All asset types also share the same daily cap.
+- Let `W` denote the number of eligible working dates in the selected month and `C_k` the daily ceiling of visit kind `k` (initially `C_DTC = 3`, `C_AREA = 2`, `C_FEEDER = 1`). Each `W × C_k` is a gross aggregate upper bound on that kind's visits, not a sufficient proof that a particular target is feasible.
+- Exact feasibility must be evaluated against actual dates. Each asset's visit dates must satisfy the 7-calendar-day interval, the effective per-asset monthly maximum, working-day eligibility and any asset-specific restrictions. Each kind is bounded on its own, and a whole-date total applies as well only when a request states one.
 - A seven-working-day spacing grid must not be substituted for the settled seven-calendar-day minimum revisit interval. Working-day spacing may be used as a distribution/fairness heuristic only if the hard calendar-day rule is still enforced.
-- Any proposed lower bound that sums separate area, DTC and feeder day counts must prove that those category visits cannot be packed on the same date under the combined cap. The shared cap permits different visit types to occur on the same date, subject to the total of 3 and the area-specific maximum of 2; therefore, category-specific day counts cannot simply be added without a valid non-overlap proof.
+- Any proposed lower bound that sums separate area, DTC and feeder day counts must prove that those category visits cannot be packed on the same date. Different visit types may share a date, subject to each kind's own ceiling and to a stated whole-date total, so category-specific day counts cannot simply be added without a valid proof.
 - The previously proposed analytical bound and sample table are not yet accepted as a verified feasibility theorem. Before the scheduler uses them, define each term and unit precisely, establish which per-asset minimums/coverage obligations are actually configured, account for date-level overlap among categories, and validate the result against deterministic calendar-based test cases.
 
 ### 10.6 Corrected necessary feasibility conditions and deterministic test vectors
 
 Notation for the selected period (a full month or a partial month):
 
+These conditions were written for the single shared daily total that §10.1 has since
+replaced. Where a vector below states a shared cap, read it as the policy in force when it
+was recorded; the per-kind conditions are the ones that hold now.
+
 - `W` = number of eligible working dates in the selected period.
-- `C` = combined daily field-visit capacity per working day (initial default 3).
+- `C_DTC`, `C_AREA`, `C_FEEDER` = daily ceilings per kind (initial defaults 3, 2, 1).
+- `C` = a whole-date total, only when a request states one.
 - `A` = actual required area visits in the selected period.
 - `D` = actual required DTC visits in the selected period.
 - `F` = actual required feeder visits in the selected period.
 
-Necessary aggregate conditions. Both of the following are necessary conditions for any feasible schedule. Neither is sufficient:
+Necessary aggregate conditions. Each of the following is necessary for any feasible schedule. None is sufficient:
 
 ```
-A           <= 2 * W
-A + D + F   <= C * W
+D           <= C_DTC * W
+A           <= C_AREA * W
+F           <= C_FEEDER * W
+A + D + F   <= (C_DTC + C_AREA + C_FEEDER) * W     (implied by the three above)
+A + D + F   <= C * W                               (only when a total C is stated)
 ```
 
-The two constraints are independent, and both must hold:
+The constraints are independent, and all of them hold:
 
-- The area-specific daily maximum of 2 limits area visits on any single working day, so at most two area visits can be placed per day across the period: `A <= 2 * W`.
-- The combined daily cap of `C` limits all field visits together on any single working day, so all required visits cannot exceed `C * W`: `A + D + F <= C * W`.
+- Each kind's daily ceiling limits that kind only. A month whose areas alone exceed `C_AREA * W` is refused naming the areas and the per-day number that would fit them, not as a shortage of a shared total the operator cannot attribute to anything.
+- A stated whole-date total additionally limits all kinds together on one date.
 
-Category overlap. Area, DTC and feeder visits may share the same working date, subject to the combined cap and the area-specific maximum. Separately computed category day counts must therefore not be added unless a valid non-overlap proof exists for that configuration. The combined inequality above already accounts for sharing and must not be replaced by a sum of per-category day counts.
+Category overlap. Area, DTC and feeder visits may share the same working date, subject to each kind's ceiling and to any stated total. Separately computed category day counts must therefore not be added unless a valid non-overlap proof exists for that configuration.
 
 Per-asset conditions. For every individual asset the schedule must additionally satisfy:
 
@@ -376,9 +400,11 @@ Deterministic test vectors. The table below states expected outcomes under the d
 | Cross-cycle gap | Last visit in prior cycle; next visit fewer than 7 calendar days later | Rejected (gap is not reset at a cycle boundary) |
 | Area daily limit | 2 area visits on one day | Allowed (2 <= area maximum 2) |
 | Area daily limit exceeded | 3 area visits on one day | Rejected (3 > area maximum 2) |
-| Mixed-category packing | 2 areas + 1 DTC on one day | Allowed (total 3 <= combined cap 3; areas 2 <= 2) |
-| Mixed-category packing | 2 areas + 1 feeder on one day | Allowed (total 3 <= combined cap 3; areas 2 <= 2) |
-| Combined cap exceeded | 2 areas + 1 DTC + 1 feeder on one day | Rejected (total 4 > combined cap 3) |
+| Mixed-category packing | 2 areas + 1 DTC on one day | Allowed (areas 2 <= 2; DTC 1 <= 3; no total stated) |
+| Mixed-category packing | 2 areas + 1 feeder on one day | Allowed (areas 2 <= 2; feeders 1 <= 1) |
+| Whole-date total exceeded | 2 areas + 1 DTC + 1 feeder on one day, with a stated total of 3 | Rejected (total 4 > 3) |
+| Transformer ceiling exceeded | 4 DTC visits on one day | Rejected (4 > 3) |
+| Feeder ceiling exceeded | 2 feeder visits on one day | Rejected (2 > 1) |
 | Aggregate capacity (necessary only) | `W = 23`, `C = 3`, total required visits = 69 | `A + D + F <= C * W` passes (69 <= 69); date-level validation still required |
 | Area-cap infeasibility | `W = 23`, `A = 48` | Rejected (48 > 2 * 23 = 46) |
 | Area-cap boundary (necessary only) | `W = 23`, `A = 46` | `A <= 2 * W` passes (46 = 46); date-level validation still required |
@@ -396,10 +422,10 @@ The "necessary only" rows (aggregate capacity and area-cap boundary) pass necess
 The feasibility validator distinguishes three outcomes, and the distinction is part of the requirement rather than an implementation detail. A scheduler that reports "infeasible" because a heuristic attempt failed would refuse targets that are in fact schedulable.
 
 - **FEASIBLE** requires a concrete witness: an assignment of visits to eligible working dates that satisfies every hard constraint and can be re-validated independently.
-- **INFEASIBLE** requires a proof. Only the following establish it: a configured minimum above the effective per-asset maximum; an obligation above the effective per-asset maximum; a failed aggregate necessary condition (`A > 2 * W` or `A + D + F > C * W`); an asset for which no gap-respecting placement exists at all; or a completed exhaustive search that found no joint assignment.
+- **INFEASIBLE** requires a proof. Only the following establish it: a configured minimum above the effective per-asset maximum; an obligation above the effective per-asset maximum; a failed per-kind aggregate necessary condition (`D > C_DTC * W`, `A > C_AREA * W`, `F > C_FEEDER * W`, or the whole-date check when a total is stated); an asset for which no gap-respecting placement exists at all; or a completed exhaustive search that found no joint assignment.
 - **INDETERMINATE** is reported when the search budget is exhausted before any of the above is settled. It is neither an acceptance nor a rejection, and it must be surfaced to the user as such.
 
-The joint packing problem (placing per-asset visit counts onto working dates under both daily caps) is not solvable by greedy placement in general, because a first-fit assignment can fail on an instance that is in fact feasible. Therefore a failed construction is never sufficient evidence of infeasibility, and the validator must not use one as such.
+The joint packing problem (placing per-asset visit counts onto working dates under each kind's ceiling and any stated total) is not solvable by greedy placement in general, because a first-fit assignment can fail on an instance that is in fact feasible. Therefore a failed construction is never sufficient evidence of infeasibility, and the validator must not use one as such.
 
 Cost note: the exact search is tractable for small rosters and becomes expensive as the number of assets with multi-visit obligations grows. A large roster with obligations at the aggregate boundary is expected to return INDETERMINATE within a default budget. Recording a target as feasible at scale therefore requires either a tighter obligation set or a stronger proof method, and neither is assumed here.
 
@@ -415,7 +441,7 @@ This subsection records the input contract the validator enforces. Each clause e
 
 **Committed visits are distinct from prior history.** Visits already committed inside the month, such as locked dates during regeneration, are supplied separately from visits made before the month. Committed visits occupy daily capacity including the area-specific capacity, count toward the per-asset monthly maximum, discharge the corresponding part of the declared obligation, and constrain new placements through the seven-calendar-day interval. They are returned alongside newly allocated visits, so a feasible witness describes the whole month rather than only what was added. A committed visit outside the month or off an eligible working date is reported rather than discarded, because a schedule resting on an invalid commitment cannot be correct.
 
-**A committed visit is validated as strictly as a proposed one, on every path.** Committed in-period visits are checked for unknown assets, inactive assets, dates outside the period, ineligible working dates, both daily capacities, the per-asset monthly maximum and the seven-calendar-day interval against prior history and against each other. Both the concrete-schedule validator and the feasibility assessment evaluate these through one shared hard-constraint path, so the two cannot reach different conclusions about the same input.
+**A committed visit is validated as strictly as a proposed one, on every path.** Committed in-period visits are checked for unknown assets, inactive assets, dates outside the period, ineligible working dates, every daily ceiling that applies to them, the per-asset monthly maximum and the seven-calendar-day interval against prior history and against each other. Both the concrete-schedule validator and the feasibility assessment evaluate these through one shared hard-constraint path, so the two cannot reach different conclusions about the same input.
 
 **An invalid commitment makes the month infeasible, and no path may bypass that.** Because committed visits are immutable input, committed visits that already break a hard constraint mean no valid complete schedule exists around them. The assessment therefore returns INFEASIBLE with structured evidence naming the constraint, asset, offending dates, limit and observed value. This check runs before every path that can return FEASIBLE, including the path where the declared obligations are already discharged by the commitments and nothing remains to allocate; that path was previously able to return FEASIBLE on a month the concrete validator rejected. An invalid commitment is reported as an infeasibility, which is distinct from a malformed obligation specification, that being a caller error reported as an input error.
 
@@ -540,7 +566,7 @@ This section records what the domain allocator actually does, so a reader does n
 
 **Commitments are validated wherever they fall.** Every committed visit is held to the same hard constraints a schedule is, including when its month is not selected for placement, because omitting a month from placement is not permission to ignore what is committed there. A fixed-visit mapping for a month outside the cycle, a visit filed under a month that does not contain its date, and a commitment failing the hard constraints all raise `InputError` with stable identifiers. A commitment that could not have happened is never treated as a valid discharge.
 
-**Only DTC cycle members affect cycle accounting.** A cycle's obligation applies to active DTCs only. Committed area and feeder visits are preserved, consume combined and area daily capacity and constrain the gap, but are never compared with the cycle's per-visit obligation and never produce DTC over-coverage evidence.
+**Only DTC cycle members affect cycle accounting.** A cycle's obligation applies to active DTCs only. Committed area and feeder visits are preserved, consume their own kind's daily ceiling and constrain the gap, but are never compared with the cycle's per-visit obligation and never produce DTC over-coverage evidence.
 
 ## 19. Implemented draft-register generation contract (as built)
 
@@ -1270,51 +1296,79 @@ value cannot be spelled one way when it is stored and another when it is compare
   the neutral sentence. Reissuing it in another wording is a correction revision
   generated under this contract, not an act the platform performs on a closed month.
 
-### 24.10 The two daily numbers the generate tab sets (as built)
+### 24.10 The daily numbers the generate tab sets (as built)
 
-A working day carries two independent quantities: how much field work it holds, and how
-many regular activities it records. They are separate - an activity never consumes a field
-visit slot - and both are now stated in the generation request, because a generation used
-to be refused by a number the operator could neither see nor change.
+A working day carries a separate ceiling for each kind of visit and a range for its regular
+activities, and those are independent of one another: a date of transformer checks has not
+spent the area or feeder allowance, and an activity never takes a visit's place. All of them
+are stated in the generation request, because a generation used to be refused by numbers the
+operator could neither see nor change.
 
-- **Total visits per working day.** `field_visits_per_day` on the request (the wire name is
-  kept so existing requests and snapshots keep working), **Total visits** on the form,
-  default 3 (the platform's earlier constant). It is the day's total: transformer, area and
-  feeder visits counted together. `area_visits_per_day` states how much of that total may be
-  area visits, default 2, and can never raise it. Internally these are the validator's
-  `combined_daily_cap` and `area_daily_cap`; the request names them in the operator's words
-  because a form that carried a constraint's identifier would be the browser restating a
-  rule.
-- **The words say total, because "field visits" was read as excluding area visits.** The
-  label used to read *Field visits per working day*, and an office reading 2 and 2 took it
-  to mean two field visits **plus** up to two area visits, i.e. four a date. It has always
-  been the other way - the area share is a subset of the total - so a month needing 3.1
-  visits a date was refused while the operator believed the form allowed 4. The label now
-  says Total, the form states in one sentence that the area ceiling is inside it, and the
-  refusals say "the total limit is N per working day". The behaviour did not change; what
-  changed is that the number cannot be read as something it never was. The constraint
-  identifiers (`combined_daily_cap_exceeded`, `aggregate_combined_capacity_exceeded`) are
-  unchanged because they are stored in evidence and in snapshots.
-- **Why it had to move.** The caps were platform constants read from nowhere, although
-  §10 already records them as configurable with those initial defaults. An office whose own
-  masters ask for more monthly visits than `3 x working days` had a month refused with
-  `aggregate_combined_capacity_exceeded` and no way to act on it. On the office's own files,
-  113 DTCs over a ten-month cycle cannot be placed at three visits a day; at six the same
-  request generates 543 visits over 224 working days.
-- **What is refused.** A total-visit limit below 1, a negative area share, and an area
-  share above the total (`daily_visit_cap_invalid`), each in a sentence that
-  says which number is wrong. Nothing is silently clamped, and an absent value keeps the
-  platform default rather than becoming zero.
-- **A capacity refusal names the limit that would fit the month.**
-  `aggregate_combined_capacity_exceeded` and `aggregate_area_capacity_exceeded` end with
-  "at least N visits a working day would fit them", computed as the ceiling of demand
-  over eligible dates, so the operator is told the number to enter instead of dividing the
-  shortfall themselves.
-- **Both are recorded with the draft.** The caps live in the request snapshot's existing
-  `config`, and the activity range has its own snapshot fields: schema 4 replaces the single
-  `activities_per_day` with `activities_per_day_min` and `activities_per_day_max`. A schema 1 to 3 snapshot is still read, and its one count is read as the range whose ends are equal.
+- **A maximum per kind, not one total.** `dtc_visits_per_day`, `area_visits_per_day` and
+  `feeder_visits_per_day` on the request; *DTC / Area / Feeder visits per working day -
+  maximum* on the form; defaults 3, 2 and 1. Internally these are the validator's
+  `dtc_daily_cap`, `area_daily_cap` and `feeder_daily_cap`. The request names them in the
+  operator's words because a form that carried a constraint's identifier would be the browser
+  restating a rule.
+- **The retired total.** `field_visits_per_day` is still accepted and read as a ceiling on
+  the whole date, which is what it always was, so a request or snapshot written before the
+  kinds were separated generates the schedule it was issued with. It is no longer defaulted,
+  and `combined_daily_cap` is `None` unless something states it: with three independent
+  ceilings a day's total is their sum, and a fourth bound applying by default kept refusing
+  months the ceilings hold. That was the defect this change removes - a 68-visit month
+  against a stated total of 2 per working day, refused although no kind was over its own
+  ceiling.
+- **Only activities have a minimum.** The minimum per working day belongs to the approved
+  catalogue alone (§24.8), and the form says so. No kind of visit carries a floor: the
+  office owes transformer, area and feeder visits through the cycle obligations and the
+  monthly minimums, not through a daily floor.
+- **Why the numbers had to move.** They were platform constants read from nowhere, although
+  §10 already recorded them as configurable with initial defaults. An office whose own masters
+  ask for more monthly visits than the ceilings allow had a month refused with no way to act
+  on it. `DEFAULT_DTC_DAILY_CAP` is 3 because the retired total of three effectively gave
+  transformers that allowance, and transformers carry the bulk of the demand: on the office's
+  own files a month owes 67 visits across 22 working dates, 37 of them transformer checks.
+- **What is refused.** A negative ceiling of any kind (`daily_visit_cap_invalid`), and all
+  three at zero, which would leave no date able to hold a visit. Nothing is silently clamped,
+  and an absent value keeps the platform default rather than becoming zero.
+- **A capacity refusal names the kind and the number that would fit the month.**
+  `aggregate_dtc_capacity_exceeded`, `aggregate_area_capacity_exceeded`,
+  `aggregate_feeder_capacity_exceeded` and, when a total is stated,
+  `aggregate_combined_capacity_exceeded`, each end with "at least N visits a working day
+  would fit them", computed as the ceiling of that kind's demand over the eligible dates, so
+  the operator is told the number to enter instead of dividing the shortfall themselves. A
+  kind is proved on its own, so a month whose areas alone exceed the area ceiling is refused
+  naming the areas rather than as an unattributable shortage of total capacity.
+- **Recorded with the draft.** Each ceiling lives in the request snapshot's `config`;
+  schema 5 adds the per-kind fields beside the total. A schema 1 to 4 snapshot is still read,
+  its total keeping its meaning as a whole-date ceiling while the kinds it never bounded
+  separately take the platform defaults. The activity range has its own fields since
+  schema 4, and a schema 1 to 3 single count is read as the range whose ends are equal.
 
-### 24.11 A long generation says how far it has got (as built)
+### 24.11 The Monday safety meeting is not one of the numbers (as built)
+
+The office asked for the meeting held every Monday to stay out of every daily count, and it
+does, at each layer that counts anything.
+
+- **It is an entry, not a visit.** `safety_meeting_entries` projects one `DayEntry` of kind
+  `safety_meeting` onto every Monday, holidays and leave days included (§4.2). Visit ceilings
+  are evaluated over `Visit` objects only, so the meeting cannot be charged to them: a March
+  Monday holds its transformer duty exactly as a Tuesday does, and a test asserts it on the
+  month the office measured.
+- **It is not one of the day's activities.** `allocate_activities` counts the placements it
+  makes from the approved catalogue, so a Monday recording the meeting and four activities
+  records four, not five, against the ceiling and not three against the floor. The meeting
+  cannot discharge an activity minimum either: a catalogue that cannot meet the floor is
+  refused with the whole shortfall named, whatever the calendar holds that day.
+- **It still prints.** Exclusion from the counts is not exclusion from the register. The
+  meeting is one of the date's items, printed beside the visits and the activities in the
+  fixed order of `DISPLAY_ITEM_ORDER`, because a register that dropped what the office did on
+  a Monday would be wrong in the other direction.
+- **The form says so.** The generate tab states in one sentence that the kinds are
+  independent and that the Monday meeting is not counted against either number, because a
+  rule that only lives in code is one the office has to guess.
+
+### 24.12 A long generation says how far it has got (as built)
 
 - **Why it exists.** A ten-month register is one click and can take a minute. Without a
   report, a request that is working and a request that has wedged look identical on screen:
@@ -1354,7 +1408,7 @@ to be refused by a number the operator could neither see nor change.
   reader is the page that asked for the run, and a restart must not resurrect a half-written
   register as though it were still being written.
 
-### 24.12 What is not modelled
+### 24.13 What is not modelled
 
 - Partial-month generation, and therefore the use of the section 23 proration rule to
   build a schedule. A part-month is still refused.
@@ -1366,6 +1420,10 @@ to be refused by a number the operator could neither see nor change.
   every eligible working day, drawn per day from the seed.
 - An activity's applicability to particular areas, feeders or DTCs: the catalogue has no
   such column, so a placement is office-wide.
+- A daily minimum on any kind of visit. Only the catalogue has one, which is the owner's
+  decision; a transformer, area or feeder floor per working day is not modelled.
+- A recorded reason for a closed day's allocated work beyond the one sentence
+  `STAFF_ALLOCATION_NOTE`. Which works were allocated, and to whom, is not recorded.
 - A Kannada narrative sentence for a visit, and Kannada names for feeders, which the
   masters do not store. The language setting governs names and activity text, not the
   sentence a visit is written in.

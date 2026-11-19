@@ -22,18 +22,29 @@ that callers and the future UI can map them to messages without parsing prose.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
-from typing import Iterable, Mapping, Sequence
 
-#: Default total visit limit per working day (areas + DTCs + feeders counted
-#: together). The identifier keeps the word "combined" because evidence and
-#: snapshots already carry it; the operator reads it as the day's total.
-DEFAULT_COMBINED_DAILY_CAP = 3
+#: Default DTC visits permitted on a single working day. Each kind of visit has its
+#: own ceiling, so a day filled with transformer checks does not silently crowd out
+#: the areas and feeders the office also owes. Three is the allowance the settled
+#: total of three effectively gave transformers, which are the bulk of the demand.
+DEFAULT_DTC_DAILY_CAP = 3
 
-#: Default area-only visits permitted on a single working day.
+#: Default area visits permitted on a single working day. This is the recorded initial
+#: allowance of 2, kept because it is the number the office already plans areas against.
 DEFAULT_AREA_DAILY_CAP = 2
+
+#: Default feeder visits permitted on a single working day.
+DEFAULT_FEEDER_DAILY_CAP = 1
+
+#: The single total cap a request written before the per-kind ceilings carried. It is
+#: no longer a default: with three independent ceilings the day's total is their sum,
+#: and a fourth bound that also applied by default would keep refusing months that the
+#: per-kind ceilings allow. It survives so an old snapshot reproduces its own schedule.
+DEFAULT_COMBINED_DAILY_CAP = 3
 
 #: Default maximum visits to one individual asset in one calendar month.
 DEFAULT_PER_ASSET_MONTHLY_MAX = 3
@@ -51,6 +62,8 @@ C_WORKING_DATE = "not_a_working_date"
 C_UNKNOWN_ASSET = "unknown_asset"
 C_INACTIVE_ASSET = "inactive_asset"
 C_AREA_DAILY_CAP = "area_daily_cap_exceeded"
+C_DTC_DAILY_CAP = "dtc_daily_cap_exceeded"
+C_FEEDER_DAILY_CAP = "feeder_daily_cap_exceeded"
 C_COMBINED_DAILY_CAP = "combined_daily_cap_exceeded"
 C_ASSET_MONTHLY_MAX = "asset_monthly_max_exceeded"
 C_REVISIT_GAP = "revisit_gap_violated"
@@ -60,6 +73,8 @@ C_OUTSIDE_PERIOD = "visit_outside_period"
 C_PERIOD_NOT_WORKING = "period_date_not_working"
 C_MIN_EXCEEDS_MAX = "configured_minimum_exceeds_maximum"
 C_AGG_AREA_CAPACITY = "aggregate_area_capacity_exceeded"
+C_AGG_DTC_CAPACITY = "aggregate_dtc_capacity_exceeded"
+C_AGG_FEEDER_CAPACITY = "aggregate_feeder_capacity_exceeded"
 C_AGG_COMBINED_CAPACITY = "aggregate_combined_capacity_exceeded"
 C_SEARCH_LIMIT = "search_node_limit_reached"
 
@@ -81,7 +96,7 @@ C_CYCLE_EXCEEDS_MONTHLY = "cycle_obligation_exceeds_monthly_portion"
 
 
 class AssetType(str, Enum):
-    """Visit categories that share the combined daily capacity."""
+    """Visit categories, each with its own ceiling on one working day."""
 
     AREA = "AREA"
     DTC = "DTC"
@@ -165,27 +180,62 @@ class AssetLimits:
 class FeasibilityConfig:
     """Effective scheduling configuration for one validation run.
 
-    The defaults mirror the recorded initial policy: 3 combined visits per
-    working day, at most 2 of them area visits, at most 3 visits to any single
-    asset per month, and 7 calendar days between consecutive visits to the same
-    asset. Every value remains configurable.
+    Each kind of visit carries its own ceiling on one working day: DTC, area and
+    feeder. A day's total is therefore the sum of the three plus whatever the
+    request bound explicitly, and no kind can spend another kind's share. The
+    defaults are 3 DTC, 2 area and 1 feeder visit a working day, at most 3 visits to
+    any single asset per month, and 7 calendar days between consecutive visits to
+    the same asset. The DTC default is the allowance the single settled total of
+    three effectively gave transformers, which carry most of the demand. Every value
+    remains configurable.
+
+    ``combined_daily_cap`` is a ceiling on the whole date regardless of kind. It is
+    ``None`` by default and is not a fourth policy number: it exists so a request or
+    a stored draft written before the per-kind ceilings, which carried one total,
+    keeps the schedule it was generated with.
     """
 
-    combined_daily_cap: int = DEFAULT_COMBINED_DAILY_CAP
+    dtc_daily_cap: int = DEFAULT_DTC_DAILY_CAP
     area_daily_cap: int = DEFAULT_AREA_DAILY_CAP
+    feeder_daily_cap: int = DEFAULT_FEEDER_DAILY_CAP
+    combined_daily_cap: int | None = None
     default_asset_limits: AssetLimits = field(default_factory=AssetLimits)
     asset_limits: Mapping[str, AssetLimits] = field(default_factory=dict)
     search_node_limit: int = DEFAULT_SEARCH_NODE_LIMIT
 
     def __post_init__(self) -> None:
-        if self.combined_daily_cap < 1:
-            raise ValueError("combined_daily_cap must be at least 1")
-        if self.area_daily_cap < 0:
-            raise ValueError("area_daily_cap must be non-negative")
-        if self.area_daily_cap > self.combined_daily_cap:
-            raise ValueError("area_daily_cap cannot exceed combined_daily_cap")
+        for kind, cap in self.kind_caps().items():
+            if cap < 0:
+                raise ValueError(
+                    f"{kind.value.lower()}_daily_cap must be non-negative"
+                )
+        if self.combined_daily_cap is not None and self.combined_daily_cap < 1:
+            raise ValueError("combined_daily_cap must be at least 1 when it is set")
         if self.search_node_limit < 1:
             raise ValueError("search_node_limit must be at least 1")
+
+    def kind_caps(self) -> dict[AssetType, int]:
+        """The per-date ceiling of each kind of visit."""
+
+        return {
+            AssetType.DTC: self.dtc_daily_cap,
+            AssetType.AREA: self.area_daily_cap,
+            AssetType.FEEDER: self.feeder_daily_cap,
+        }
+
+    def cap_for(self, asset_type: AssetType) -> int:
+        """The per-date ceiling that applies to ``asset_type``."""
+
+        return self.kind_caps()[asset_type]
+
+    @property
+    def total_capacity_per_day(self) -> int:
+        """The most visits one working date can hold, whichever kinds they are."""
+
+        total = sum(self.kind_caps().values())
+        if self.combined_daily_cap is None:
+            return total
+        return min(total, self.combined_daily_cap)
 
     def limits_for(self, asset_id: str) -> AssetLimits:
         """Return the effective limits for ``asset_id``.
@@ -210,7 +260,7 @@ class Calendar:
     working_days: frozenset[date]
 
     @classmethod
-    def from_dates(cls, dates: Iterable[date]) -> "Calendar":
+    def from_dates(cls, dates: Iterable[date]) -> Calendar:
         return cls(working_days=frozenset(dates))
 
     def is_working(self, day: date) -> bool:
@@ -333,7 +383,7 @@ class InputError(ValueError):
         constraint: str,
         detail: str,
         asset_id: str | None = None,
-        violations: tuple["Violation", ...] = (),
+        violations: tuple[Violation, ...] = (),
     ):
         self.constraint = constraint
         self.detail = detail
@@ -641,7 +691,7 @@ class Evidence:
     constraint: str
     detail: str
     asset_id: str | None = None
-    asset_type: "AssetType | None" = None
+    asset_type: AssetType | None = None
     visit_date: date | None = None
     offending_dates: tuple[date, ...] = ()
     limit: int | None = None
@@ -752,16 +802,36 @@ def visits_by_date(visits: Iterable[Visit]) -> dict[date, list[Visit]]:
     return grouped
 
 
+#: A per-kind ceiling, one working date, refused in the operator's terms.
+KIND_LABEL = {
+    AssetType.DTC: "DTC",
+    AssetType.AREA: "area",
+    AssetType.FEEDER: "feeder",
+}
+
+KIND_DAILY_CONSTRAINT = {
+    AssetType.DTC: C_DTC_DAILY_CAP,
+    AssetType.AREA: C_AREA_DAILY_CAP,
+    AssetType.FEEDER: C_FEEDER_DAILY_CAP,
+}
+
+KIND_AGGREGATE_CONSTRAINT = {
+    AssetType.DTC: C_AGG_DTC_CAPACITY,
+    AssetType.AREA: C_AGG_AREA_CAPACITY,
+    AssetType.FEEDER: C_AGG_FEEDER_CAPACITY,
+}
+
+
 def _daily_cap_violations(
     visits: Sequence[Visit],
     roster: Mapping[str, Asset],
     config: FeasibilityConfig,
 ) -> list[Violation]:
-    """Check the area-only cap and the combined cap for every date.
+    """Check each kind's own ceiling, and the whole date's if one is set.
 
-    Both caps are independent. The combined cap counts every category together,
-    which is why category day counts must never be summed to reason about
-    capacity: different categories may occupy the same date.
+    Each kind is bounded on its own: a day full of transformer checks does not spend
+    the area allowance or the feeder allowance. The dates are therefore read by kind,
+    and a kind's day count is never compared with another kind's ceiling.
     """
 
     violations: list[Violation] = []
@@ -772,32 +842,34 @@ def _daily_cap_violations(
         # one asset, and deduplicating the attribution must never shrink the number
         # the operator is being shown.
         contributing = attribute_assets((visit.asset_id for visit in bucket), roster)
-        area_contributors = tuple(
-            pair for pair in contributing if pair[1] is AssetType.AREA
-        )
-        area_visits = sum(
-            1
-            for visit in bucket
-            if visit.asset_id in roster
-            and roster[visit.asset_id].asset_type is AssetType.AREA
-        )
-        combined = len(bucket)
-        if area_visits > config.area_daily_cap:
+        counts = dict.fromkeys(AssetType, 0)
+        for visit in bucket:
+            asset = roster.get(visit.asset_id)
+            if asset is not None:
+                counts[asset.asset_type] += 1
+        for kind in AssetType:
+            cap = config.cap_for(kind)
+            if counts[kind] <= cap:
+                continue
+            label = KIND_LABEL[kind]
             violations.append(
                 Violation(
-                    constraint=C_AREA_DAILY_CAP,
+                    constraint=KIND_DAILY_CONSTRAINT[kind],
                     message=(
-                        f"{area_visits} area visits on {day.isoformat()}; "
-                        f"the area limit is {config.area_daily_cap} per working day"
+                        f"{counts[kind]} {label} visits on {day.isoformat()}; "
+                        f"the {label} limit is {cap} per working day"
                     ),
                     visit_date=day,
                     offending_dates=(day,),
-                    contributing_assets=area_contributors,
-                    limit=config.area_daily_cap,
-                    actual=area_visits,
+                    contributing_assets=tuple(
+                        pair for pair in contributing if pair[1] is kind
+                    ),
+                    limit=cap,
+                    actual=counts[kind],
                 )
             )
-        if combined > config.combined_daily_cap:
+        combined = len(bucket)
+        if config.combined_daily_cap is not None and combined > config.combined_daily_cap:
             violations.append(
                 Violation(
                     constraint=C_COMBINED_DAILY_CAP,
@@ -1412,16 +1484,19 @@ def _pack_into_days(
     asset_ids = sorted(
         placements, key=lambda asset_id: (len(placements[asset_id]), asset_id)
     )
-    usage_total: dict[date, int] = {d: 0 for d in eligible}
-    usage_area: dict[date, int] = {d: 0 for d in eligible}
+    usage_total: dict[date, int] = dict.fromkeys(eligible, 0)
+    usage_kind: dict[AssetType, dict[date, int]] = {
+        kind: dict.fromkeys(eligible, 0) for kind in AssetType
+    }
     for visit in fixed:
         day = visit.visit_date
         if day not in usage_total:
             continue
         usage_total[day] += 1
         asset = roster.get(visit.asset_id)
-        if asset is not None and asset.asset_type is AssetType.AREA:
-            usage_area[day] += 1
+        if asset is not None:
+            usage_kind[asset.asset_type][day] += 1
+    combined_cap = config.combined_daily_cap
     chosen: dict[str, tuple[date, ...]] = {}
 
     def recurse(index: int) -> dict[str, tuple[date, ...]] | None:
@@ -1431,22 +1506,23 @@ def _pack_into_days(
         if index == len(asset_ids):
             return dict(chosen)
         asset_id = asset_ids[index]
-        is_area = roster[asset_id].asset_type is AssetType.AREA
+        kind = roster[asset_id].asset_type
+        kind_usage = usage_kind[kind]
+        kind_cap = config.cap_for(kind)
         for placement in placements[asset_id]:
             fits = True
             for day in placement:
-                if usage_total[day] + 1 > config.combined_daily_cap:
+                if combined_cap is not None and usage_total[day] + 1 > combined_cap:
                     fits = False
                     break
-                if usage_area[day] + (1 if is_area else 0) > config.area_daily_cap:
+                if kind_usage[day] + 1 > kind_cap:
                     fits = False
                     break
             if not fits:
                 continue
             for day in placement:
                 usage_total[day] += 1
-                if is_area:
-                    usage_area[day] += 1
+                kind_usage[day] += 1
             chosen[asset_id] = placement
             found = recurse(index + 1)
             if found is not None:
@@ -1454,8 +1530,7 @@ def _pack_into_days(
             del chosen[asset_id]
             for day in placement:
                 usage_total[day] -= 1
-                if is_area:
-                    usage_area[day] -= 1
+                kind_usage[day] -= 1
         return None
 
     try:
@@ -1576,11 +1651,6 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
             required[asset_id] = remaining
 
     total_required = sum(required.values())
-    area_required = sum(
-        count
-        for asset_id, count in required.items()
-        if roster[asset_id].asset_type is AssetType.AREA
-    )
 
     if not required:
         # Nothing remains to place. The preflight above has already established
@@ -1646,17 +1716,17 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
     # Aggregate necessary conditions. These are necessary only; a failure is a
     # proof, while passing proves nothing about date-level feasibility. Committed
     # visits already occupy slots, so both checks use the month total.
-    fixed_area = sum(
-        1
-        for visit in context.fixed
-        if context.period.contains(visit.visit_date)
-        and visit.asset_id in roster
-        and roster[visit.asset_id].asset_type is AssetType.AREA
-    )
-    fixed_total = sum(
-        1 for visit in context.fixed if context.period.contains(visit.visit_date)
-    )
-    area_demand = area_required + fixed_area
+    fixed_by_kind = dict.fromkeys(AssetType, 0)
+    for visit in context.fixed:
+        if not context.period.contains(visit.visit_date):
+            continue
+        asset = roster.get(visit.asset_id)
+        if asset is not None:
+            fixed_by_kind[asset.asset_type] += 1
+    fixed_total = sum(fixed_by_kind.values())
+    required_by_kind = dict.fromkeys(AssetType, 0)
+    for asset_id, count in required.items():
+        required_by_kind[roster[asset_id].asset_type] += count
     total_demand = total_required + fixed_total
 
     # Every demand this month carries, from obligations still to place and from
@@ -1667,26 +1737,34 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
         visit.asset_id for visit in context.fixed if context.period.contains(visit.visit_date)
     }
 
-    if area_demand > context.config.area_daily_cap * working_days:
+    # Each kind is bounded on its own, so each kind is proved on its own: a month
+    # whose areas alone exceed the area ceiling is refused naming the areas, with
+    # the per-day number that would fit them, rather than as a shortage of total
+    # capacity the operator cannot attribute to anything.
+    for kind in AssetType:
+        cap = context.config.cap_for(kind)
+        demand = required_by_kind[kind] + fixed_by_kind[kind]
+        if demand <= cap * working_days:
+            continue
+        label = KIND_LABEL[kind]
         evidence.append(
             Evidence(
-                constraint=C_AGG_AREA_CAPACITY,
+                constraint=KIND_AGGREGATE_CONSTRAINT[kind],
                 detail=(
-                    f"{area_demand} area visits are required in the month "
-                    f"({area_required} to place plus {fixed_area} committed), "
-                    f"exceeding the area limit of "
-                    f"{context.config.area_daily_cap} per working day across "
-                    f"{working_days} eligible dates; at least "
-                    f"{_per_day_needed(area_demand, working_days)} area visits a "
-                    "working day would fit them"
+                    f"{demand} {label} visits are required in the month "
+                    f"({required_by_kind[kind]} to place plus "
+                    f"{fixed_by_kind[kind]} committed), exceeding the {label} limit "
+                    f"of {cap} per working day across {working_days} eligible dates; "
+                    f"at least {_per_day_needed(demand, working_days)} {label} visits "
+                    "a working day would fit them"
                 ),
-                limit=context.config.area_daily_cap * working_days,
-                actual=area_demand,
+                limit=cap * working_days,
+                actual=demand,
                 contributing_assets=attribute_assets(
                     (
                         asset_id
                         for asset_id in demanded_assets
-                        if roster[asset_id].asset_type is AssetType.AREA
+                        if roster[asset_id].asset_type is kind
                     ),
                     roster,
                 ),
@@ -1695,7 +1773,8 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
         return FeasibilityResult(
             status=FeasibilityStatus.INFEASIBLE, evidence=tuple(evidence)
         )
-    if total_demand > context.config.combined_daily_cap * working_days:
+    combined_cap = context.config.combined_daily_cap
+    if combined_cap is not None and total_demand > combined_cap * working_days:
         evidence.append(
             Evidence(
                 constraint=C_AGG_COMBINED_CAPACITY,
@@ -1703,12 +1782,12 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                     f"{total_demand} visits are required in the month "
                     f"({total_required} to place plus {fixed_total} committed), "
                     f"exceeding the total limit of "
-                    f"{context.config.combined_daily_cap} per working day across "
+                    f"{combined_cap} per working day across "
                     f"{working_days} eligible dates; at least "
                     f"{_per_day_needed(total_demand, working_days)} visits a "
                     "working day would fit them"
                 ),
-                limit=context.config.combined_daily_cap * working_days,
+                limit=combined_cap * working_days,
                 actual=total_demand,
                 contributing_assets=attribute_assets(demanded_assets, roster),
             )
@@ -1812,10 +1891,10 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                 constraint=C_COMBINED_DAILY_CAP,
                 detail=(
                     f"no joint assignment of {total_required} required visits "
-                    f"satisfies both daily capacity limits across "
+                    "satisfies every daily capacity limit across "
                     f"{working_days} eligible dates"
                 ),
-                limit=context.config.combined_daily_cap,
+                limit=context.config.total_capacity_per_day,
                 actual=total_required,
                 # The joint packing problem is exactly the demand computed above:
                 # every asset still owed visits and every asset already holding a

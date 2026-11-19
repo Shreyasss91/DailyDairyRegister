@@ -127,18 +127,24 @@ def test_no_obligations_does_not_excuse_an_invalid_commitment():
     assert not validate_schedule(judge(ROSTER, (), fixed=fixed)).valid
 
 
-def test_no_obligations_does_not_excuse_combined_cap_overrun():
-    """The early return must not accept four committed visits on one date."""
+def test_no_obligations_does_not_excuse_a_daily_ceiling_overrun():
+    """The early return must not accept two committed area visits over the ceiling.
+
+    Each kind has its own ceiling, so the overrun is the area kind's: two committed
+    area visits on one date where the area allowance is one.
+    """
 
     fixed = (
         Visit("a", date(2026, 11, 1)),
+        Visit("a", date(2026, 11, 1)),
         Visit("b", date(2026, 11, 1)),
         Visit("c", date(2026, 11, 1)),
-        Visit("a", date(2026, 11, 1)),
     )
-    result = assess_feasibility(serve(ROSTER, fixed))
+    result = assess_feasibility(
+        serve(ROSTER, fixed, config=FeasibilityConfig(area_daily_cap=1))
+    )
     assert result.status is FeasibilityStatus.INFEASIBLE
-    assert C_COMBINED_DAILY_CAP in {e.constraint for e in result.evidence}
+    assert C_AREA_DAILY_CAP in {e.constraint for e in result.evidence}
 
 
 def test_no_obligations_does_not_excuse_area_cap_overrun():
@@ -263,7 +269,7 @@ def test_committed_visits_consume_the_last_available_daily_capacity():
     per_date: dict[date, int] = {}
     for visit in result.witness:
         per_date[visit.visit_date] = per_date.get(visit.visit_date, 0) + 1
-    assert max(per_date.values()) <= CONFIG.combined_daily_cap
+    assert max(per_date.values()) <= CONFIG.total_capacity_per_day
 
 
 def test_commitments_that_exhaust_the_monthly_maximum_make_more_impossible():

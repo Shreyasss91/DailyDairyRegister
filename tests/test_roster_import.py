@@ -347,7 +347,7 @@ def test_the_imported_roster_carries_its_classes_into_the_weight_model(
 def test_a_two_month_cycle_over_the_whole_roster_allocates_completely(
     db: sqlite3.Connection,
 ) -> None:
-    """One month cannot hold 113 DTCs under the settled daily cap of three."""
+    """One month cannot hold 113 DTCs, so the cycle spreads them over two."""
 
     batch, _ = _stage_roster(db)
     accept_batch(db, batch.batch_id)
@@ -361,6 +361,9 @@ def test_a_two_month_cycle_over_the_whole_roster_allocates_completely(
         cycle_start_month=MonthKey(2026, 1),
         cycle_duration_months=2,
         cycle_visits_per_asset=1,
+        # Three transformers a working day: 45 working dates over January and
+        # February hold the 113 duties, and the January dates alone do not.
+        dtc_daily_cap=3,
     )
     prepared = prepare_generation(db, spec)
     draft = generate_draft(prepared.request)

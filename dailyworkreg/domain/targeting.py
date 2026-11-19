@@ -223,10 +223,9 @@ def fallback_dtc_target(
 ) -> FallbackTarget:
     """Choose a capacity-bounded DTC target for a month with no declared cycle.
 
-    The target is the smallest of the requested target, the DTC capacity the
-    calendar can actually hold once area and feeder visits have taken their
-    share, and the number of active DTCs that can still take a visit this month
-    under their own monthly maximum.
+    The target is the smallest of the requested target, the transformer capacity
+    the calendar can hold under the DTC ceiling, and the number of active DTCs
+    that can still take a visit this month under their own monthly maximum.
 
     Selection is least-recently-visited first, then heaviest weight, then asset
     id, rotated by ``rotation_offset`` so consecutive months do not always favour
@@ -242,7 +241,9 @@ def fallback_dtc_target(
         weights: DTC weight model.
         requested_target: The owner's desired DTC visits this month, if any.
         area_and_feeder_demand: Visits the month already owes to areas and
-            feeders, which compete for the same daily capacity.
+            feeders. Retained for callers that still report it: each kind now has
+            its own daily ceiling, so an area visit no longer takes a transformer's
+            slot and this number does not reduce the transformer target.
         rotation_offset: Deterministic rotation state between months.
 
     Returns:
@@ -256,8 +257,9 @@ def fallback_dtc_target(
     )
 
     eligible = _eligible_dates(period, calendar)
-    combined_capacity = len(eligible) * config.combined_daily_cap
-    dtc_capacity = max(0, combined_capacity - max(0, area_and_feeder_demand))
+    # Transformers have their own ceiling, so the area and feeder demand of the same
+    # month does not come out of this number: the kinds no longer compete for a slot.
+    dtc_capacity = len(eligible) * config.dtc_daily_cap
 
     # A DTC with no room left under its monthly maximum cannot be a candidate.
     eligible_dtcs = [

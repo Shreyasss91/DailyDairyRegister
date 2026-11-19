@@ -209,9 +209,10 @@ def test_fallback_target_is_bounded_by_capacity():
         requested_target=100,
         area_and_feeder_demand=20,
     )
-    # Cannot exceed the DTC capacity that remains after areas and feeders.
+    # Cannot exceed the transformer capacity: the DTC ceiling on each working date.
+    # Areas and feeders have their own ceilings and no longer reduce this one.
     eligible = len(weekdays(2026, 11))
-    assert target.target_count <= eligible * FeasibilityConfig().combined_daily_cap - 20
+    assert target.target_count <= eligible * FeasibilityConfig().dtc_daily_cap
     assert target.target_count <= 40
 
 
