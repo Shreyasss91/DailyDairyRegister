@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
-from typing import Iterable, Mapping, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 
 from .allocator import AllocationRequest, AllocationResult, allocate_month
 from .cycle import (
@@ -587,6 +587,8 @@ def run_cycle(
     months_to_place: Sequence[MonthKey] | None = None,
     rotation_offset: int = 0,
     attempt_budget: int = 400,
+    on_month: Callable[[MonthKey, int, int], None] | None = None,
+    on_attempt: Callable[[int, int], None] | None = None,
 ) -> MultiMonthResult:
     """Place a coverage cycle month by month, keeping gaps across boundaries.
 
@@ -610,6 +612,9 @@ def run_cycle(
         months_to_place: Months to schedule; defaults to the whole cycle.
         rotation_offset: Rotation state carried between cycles.
         attempt_budget: Constructive attempts per month.
+        on_month: Told which month is being placed and which one of how many, so a
+            caller can report progress. A report only: nothing here is read from it.
+        on_attempt: Passed to the month's allocator for the same purpose.
 
     Returns:
         A :class:`MultiMonthResult` whose per-month evidence is retained.
@@ -663,6 +668,9 @@ def run_cycle(
     carried: list[Visit] = list(prior_visits)
     plans: list[MonthPlan] = []
 
+    placed = sum(1 for plan in resolution.plans if plan.month in place_set)
+    placed_so_far = 0
+
     for plan in resolution.plans:
         month_fixed = commitments.by_month.get(plan.month, ())
         if plan.month not in place_set:
@@ -673,6 +681,9 @@ def run_cycle(
         obligations = dict(commitments.effective.get(plan.month, {}))
         period = _period_for(plan.month)
         _require_full_month(period, "run_cycle")
+        placed_so_far += 1
+        if on_month is not None:
+            on_month(plan.month, placed_so_far, placed)
         result = allocate_month(
             AllocationRequest(
                 period=period,
@@ -687,6 +698,7 @@ def run_cycle(
                 attempt_budget=attempt_budget,
                 from_cycle=True,
                 weights=resolution.weights,
+                on_attempt=on_attempt,
             )
         )
         plans.append(
@@ -726,6 +738,8 @@ def run_fallback(
     fixed_by_month: Mapping[MonthKey, Sequence[Visit]] | None = None,
     rotation_offset: int = 0,
     attempt_budget: int = 400,
+    on_month: Callable[[MonthKey, int, int], None] | None = None,
+    on_attempt: Callable[[int, int], None] | None = None,
 ) -> MultiMonthResult:
     """Run the no-cycle fallback across one or more months.
 
@@ -733,6 +747,9 @@ def run_fallback(
     obligation, integrated with that month's area and feeder obligations in one
     joint allocation. The result is labelled a capacity-based suggestion, because
     without a declared cycle there is no coverage commitment to satisfy.
+
+    ``on_month`` and ``on_attempt`` are progress reports, passed through unchanged and
+    never read: the schedule does not depend on whether anyone is watching.
 
     Raises:
         InputError: If a month's effective limits or obligations are malformed.
@@ -772,6 +789,8 @@ def run_fallback(
         for asset_id in target.selected:
             required[asset_id] = 1
 
+        if on_month is not None:
+            on_month(month, index + 1, len(ordered_months))
         result = allocate_month(
             AllocationRequest(
                 period=period,
@@ -784,6 +803,7 @@ def run_fallback(
                 seed=seed + index,
                 attempt_budget=attempt_budget,
                 from_cycle=False,
+                on_attempt=on_attempt,
             )
         )
         plans.append(

@@ -34,7 +34,7 @@ A non-zero exit code means the validation gate failed. Inspect the failing test 
 Run the directly relevant export and UI tests first:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py
 ```
 
 These modules cover the export/document, PDF, bulk-finalisation and frontend contracts, including:
@@ -56,6 +56,14 @@ These modules cover the export/document, PDF, bulk-finalisation and frontend con
 - The bulk close: the target set derived from the revision, the preflight writing nothing, one blocked month refusing the whole act, a forced failure rolling back the months already written, and the page refusing a second submission.
 - The allocator's cost: the indexed revisit-gap test answering exactly what the original scan answers, a later visit in the period still closing the earlier dates, a whole month allocating to the same visits when the reference scan does the work, and the gap question being asked once per viable check rather than once per placed visit, so a speed-up cannot arrive by choosing a different month.
 - Register wording: the three languages and that the choice is recorded with the generation and frozen into the closed month, an absent choice read as the platform default rather than a remembered one, an unknown language refused at both the request and the domain boundary, a Kannada register keeping English where no Kannada is stored, a weekly off, holiday or leave date classified in words beside its stored reason instead of a bare `Calendar:` prefix, a reason carried twice printed once, a visit reading as the work done at the installation with the sentence chosen by the asset kind the roster recorded, a record that does not say which kind it visited reading a neutral sentence, and the language and asset kinds staying outside the month fingerprint so a month closed before they existed is still recognised as itself.
+- The progress of a long generation: the allocator's attempt hook and the cycle runner's
+  per-month hook reporting in order, the same month and the same three-month plan produced
+  whether the run is watched or silent, the percentage rising through reading, placing,
+  activities and saving to exactly 100, a finished run keeping its result for a late poll, a
+  refusal ending as a failed run with the office's own sentence, one run at a time with the
+  run in progress named, a report arriving after the end being ignored, the oldest records
+  dropped, the watched route answering exactly what the direct route answers, and the page
+  drawing the server's percentage into a bar that is still there for a second run.
 - The two daily numbers a working day is built from: the activity range's floor met on
   every eligible day and its ceiling never exceeded, the day-to-day spread the draw
   produces, an equal-ended range reproducing the flat count an earlier request asked for,
@@ -80,7 +88,7 @@ From the repository root:
 
 ```powershell
 # 1. Focused API/document, PDF, bulk-finalisation and UI coverage.
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py
 
 # 2. Full regression suite.
 .\.venv\Scripts\python.exe -m pytest

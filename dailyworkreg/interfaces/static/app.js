@@ -34,6 +34,7 @@ async function api(path, options) {
     // Every reason travels with the refusal, and the page shows them by month rather
     // than only the sentence that summarised them.
     error.blockers = (payload && payload.error && payload.error.blockers) || [];
+    error.jobId = (payload && payload.error && payload.error.job_id) || null;
     throw error;
   }
   return payload;
@@ -549,8 +550,67 @@ function chosenLanguage() {
   return checked ? checked.value : '';
 }
 
+/**
+ * Put the bar back to its starting state before a run begins.
+ *
+ * ``hide`` empties a node as well as hiding it, which is right for a banner and wrong for
+ * this box: it would delete the bar and the status line the next report draws into, and the
+ * second generation would fail on a null element. So the box is hidden directly and the
+ * pieces are reset.
+ */
+function resetProgress() {
+  const box = document.getElementById('gen-progress');
+  box.hidden = true;
+  box.classList.remove('progress-finished', 'progress-failed');
+  document.getElementById('gen-progress-fill').style.width = '0%';
+  document.getElementById('gen-progress-text').textContent = '';
+}
+
+/**
+ * Draw one progress report.
+ *
+ * The bar is the server's own percentage and the sentence is the server's own words. The
+ * page adds only the elapsed time, because a bar that has not moved for a minute is not a
+ * stuck run if the clock beside it is still counting.
+ */
+function drawProgress(report) {
+  const box = document.getElementById('gen-progress');
+  const fill = document.getElementById('gen-progress-fill');
+  const text = document.getElementById('gen-progress-text');
+  box.hidden = false;
+  box.classList.toggle('progress-finished', Boolean(report.finished) && !report.failed);
+  box.classList.toggle('progress-failed', Boolean(report.failed));
+  fill.style.width = `${report.percent}%`;
+  const elapsed = Math.max(0, Math.round(report.elapsed_seconds || 0));
+  // A month still being worked on reports the attempts it has spent; a finished run has
+  // no month in progress, so its last count would read as though one were still open.
+  const attempt = !report.finished && report.attempt > 1
+    ? ` Attempt ${report.attempt} of ${report.attempt_budget} for this month.`
+    : '';
+  text.textContent = `${report.detail}${attempt} ${report.percent}% - ${elapsed}s elapsed.`;
+  return report;
+}
+
+/**
+ * Follow a run until it finishes, and answer with its last report.
+ *
+ * A poll asks for the whole state rather than for what changed since the last one, so an
+ * interval the machine is too busy to serve costs nothing but a later update. There is no
+ * retry budget: the run always ends as finished or failed, and a run that is genuinely
+ * gone answers 404 and is shown as a refusal.
+ */
+async function followGeneration(jobId) {
+  let report = null;
+  for (;;) {
+    report = drawProgress(await api(`/api/generations/jobs/${jobId}`));
+    if (report.finished) return report;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+}
+
 document.getElementById('gen-run').addEventListener('click', async () => {
   const result = document.getElementById('gen-result');
+  const button = document.getElementById('gen-run');
   const mode = document.getElementById('gen-mode').value;
   const payload = {
     start: document.getElementById('gen-start').value,
@@ -576,12 +636,26 @@ document.getElementById('gen-run').addEventListener('click', async () => {
     const target = document.getElementById('gen-dtc-target').value;
     if (target !== '') payload.dtc_target = Number(target);
   }
+  let jobId = null;
+  button.disabled = true;
+  button.textContent = 'Generating…';
+  resetProgress();
   try {
-    const done = await api('/api/generations', {
+    const started = await api('/api/generations/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    jobId = started.job_id;
+    // The start answers with the first state, so the bar appears before the first poll.
+    drawProgress(started);
+    const report = await followGeneration(jobId);
+    if (report.failed) {
+      const refusal = new Error(report.error.detail || report.error.constraint);
+      refusal.constraint = report.error.constraint;
+      throw refusal;
+    }
+    const done = report.result;
     const kind = done.is_draft ? 'warn' : 'bad';
     showBanner(
       result,
@@ -595,7 +669,22 @@ document.getElementById('gen-run').addEventListener('click', async () => {
     await openDraft(done.run_id);
     activate('draft');
   } catch (error) {
+    // A run already in progress is not a failure: the page attaches to that run's bar
+    // rather than leaving the operator with a refusal and no way to see the work it
+    // refused to repeat.
+    if (error.jobId && !jobId) {
+      const report = await followGeneration(error.jobId).catch(() => null);
+      if (report && report.finished && !report.failed && report.result) {
+        state.runId = report.result.run_id;
+        await openDraft(report.result.run_id);
+        activate('draft');
+        return;
+      }
+    }
     showBanner(result, 'bad', error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Generate';
   }
 });
 

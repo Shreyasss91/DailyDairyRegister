@@ -64,6 +64,13 @@ from ..application.generation_runs import (
     runs_by_outcome,
     save_run,
 )
+from ..application.progress import (
+    STAGE_READING,
+    STAGE_SAVING,
+    GenerationBusy,
+    GenerationJobs,
+    UnknownJob,
+)
 from ..application.readiness import assess_readiness
 from ..application.regeneration import (
     accept_candidate,
@@ -180,6 +187,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     desk = BackupDesk()
     app.state.maintenance_gate = gate
     app.state.backup_desk = desk
+    # One generation run at a time, with a progress record the page polls. In memory by
+    # design: the only reader is the page that asked for the run, and a restart must not
+    # resurrect a half-written register as though it were still being written.
+    jobs = GenerationJobs()
+    app.state.generation_jobs = jobs
     # Autoescaping is on by default, which is what makes a stored activity title or a
     # holiday name safe to place in the page: nothing the record holds becomes markup.
     templates = Jinja2Templates(directory=str(TEMPLATES))
@@ -704,14 +716,15 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     # --- generations ----------------------------------------------------
 
-    @app.post("/api/generations")
-    def generate(
-        payload: dict[str, Any], db: sqlite3.Connection = Depends(get_db)
+    def generation_result(
+        db: sqlite3.Connection, prepared: Any, draft: Any, run_id: str
     ) -> dict[str, Any]:
-        spec = _spec(payload)
-        prepared = prepare_generation(db, spec)
-        draft = generate_draft(prepared.request)
-        run_id = save_run(db, prepared, draft)
+        """What a finished generation reports, whether it was watched or not.
+
+        One builder, because the page shows the direct answer and the polled answer the
+        same way: two payloads would eventually disagree about what a run produced.
+        """
+
         return {
             "run_id": run_id,
             "register_id": (
@@ -748,6 +761,86 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             "exceptions": len(draft.exceptions),
             "missing_content": list(prepared.readiness.missing_content),
         }
+
+    @app.post("/api/generations")
+    def generate(
+        payload: dict[str, Any], db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        """Generate a draft in this request. The page uses the watched route below.
+
+        Kept because it is the plain answer a script or a test asks for: it returns the
+        result itself rather than an id to poll, and it reports no progress.
+        """
+
+        spec = _spec(payload)
+        prepared = prepare_generation(db, spec)
+        draft = generate_draft(prepared.request)
+        run_id = save_run(db, prepared, draft)
+        return generation_result(db, prepared, draft, run_id)
+
+    @app.post("/api/generations/jobs", status_code=202)
+    def start_generation_job(payload: dict[str, Any]) -> JSONResponse:
+        """Start a generation on its own thread, so the page can watch it work.
+
+        The run reads its own connection: a request's connection is closed when the
+        response is sent, and this work outlives the response that started it.
+        """
+
+        spec = _spec(payload)
+
+        def work(progress: Any) -> dict[str, Any]:
+            # The run is admitted like any other request, so a restore waits for it rather
+            # than replacing the file while a register is being written into it.
+            with gate.request():
+                db = connection()
+                try:
+                    progress.stage(
+                        STAGE_READING, "Reading the stored masters and the calendar."
+                    )
+                    prepared = prepare_generation(db, spec)
+                    draft = generate_draft(prepared.request, progress)
+                    progress.stage(STAGE_SAVING, "Writing the draft to the register.")
+                    run_id = save_run(db, prepared, draft)
+                    return generation_result(db, prepared, draft, run_id)
+                finally:
+                    db.close()
+
+        try:
+            job_id = jobs.begin(work)
+        except GenerationBusy as error:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": {
+                        "constraint": error.constraint,
+                        "detail": error.detail,
+                        "job_id": error.job_id,
+                    }
+                },
+            )
+        return JSONResponse(status_code=202, content=jobs.report(job_id))
+
+    @app.get("/api/generations/jobs/{job_id}")
+    def read_generation_job(job_id: str) -> JSONResponse:
+        """How far the run has got, and what it produced once it is done."""
+
+        try:
+            return JSONResponse(content=jobs.report(job_id))
+        except UnknownJob:
+            # A job id from another session or another process: the run is not here, so
+            # the page is told to ask for a new generation rather than to keep waiting.
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": {
+                        "constraint": "generation_job_unknown",
+                        "detail": (
+                            "this generation is no longer being watched by the server, "
+                            "so its progress cannot be shown; ask for a new generation"
+                        ),
+                    }
+                },
+            )
 
     @app.get("/api/generations")
     def history(db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:

@@ -28,7 +28,7 @@ import random
 from bisect import bisect_left, insort
 from dataclasses import dataclass, field, replace
 from datetime import date
-from typing import Iterable, Mapping, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 
 from .prorating import resolve_period_config
 from .validator import (
@@ -159,6 +159,11 @@ class AllocationRequest:
     #: must not silently use full-month limits, so the caller supplies these and
     #: ``allocate_month`` refuses the request without them.
     effective_limits: Mapping[str, "AssetLimits"] | None = None
+    #: Told the attempt number and the budget before each constructive attempt, so a
+    #: caller can show that a hard month is still working rather than stuck. It is a
+    #: report only: nothing is read from it, and a caller that raises from it breaks its
+    #: own run rather than the schedule.
+    on_attempt: Callable[[int, int], None] | None = None
 
     def __post_init__(self) -> None:
         if self.attempt_budget < 1:
@@ -512,6 +517,10 @@ def allocate_month(request: AllocationRequest) -> AllocationResult:
     #    impossibility *after* construction fails, and as a source of a witness,
     #    never as a cost every allocation must pay.
     for attempt in range(request.attempt_budget):
+        if request.on_attempt is not None:
+            # Reported before the attempt runs, so the count an operator watches is the
+            # number of attempts already spent rather than one behind.
+            request.on_attempt(attempt + 1, request.attempt_budget)
         # A string seed keeps this deterministic across runs and platforms, and
         # folds the seed and attempt together without depending on hash randomisation.
         rng = random.Random(f"{request.seed}:{attempt}")

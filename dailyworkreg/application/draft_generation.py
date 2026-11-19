@@ -71,6 +71,11 @@ from ..domain.validator import (
     Visit,
 )
 from ..domain.wording import DEFAULT_ENTRY_LANGUAGE
+from .progress import (
+    SILENT,
+    STAGE_ACTIVITIES,
+    ProgressReporter,
+)
 
 #: Version of this generation service. Recorded on every draft so a projection can
 #: be explained after the code moves, independently of the allocator version.
@@ -916,12 +921,17 @@ def _allocator_result(
     request: DraftRequest,
     calendar: Calendar,
     months: tuple[MonthKey, ...],
+    progress: ProgressReporter = SILENT,
 ) -> MultiMonthResult:
     """Call the allocator entry point for the requested mode.
 
     This is the only place generation reaches the scheduling layer, and it passes
     the caller's inputs through unchanged. Nothing here re-decides an obligation,
     a date or an outcome.
+
+    ``progress`` is a report the allocator writes to as it places each month and spends
+    each constructive attempt. It is handed over untouched and read back never, so the
+    register is identical whether or not anybody is watching.
     """
 
     if request.mode is DraftMode.COVERAGE_CYCLE:
@@ -938,6 +948,8 @@ def _allocator_result(
             months_to_place=months,
             rotation_offset=request.rotation_offset,
             attempt_budget=request.attempt_budget,
+            on_month=progress.month,
+            on_attempt=progress.attempt,
         )
 
     return run_fallback(
@@ -954,6 +966,8 @@ def _allocator_result(
         fixed_by_month=dict(request.fixed_by_month),
         rotation_offset=request.rotation_offset,
         attempt_budget=request.attempt_budget,
+        on_month=progress.month,
+        on_attempt=progress.attempt,
     )
 
 
@@ -1141,7 +1155,9 @@ def _activity_entries(
     return tuple(entries)
 
 
-def generate_draft(request: DraftRequest) -> DraftRegister:
+def generate_draft(
+    request: DraftRequest, progress: ProgressReporter = SILENT
+) -> DraftRegister:
     """Generate an allocator-backed draft register for the selected months.
 
     The request is validated first, then handed to :func:`run_cycle` or
@@ -1152,6 +1168,8 @@ def generate_draft(request: DraftRequest) -> DraftRegister:
 
     Args:
         request: The complete typed generation request.
+        progress: Where to report how far the work has got, for a page that has to show a
+            bar rather than a still screen. Defaults to a reporter that says nothing.
 
     Returns:
         A :class:`DraftRegister`. Its ``status`` describes field-visit allocation
@@ -1178,7 +1196,8 @@ def generate_draft(request: DraftRequest) -> DraftRegister:
     )
     calendar = Calendar(working_days)
 
-    result = _allocator_result(request, calendar, months)
+    progress.months_total(len(months))
+    result = _allocator_result(request, calendar, months, progress)
 
     draft_months: list[DraftMonth] = []
     visits_by_date: dict[date, list[GeneratedVisit]] = {}
@@ -1215,6 +1234,11 @@ def generate_draft(request: DraftRequest) -> DraftRegister:
     entries_by_date: dict[date, list[DayEntry]] = {}
     for entry in request.entries:
         entries_by_date.setdefault(entry.day, []).append(entry)
+    if request.activities_per_day_max > 0:
+        progress.stage(
+            STAGE_ACTIVITIES,
+            "Placing the approved activities on the working days of the range.",
+        )
     for entry in _activity_entries(request, days):
         entries_by_date.setdefault(entry.day, []).append(entry)
 

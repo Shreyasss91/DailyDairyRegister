@@ -1302,7 +1302,47 @@ to be refused by a number the operator could neither see nor change.
   `config`, and the activity range has its own snapshot fields: schema 4 replaces the single
   `activities_per_day` with `activities_per_day_min` and `activities_per_day_max`. A schema 1 to 3 snapshot is still read, and its one count is read as the range whose ends are equal.
 
-### 24.11 What is not modelled
+### 24.11 A long generation says how far it has got (as built)
+
+- **Why it exists.** A ten-month register is one click and can take a minute. Without a
+  report, a request that is working and a request that has wedged look identical on screen:
+  a button that was pressed and a page that has stopped changing. The bar exists to answer
+  one question - is it moving - so what it says has to be true, ordered, and impossible to
+  confuse with an outcome.
+- **It is a run with an id, not a long request.** `POST /api/generations/jobs` answers 202
+  with the run's id and its first state, and `GET /api/generations/jobs/{job_id}` answers
+  how far it has got. The work runs on its own thread against its own database connection,
+  because a request's connection is closed when its response is sent. The plain
+  `POST /api/generations` route remains for a script or a test that wants the result itself.
+- **One run at a time.** A second request while one is going is refused with
+  `generation_already_running` and the id of the run in progress, so the page can attach to
+  that run's bar instead of leaving the operator with a refusal and no view of the work. Two
+  runs would compete for the same database and the same bar.
+- **The progress is the server's.** The stages are reading the masters, placing field visits
+  month by month, placing the approved activities, writing the draft, done; the percentage is
+  computed in one function (`progress.percent_for`) so two places cannot disagree about what
+  60% means, and it never decreases even when a report arrives out of order. During a hard
+  month the report carries the attempt count, which is what shows that a month is still being
+  worked on rather than stuck.
+- **Watching changes nothing.** The allocator and the cycle runner take optional reporting
+  hooks and read nothing back from them: `AllocationRequest.on_attempt`,
+  `run_cycle(on_month=, on_attempt=)`, `run_fallback(on_month=, on_attempt=)` and
+  `generate_draft(request, progress=)`. Tests generate the same month and the same
+  three-month cycle twice, once watched and once silent, and require the rows, the visits and
+  the plan to be identical - a register that changes when the operator looks is not a
+  register.
+- **The bar is a state readout, not a decision.** The page sends nothing about progress,
+  computes no percentage and decides no ordering: it draws the server's percentage with the
+  server's sentence and adds the elapsed clock, because a bar that has not moved for a minute
+  is not stuck if the clock beside it is still counting. A finished run keeps its result in
+  the record, so a poll that arrives after completion still answers.
+- **A refusal is an ending, not a silence.** A run that is refused ends `failed` with the
+  constraint and the sentence the office reads, and the page shows it through the same banner
+  a direct refusal uses. The records live in memory only and the oldest are dropped: the only
+  reader is the page that asked for the run, and a restart must not resurrect a half-written
+  register as though it were still being written.
+
+### 24.12 What is not modelled
 
 - Partial-month generation, and therefore the use of the section 23 proration rule to
   build a schedule. A part-month is still refused.
