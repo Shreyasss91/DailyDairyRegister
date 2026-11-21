@@ -511,6 +511,7 @@ Settled 2026-11-18. A DTC did not exist before it was commissioned, so nothing m
 - **A capacity-based suggestion never selects an unvisitable transformer**, and reports every active DTC it could not cover at all, with the reason, beside the draft.
 - **Recorded with the draft.** The request snapshot carries each roster member's date (schema 6). A snapshot written before the field existed holds none, which is exactly what it was generated with.
 - **Not modelled.** There is no rule by which an asset commissioned *during* a month must receive a visit in that month; the cycle obligation, not the calendar of commissioning dates, decides what a month owes.
+- **A month with no working day is reported as an empty month, not as a roster problem.** Corrected 2026-11-21. When every date in a month is a weekly off, a General Holiday, a leave date or an override, the assessment answers `no_eligible_working_date` with the month's own dates and the action that clears it, before it looks at any asset. Previously the commissioning check answered first for whichever asset it reached, producing a true but misleading sentence - a transformer commissioned in 2022 was reported as "commissioned on 2022-01-01, after the last eligible date of the month" - which sent the operator to the roster when the calendar was what stopped the month. The commissioning evidence is unchanged wherever the month does hold working days.
 
 ## 11. Language and text storage
 

@@ -31,6 +31,7 @@ from dailyworkreg.domain.cycle import (
 from dailyworkreg.domain.validator import (
     C_ASSET_NOT_YET_COMMISSIONED,
     C_FIXED_VISIT_BEFORE_COMMISSION,
+    C_NO_ELIGIBLE_WORKING_DATE,
     C_VISIT_BEFORE_COMMISSION,
     Asset,
     AssetLimits,
@@ -358,6 +359,68 @@ def test_a_commissioning_date_late_in_the_month_leaves_too_few_dates():
     assert result.status is FeasibilityStatus.INFEASIBLE
     assert result.evidence[0].constraint == C_ASSET_NOT_YET_COMMISSIONED
     assert "leaving 1 eligible date(s)" in result.evidence[0].detail
+
+
+def test_a_month_with_no_working_day_is_reported_as_that_and_not_as_a_commissioning_problem():
+    """An empty month must not be explained by whichever asset it checks first.
+
+    Recorded defect: a October whose every date was FPL leave reported
+    `asset_not_yet_commissioned` for a transformer commissioned in 2022, with the
+    detail "commissioned on 2022-01-01, after the last eligible date of the month".
+    The claim was true (the asset had no usable date) and the explanation was false
+    (its commissioning date was three years earlier), which sent the operator to the
+    roster instead of the calendar.
+    """
+
+    result = assess_feasibility(
+        ObligationContext(
+            period=MONTH,
+            calendar=Calendar(frozenset()),
+            roster=(Asset("SCD-1", AssetType.DTC, commissioned_on=date(2022, 1, 1)),),
+            config=FeasibilityConfig(),
+            required_visits={"SCD-1": 1},
+        )
+    )
+
+    assert result.status is FeasibilityStatus.INFEASIBLE
+    evidence = result.evidence[0]
+    assert evidence.constraint == C_NO_ELIGIBLE_WORKING_DATE
+    assert "commissioned" not in evidence.detail
+    assert evidence.limit == 0
+    assert evidence.actual == 1
+
+
+def test_the_empty_month_names_its_dates_and_what_to_clear():
+    result = assess_feasibility(
+        ObligationContext(
+            period=MONTH,
+            calendar=Calendar(frozenset()),
+            roster=(Asset("SCD-1", AssetType.DTC, commissioned_on=date(2022, 1, 1)),),
+            config=FeasibilityConfig(),
+            required_visits={"SCD-1": 1},
+        )
+    )
+
+    detail = result.evidence[0].detail
+    assert "no date from 2026-09-01 to 2026-09-30 is a working day" in detail
+    assert "Clear the leave or the override that covers it" in detail
+    assert "leave the month out of the range" in detail
+
+
+def test_an_empty_month_is_reported_even_when_it_owes_nothing():
+    # The commissioning check is not the only path that could have answered this, and a
+    # month with no eligible date is worth saying out loud however few visits it owes.
+    result = assess_feasibility(
+        ObligationContext(
+            period=MONTH,
+            calendar=Calendar(frozenset()),
+            roster=(Asset("SCD-1", AssetType.DTC, commissioned_on=date(2022, 1, 1)),),
+            config=FeasibilityConfig(),
+        )
+    )
+
+    assert result.status is FeasibilityStatus.INFEASIBLE
+    assert result.evidence[0].constraint == C_NO_ELIGIBLE_WORKING_DATE
 
 
 def test_a_month_the_asset_is_commissioned_during_is_still_feasible():

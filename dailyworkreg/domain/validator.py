@@ -73,6 +73,11 @@ C_OUTSIDE_PERIOD = "visit_outside_period"
 C_VISIT_BEFORE_COMMISSION = "visit_before_commissioning_date"
 C_FIXED_VISIT_BEFORE_COMMISSION = "committed_visit_before_commissioning_date"
 C_ASSET_NOT_YET_COMMISSIONED = "asset_not_yet_commissioned"
+#: A month with no candidate date at all, whatever the roster says. It is reported on its own
+#: because the commissioning check would otherwise fire first on whichever asset it reached: an
+#: asset with no usable date is a true statement about an empty month and a false explanation of
+#: it, sending the operator to the roster when the calendar is what stopped it.
+C_NO_ELIGIBLE_WORKING_DATE = "no_eligible_working_date"
 C_PERIOD_NOT_WORKING = "period_date_not_working"
 C_MIN_EXCEEDS_MAX = "configured_minimum_exceeds_maximum"
 C_AGG_AREA_CAPACITY = "aggregate_area_capacity_exceeded"
@@ -1708,6 +1713,28 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
             required[asset_id] = remaining
 
     total_required = sum(required.values())
+
+    if not eligible:
+        # No date in the month is a working day, so no schedule exists and no roster change
+        # can create one. Reported before the commissioning check, which would otherwise
+        # blame whichever transformer it happened to reach first.
+        return FeasibilityResult(
+            status=FeasibilityStatus.INFEASIBLE,
+            evidence=(
+                Evidence(
+                    constraint=C_NO_ELIGIBLE_WORKING_DATE,
+                    detail=(
+                        f"no date from {context.period.start.isoformat()} to "
+                        f"{context.period.end.isoformat()} is a working day: every date is a "
+                        "weekly off, a General Holiday, a leave date or a date override, so "
+                        "nothing can be scheduled in this month. Clear the leave or the "
+                        "override that covers it, or leave the month out of the range"
+                    ),
+                    limit=0,
+                    actual=total_required,
+                ),
+            ),
+        )
 
     if not required:
         # Nothing remains to place. The preflight above has already established

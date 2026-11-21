@@ -659,6 +659,8 @@ planning.
   responsible.
 - It may not plan a partial month. A period that begins or ends mid-month is refused, because the
   monthly minimums would be prorated against days that do not exist in the plan.
+- It may not plan a month that holds no working day at all. Such a month is reported as
+  `no_eligible_working_date`, naming its dates, rather than blamed on an asset's commissioning date.
 - It may not overwrite a locked date, a reviewed date, or a closed month.
 - It may not decide that a month is closed without a person having reviewed its dates.
 
@@ -792,6 +794,7 @@ stable identifier the tool uses and is worth writing down when you report a prob
 | Message, in substance | What it means | What to do |
 | --- | --- | --- |
 | *infeasible*, with the constraints responsible (`revisit_gap_violated`, `asset_monthly_max_exceeded`, `dtc_daily_cap_exceeded`, `activity_placement_cannot_fill_a_day`, `search_node_limit_reached`, …) | No plan satisfies every constraint at once. | Read which constraint was hit. The usual fixes: widen `Monthly max` / `Repeat gap` in a master, lower a daily ceiling, lower the activity minimum, lengthen the period, or declare a cycle the period can satisfy. |
+| `no_eligible_working_date` — *"no date from 2025-10-01 to 2025-10-31 is a working day … nothing can be scheduled in this month. Clear the leave or the override that covers it, or leave the month out of the range"* | **Every** date of that month is a weekly off, a General Holiday, a leave date or an override. | Not a roster problem and not something a ceiling or a cycle can fix. Look at the Calendar tab for that month: usually one leave record covering the whole month, or an override set across it. Delete the record, re-read a corrected leave sheet, or generate a range that skips the month. |
 | `period_not_single_calendar_month` / a refusal for a partial month | The requested range begins or ends mid-month. | Generate whole months. Partial-month planning is deliberately not implemented. |
 | `draft_range_outside_coverage_cycle` | The period is not inside the declared cycle. | Either widen the cycle, change its start, or generate a period the cycle covers. |
 | `period_date_not_working` / a period with no working day | Every date in the range is a weekly off, holiday or leave. | Check the calendar. |
