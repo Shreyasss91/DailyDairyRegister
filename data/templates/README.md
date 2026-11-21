@@ -53,6 +53,13 @@ Blank header:
 - `Date of commision` is the date the transformer was commissioned, as the office's own sheet spells it. A DTC is never scheduled for that day or any day before it. A blank cell, a `#N/A` placeholder or an unreadable value means no restriction - it is not read as "not yet commissioned" - and the supplied text is kept beside the accepted date so an unreadable value stays inspectable.
 - Capture source filename, issuing office, worksheet name, extraction date and source/as-of date in the import batch notes or separate provenance record.
 
+**Read the area master and the feeder master before this roster.** A DTC resolves to a feeder
+only through the feeder master, and a register visits areas the area master holds, so the roster
+is refused until both are stored - and refused again if it names a feeder the feeder master does
+not carry, with the unmatched names listed. A blank feeder cell is accepted with a warning: the
+transformer is stored with no feeder and is not reached through any feeder's capacity. The order
+is: `04_area_master.csv`, `05_feeder_master.csv`, then `01_dtc_master_roster.csv`.
+
 **There is no assignment table any more.** An earlier build carried six owner-confirmed
 DTC-to-feeder mappings and applied them when a roster batch was accepted, so the canonical
 feeder could differ from the one the office's own file named. The owner withdrew that on

@@ -28,9 +28,10 @@ from dailyworkreg.application.generation_runs import save_run
 from dailyworkreg.application.readiness import assess_readiness
 from dailyworkreg.domain.cycle import DtcClass, MonthKey
 from dailyworkreg.domain.validator import Asset, AssetType
-from dailyworkreg.infrastructure.imports.tabular import read_source_file
+from dailyworkreg.infrastructure.imports.tabular import SourceFormatError, read_source_file
 from dailyworkreg.infrastructure.sqlite import masters, open_database
 from dailyworkreg.infrastructure.sqlite.imports import (
+    C_IMPORT_ORDER_UNMET,
     accept_batch,
     get_batch,
     reject_batch,
@@ -260,27 +261,29 @@ def test_an_application_has_no_assignment_count_to_report(db: sqlite3.Connection
     assert not hasattr(result, "feeder_overrides_applied")
 
 
-def test_an_unmapped_feeder_stays_a_warning_and_assigns_nothing(
+def test_a_blank_feeder_cell_is_a_warning_and_assigns_nothing(
     db: sqlite3.Connection,
 ) -> None:
+    """A gap in the office's own sheet is accepted and said out loud.
+
+    A blank cell is not a name that fails to resolve, so it does not stop the file: the row is
+    accepted, the transformer is left with no canonical feeder and is not reached through any
+    feeder's capacity, and the row says so. A name the master does not carry is refused at read
+    time instead, which `tests/test_import_order.py` pins.
+    """
+
     rows = _roster_rows()
-    rows[0] = (rows[0][0], rows[0][1], rows[0][2], "A FEEDER NOBODY HAS RECORDED", "250", "S")
+    rows[0] = (rows[0][0], rows[0][1], rows[0][2], "", "250", "S")
     batch, verdict = _stage_roster(db, rows)
 
-    mentioned = [
+    silent = [
         outcome
         for outcome in verdict.outcomes
-        if any("not in the feeder master" in message for message in outcome.messages)
+        if any("no feeder is named" in message for message in outcome.messages)
     ]
-    assert [outcome.payload["dtc_id"] for outcome in mentioned] == ["SCD-1"]
+    assert [outcome.payload["dtc_id"] for outcome in silent] == ["SCD-1"]
     assert batch.error_count == 0
-    spoken = [outcome for outcome in verdict.outcomes if outcome.messages]
-    assert batch.warning_count == len(spoken)
-    # The warning names the value and says what it costs, and stops there: there is no second
-    # list that will assign this transformer's feeder on acceptance.
-    assert not any(
-        "owner-confirmed assignment" in " ".join(o.messages) for o in verdict.outcomes
-    )
+    assert batch.warning_count == len([o for o in verdict.outcomes if o.messages])
 
     accept_batch(db, batch.batch_id)
     stored = {row.dtc_id: row for row in masters.list_dtcs(db)}
@@ -288,34 +291,32 @@ def test_an_unmapped_feeder_stays_a_warning_and_assigns_nothing(
     kept = db.execute(
         "SELECT raw_feeder FROM dtc_source_record WHERE dtc_id = ?", ("SCD-1",)
     ).fetchone()
-    assert kept[0] == "A FEEDER NOBODY HAS RECORDED"
+    assert kept[0] == ""
 
 
-def test_a_roster_staged_before_its_feeder_master_is_accepted_unassigned(
+def test_a_roster_read_before_its_feeder_master_is_refused(
     tmp_path: Path,
 ) -> None:
-    """Nothing refuses the batch, and no transformer is given a feeder it does not name.
+    """A roster with no masters to meet is refused at the moment it is read.
 
-    A roster read before its feeder master used to be refused on the six owner-confirmed
-    assignments, which was the one thing that stopped it. With that table withdrawn the batch
-    is accepted, every row carrying a warning that names the feeder master's gap, and every
-    transformer holding no canonical feeder until the master arrives and the roster is read
-    again. The count is on the readiness screen rather than hidden.
+    Earlier commits in this act withdrew the assignment table and then made the order of work
+    a rule: a transformer resolves to a feeder only through the feeder master, so a roster
+    read first would leave every transformer unassigned, every feeder's capacity short and the
+    operator reading it all again. `tests/test_import_order.py` states the rule and its
+    messages; this pins that the real office roster is refused the same way, before any batch
+    or canonical row exists.
     """
 
     connection = open_database(tmp_path / "bare.db")
     try:
-        batch, verdict = _stage_roster(connection)
-        assert batch.error_count == 0
-        assert any(
-            "not in the feeder master" in " ".join(outcome.messages)
-            for outcome in verdict.outcomes
+        with pytest.raises(SourceFormatError) as caught:
+            _stage_roster(connection)
+        assert caught.value.constraint == C_IMPORT_ORDER_UNMET
+        assert connection.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM dtc").fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT COUNT(*) FROM import_staging_row").fetchone()[0] == 0
         )
-
-        result = accept_batch(connection, batch.batch_id)
-        assert result.inserted == 113
-        stored = masters.list_dtcs(connection)
-        assert all(row.canonical_feeder_id is None for row in stored)
     finally:
         connection.close()
 

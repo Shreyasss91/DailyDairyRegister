@@ -239,6 +239,18 @@ office's record: one office's judgement must not be applied to the next office's
 transformers, and a table that agrees with the file is dead weight that a future file can
 still be bent against.
 
+**The roster is read after its masters, and is refused if it is not.** A roster names
+transformers that sit on feeders and are reached through areas, and those are other files:
+a feeder name becomes a record only by way of the feeder master, and an area only by way of the
+area master. So reading a DTC roster is refused, at the moment the file is read and before any
+batch exists, when either master is not stored or when the roster names a feeder the feeder
+master does not carry. The refusal is `import_order_unmet` and it names what is missing: the
+file to read first with its template name, or up to five of the unmatched feeder names with the
+count of the rest. A blank feeder cell is not a refusal — it is a gap in the office's own sheet,
+accepted with a warning that says the transformer will not be reached through any feeder's
+capacity. This is an order of work rather than a verdict on the file: the same roster is
+accepted unchanged once its masters are stored, which is what the tests walk.
+
 Where the accepted feeder now comes from:
 - A `Feeder` name the feeder master carries becomes the canonical feeder on acceptance.
 - A name the master does not carry, and a blank cell, leave the transformer with no canonical

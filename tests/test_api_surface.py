@@ -246,23 +246,33 @@ def test_a_stored_leave_record_reaches_the_preview(client):
 # --- imports ---------------------------------------------------------------
 
 
+def store_the_masters_the_roster_names(client: TestClient) -> None:
+    """Store the area and the feeder a DTC roster is read against.
+
+    A roster is refused before its masters are stored, so a test that reads one has to put
+    them there first - which is the order the Imports page states.
+    """
+
+    client.put(
+        "/api/masters/area",
+        json={"area_id": "A-01", "name_kn": "ಪ್ರದೇಶ", "name_en": "Test Area"},
+    )
+    client.put("/api/masters/feeder", json={"feeder_id": "F-01", "name": "MRS F-1 OLDTOWN"})
+
+
 def dtc_csv() -> bytes:
     stream = io.StringIO()
     writer = csv.writer(stream)
     writer.writerow(["DTC ID", "DTC Name", "Class", "kVA", "Feeder Name"])
     writer.writerow(["SCD-1", "Alpha", "DEPT", "100", "MRS F-1 OLDTOWN"])
-    writer.writerow(["SCD-2", "Beta", "MSB", "50", "not a stored feeder"])
+    writer.writerow(["SCD-2", "Beta", "MSB", "50", ""])
     writer.writerow(["SCF-1", "Excluded", "SCF", "10", ""])
     return stream.getvalue().encode("utf-8")
 
 
 def test_an_upload_is_staged_and_judged_before_it_is_accepted(client):
-    # One feeder is stored, so exactly one of the two named feeders is unknown and exactly
-    # one warning comes from that. The application seeds none of them.
-    client.put(
-        "/api/masters/feeder",
-        json={"feeder_id": "F-01", "name": "MRS F-1 OLDTOWN"},
-    )
+    # The roster is read against stored masters, which is the order it is held to.
+    store_the_masters_the_roster_names(client)
     answer = client.post(
         "/api/imports?dataset=dtc",
         files={"file": ("dtcs.csv", dtc_csv(), "text/csv")},
@@ -281,6 +291,7 @@ def test_an_upload_is_staged_and_judged_before_it_is_accepted(client):
 
 
 def test_the_batch_detail_names_each_row_outcome(client):
+    store_the_masters_the_roster_names(client)
     batch = client.post(
         "/api/imports?dataset=dtc",
         files={"file": ("dtcs.csv", dtc_csv(), "text/csv")},
@@ -292,6 +303,7 @@ def test_the_batch_detail_names_each_row_outcome(client):
 
 
 def test_accepting_a_batch_writes_the_master(client):
+    store_the_masters_the_roster_names(client)
     batch = client.post(
         "/api/imports?dataset=dtc",
         files={"file": ("dtcs.csv", dtc_csv(), "text/csv")},
@@ -306,6 +318,7 @@ def test_accepting_a_batch_writes_the_master(client):
 
 
 def test_rejecting_a_batch_leaves_the_master_alone(client):
+    store_the_masters_the_roster_names(client)
     batch = client.post(
         "/api/imports?dataset=dtc",
         files={"file": ("dtcs.csv", dtc_csv(), "text/csv")},

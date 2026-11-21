@@ -168,7 +168,7 @@ def test_accepting_the_batch_stores_the_date_and_keeps_the_source_value(db):
         db,
         "dtc",
         "dtc.csv",
-        master_csv("SCD-1,Alpha,DEPT,MRS F-1,250,Station A,15-09-2026"),
+        master_csv("SCD-1,Alpha,DEPT,,250,Station A,15-09-2026"),
     )
     accept_batch(db, batch.batch_id)
     stored = masters.get_dtc(db, "SCD-1")

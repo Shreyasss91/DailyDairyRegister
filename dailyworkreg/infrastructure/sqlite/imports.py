@@ -53,6 +53,12 @@ C_HOLIDAY_MODE_NOT_APPLICABLE = "holiday_merge_mode_not_applicable"
 #: repeat gap that no approved catalogue states.
 C_ACTIVITY_CONTRACT_UNSATISFIED = "activity_contract_unsatisfied"
 
+#: A DTC roster names the feeder each transformer sits on and the areas the office works in.
+#: Reading it before those masters are stored produces transformers nothing can be placed on,
+#: so the file is refused at the moment it is read rather than accepted into a state the
+#: readiness screen has to explain afterwards.
+C_IMPORT_ORDER_UNMET = "import_order_unmet"
+
 C_HOLIDAY_REPLACE = "replace"
 C_HOLIDAY_MERGE = "merge"
 
@@ -161,6 +167,14 @@ def _reconcile(
                 f"feeder '{feeder_name}' is not in the feeder master, so no canonical "
                 "feeder will be assigned; the supplied value is kept with the source record"
             )
+        elif not feeder_name:
+            # A blank cell is a gap in the office's own sheet rather than a name that cannot
+            # resolve, so the row is accepted - and it is said out loud, because a transformer
+            # with no feeder is never reached by feeder capacity.
+            messages.append(
+                "no feeder is named, so no canonical feeder will be assigned; this "
+                "transformer is not reached through any feeder's capacity"
+            )
         # There is no built-in assignment table any more: the roster file is the only
         # authority over which feeder a transformer sits on, and the feeder master is what
         # makes that name a record. A name the master does not carry is reported above and
@@ -257,6 +271,58 @@ def _flag_duplicate_identities(dataset: str, outcomes: list[RowOutcome]) -> list
     return result
 
 
+def _refuse_a_roster_read_before_its_masters(
+    connection: sqlite3.Connection, outcomes: list[RowOutcome]
+) -> None:
+    """Refuse a DTC roster whose masters are not in place yet.
+
+    The roster is the office's own record of which transformer sits on which feeder, and a
+    feeder name only becomes a stored record by way of the feeder master. Read first, it is
+    accepted into a database where no transformer has a canonical feeder: every feeder's
+    capacity is short, every readiness screen carries the count, and the only cure is to read
+    the roster again. The same is true of an area, which the register visits.
+
+    So this refuses at the moment the file is read, before a batch exists, and names what is
+    missing. It is an order of work rather than a fault in the file: the roster itself may be
+    perfect.
+    """
+
+    if not masters.list_areas(connection):
+        raise SourceFormatError(
+            C_IMPORT_ORDER_UNMET,
+            "this roster names transformers, and no area is stored yet. Read the area master "
+            "(04_area_master.csv) first, then read this roster again",
+        )
+    stored_feeders = {feeder.name.strip().casefold() for feeder in masters.list_feeders(connection)}
+    if not stored_feeders:
+        raise SourceFormatError(
+            C_IMPORT_ORDER_UNMET,
+            "no feeder is stored yet, so no transformer can be placed on one. Read the feeder "
+            "master (05_feeder_master.csv) first, then read this roster again",
+        )
+
+    # A blank feeder cell is a gap in the office's own sheet, which the row carries as a
+    # warning; a name the master does not carry is a name that will never resolve, and the
+    # whole file is refused rather than accepted with transformers nothing can reach.
+    unknown: list[str] = []
+    for outcome in outcomes:
+        payload = outcome.payload or {}
+        name = str(payload.get("feeder") or "").strip()
+        if not name or name.casefold() in stored_feeders:
+            continue
+        if name not in unknown:
+            unknown.append(name)
+    if unknown:
+        shown = ", ".join(f"'{name}'" for name in unknown[:5])
+        more = "" if len(unknown) <= 5 else f" and {len(unknown) - 5} more"
+        raise SourceFormatError(
+            C_IMPORT_ORDER_UNMET,
+            f"the feeder master does not carry {len(unknown)} name(s) this roster gives: "
+            f"{shown}{more}. Read the feeder master that belongs with this roster, or correct "
+            "those rows in the roster, then read it again",
+        )
+
+
 def stage_source(
     connection: sqlite3.Connection,
     dataset: str,
@@ -277,6 +343,8 @@ def stage_source(
 
     outcomes = [_reconcile(connection, dataset, outcome) for outcome in verdict.outcomes]
     outcomes = _flag_duplicate_identities(dataset, outcomes)
+    if dataset == "dtc":
+        _refuse_a_roster_read_before_its_masters(connection, outcomes)
     verdict = DatasetVerdict(dataset=dataset, outcomes=tuple(outcomes))
 
     batch_id = f"{dataset}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"

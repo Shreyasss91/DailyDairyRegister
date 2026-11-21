@@ -35,7 +35,7 @@ DTC_CSV = (
     "DTC ID,DTC Name,Class,Feeder,Feeder Code,MDM Code,kVA,Station\n"
     "SCD-1,Alpha,DEPT,MRS F-1 OLDTOWN,FC-1,MDM-1,250,Station A\n"
     "SCD-2,Beta,MSB,,#N/A,MDM-2,#N/A,Station B\n"
-    "SCD-3,Gamma,OWN,Unknown Feeder,FC-3,MDM-3,100,Station C\n"
+    "SCD-3,Gamma,OWN,,FC-3,MDM-3,100,Station C\n"
 )
 
 
@@ -207,11 +207,18 @@ def test_staging_row_keeps_the_raw_values(db):
     assert rows[1].raw["Feeder"] == ""
 
 
-def test_an_unfindable_feeder_is_a_reconciliation_warning(db):
+def test_a_blank_feeder_cell_is_a_warning_that_assigns_nothing(db):
+    """A blank cell is a gap in the office's own sheet, so the row is accepted without one.
+
+    A *name* the master does not carry is refused outright instead, which
+    `tests/test_import_order.py` pins: a name that will never resolve would leave a
+    transformer nothing can reach, while a blank cell is simply not filled in yet.
+    """
+
     batch, _ = stage_bytes(db, "dtc", "dtc.csv", DTC_CSV.encode())
     rows = {row.payload["dtc_id"]: row for row in staging_rows(db, batch.batch_id) if row.payload}
     assert rows["SCD-3"].severity == "warning"
-    assert "not in the feeder master" in rows["SCD-3"].messages[0]
+    assert any("feeder" in message or "capacity" in message for message in rows["SCD-3"].messages)
 
 
 def test_a_duplicate_identity_makes_the_batch_unacceptable(db):
@@ -248,7 +255,7 @@ def test_acceptance_preserves_the_source_record_verbatim(db):
     sources = {record.dtc_id: record for record in masters.list_dtc_source_records(db)}
     assert sources["SCD-2"].raw_kva == "#N/A"
     assert sources["SCD-2"].raw_class == "MSB"
-    assert sources["SCD-3"].raw_feeder == "Unknown Feeder"
+    assert sources["SCD-3"].raw_feeder == ""
     # The canonical assignment and the supplied value are different facts.
     assert sources["SCD-1"].raw_feeder == "MRS F-1 OLDTOWN"
 
@@ -294,13 +301,14 @@ def test_the_roster_row_is_what_assigns_a_transformer_to_a_feeder(db):
         "DTC ID,DTC Name,Class,Feeder\n"
         "SCD-5,Blank Feeder,DEPT,\n"
         "SCD-12,Names The Master,DEPT,Mandli F-13 MANDLI BYEPASS\n"
-        "SCD-13,Names Nobody,DEPT,A feeder the master has not got\n"
+        "SCD-13,Names Nothing,DEPT,\n"
     )
     batch, _ = stage_bytes(db, "dtc", "feeders.csv", csv.encode())
     result = accept_batch(db, batch.batch_id)
     dtcs = {d.dtc_id: d for d in masters.list_dtcs(db)}
-    # Nothing is assigned to a blank cell or to a name the master does not carry, and no
-    # second list overrides the row that does name one.
+    # A blank cell assigns nothing, a name the master carries resolves to it, and no second
+    # list overrides either. A name the master does not carry is refused at read time, which
+    # tests/test_import_order.py pins.
     assert dtcs["SCD-5"].canonical_feeder_id is None
     assert dtcs["SCD-12"].canonical_feeder_id == "F-02"
     assert dtcs["SCD-13"].canonical_feeder_id is None

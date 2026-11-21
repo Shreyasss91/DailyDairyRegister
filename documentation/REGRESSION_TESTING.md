@@ -113,7 +113,15 @@ These modules cover the export/document, PDF, bulk-finalisation and frontend con
   whichever way it resolves, re-uploading the same file updating rather than duplicating, and
   the acceptance result carrying no count of overrides applied because no assignment table
   exists any more.
-- Regular activities on working days: the configured count on every eligible day and none on a Sunday or a recorded holiday, the catalogue's monthly maximum, monthly minimum, repeat gap (across a month boundary) and weekday restriction as hard constraints, a weight unable to override a maximum, a catalogue that cannot fill a day or a month refused with the constraint and date named, determinism from the seed, the count and the catalogue surviving the request snapshot, a schema-1 snapshot still reading as the visits-only request it recorded, and the placed activities reaching the issued page and workbook with their Kannada text.
+- Reading a DTC roster before its masters: a roster with no area stored refused and the area
+  master named, a roster with no feeder stored refused and the feeder master named, a feeder
+  name the master does not carry refused with up to five names and the rest counted, matching
+  forgiving of case, a blank feeder cell accepted with a warning that says the transformer is
+  not reached through any feeder's capacity, a refusal creating no batch and no staging row, the
+  same file refused and then accepted unchanged once its masters are stored, the area, feeder,
+  activity and holiday files still readable from an empty database because only the roster names
+  a feeder, and the page stating the order before a file is chosen.
+ on every eligible day and none on a Sunday or a recorded holiday, the catalogue's monthly maximum, monthly minimum, repeat gap (across a month boundary) and weekday restriction as hard constraints, a weight unable to override a maximum, a catalogue that cannot fill a day or a month refused with the constraint and date named, determinism from the seed, the count and the catalogue surviving the request snapshot, a schema-1 snapshot still reading as the visits-only request it recorded, and the placed activities reaching the issued page and workbook with their Kannada text.
 
 - Handing the installation to a new office: the preview counting what a reset would remove
   and changing nothing itself, a fresh installation already holding the seeded identities it
