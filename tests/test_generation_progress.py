@@ -657,4 +657,4 @@ def test_the_client_is_loaded_from_a_new_cache_key():
     # moves whenever app.js does, which is why it is compared against the current
     # one rather than against the key it had when the progress bar was written.
     keys = re.findall(r"app\.js\?v=([\w-]+)", INDEX)
-    assert keys == ["reset-1"], keys
+    assert keys == ["feeders-1"], keys

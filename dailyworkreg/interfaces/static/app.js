@@ -260,7 +260,7 @@ async function openBatch(batchId) {
             showBanner(
               document.getElementById('import-result'),
               'warn',
-              `Accepted: ${done.inserted} added, ${done.updated} updated, ${done.excluded} excluded, ${done.feeder_overrides_applied} approved feeder assignment(s) applied.`,
+              `Accepted: ${done.inserted} added, ${done.updated} updated, ${done.excluded} excluded.`,
             );
             await loadImports();
             await openBatch(batchId);

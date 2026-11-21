@@ -40,7 +40,6 @@ from . import calendar_records as cal
 from . import masters
 from .database import transaction
 from .masters import StorageError
-from .seed import APPROVED_FEEDER_OVERRIDES, apply_approved_feeder_overrides
 
 C_BATCH_UNKNOWN = "import_batch_unknown"
 C_BATCH_NOT_STAGED = "import_batch_not_staged"
@@ -94,7 +93,6 @@ class AcceptanceResult:
     inserted: int
     updated: int
     excluded: int
-    feeder_overrides_applied: int
 
 
 def _batch_from(row: sqlite3.Row) -> BatchRow:
@@ -163,26 +161,11 @@ def _reconcile(
                 f"feeder '{feeder_name}' is not in the feeder master, so no canonical "
                 "feeder will be assigned; the supplied value is kept with the source record"
             )
-        assigned_name = APPROVED_FEEDER_OVERRIDES.get(str(payload.get("dtc_id") or ""))
-        if assigned_name:
-            assigned = masters.find_feeder_by_name(connection, assigned_name)
-            if assigned is None:
-                # Without the named feeder the assignment cannot be made, and a DTC
-                # accepted with no canonical feeder quietly leaves its feeder's
-                # capacity short. Refused rather than accepted with a gap.
-                error = True
-                messages.append(
-                    f"the owner-confirmed assignment for {payload['dtc_id']} is "
-                    f"{assigned_name}, which the feeder master does not carry; import "
-                    "the feeder master before accepting this batch"
-                )
-            elif supplied is None or supplied.feeder_id != assigned.feeder_id:
-                messages.append(
-                    f"the owner-confirmed assignment for {payload['dtc_id']} is "
-                    f"{assigned_name} ({assigned.feeder_id}), not the supplied "
-                    f"{feeder_name!r}; the supplied text is kept with the source "
-                    "record and the canonical feeder is set on acceptance"
-                )
+        # There is no built-in assignment table any more: the roster file is the only
+        # authority over which feeder a transformer sits on, and the feeder master is what
+        # makes that name a record. A name the master does not carry is reported above and
+        # leaves the transformer with no canonical feeder, which the readiness screen counts
+        # rather than a second list silently correcting the office's own file.
         if payload.get("kva") is None:
             messages.append("no capacity was read, so the weight cannot be derived yet")
 
@@ -448,7 +431,6 @@ def accept_batch(
     inserted = 0
     updated = 0
     excluded = sum(1 for row in rows if row.decision != "include")
-    overrides = 0
 
     with transaction(connection):
         masters.bump_version(connection)
@@ -596,9 +578,6 @@ def accept_batch(
                 inserted += 0 if existed else 1
                 updated += 1 if existed else 0
 
-        if batch.dataset == "dtc":
-            overrides = apply_approved_feeder_overrides(connection)
-
         connection.execute(
             "UPDATE import_batch SET status = 'accepted', accepted_at = ?, decision_note = ? "
             "WHERE batch_id = ?",
@@ -611,7 +590,6 @@ def accept_batch(
         inserted=inserted,
         updated=updated,
         excluded=excluded,
-        feeder_overrides_applied=overrides,
     )
 
 

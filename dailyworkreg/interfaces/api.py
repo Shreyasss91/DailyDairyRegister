@@ -705,7 +705,6 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             "inserted": result.inserted,
             "updated": result.updated,
             "excluded": result.excluded,
-            "feeder_overrides_applied": result.feeder_overrides_applied,
         }
 
     @app.post("/api/imports/{batch_id}/reject")

@@ -53,18 +53,20 @@ Blank header:
 - `Date of commision` is the date the transformer was commissioned, as the office's own sheet spells it. A DTC is never scheduled for that day or any day before it. A blank cell, a `#N/A` placeholder or an unreadable value means no restriction - it is not read as "not yet commissioned" - and the supplied text is kept beside the accepted date so an unreadable value stays inspectable.
 - Capture source filename, issuing office, worksheet name, extraction date and source/as-of date in the import batch notes or separate provenance record.
 
-Owner-confirmed canonical overrides applied by the current application on DTC batch acceptance:
+**There is no assignment table any more.** An earlier build carried six owner-confirmed
+DTC-to-feeder mappings and applied them when a roster batch was accepted, so the canonical
+feeder could differ from the one the office's own file named. The owner withdrew that on
+2026-11-21: the imported file is the office's record, and a second list beside it is how one
+office's judgement gets applied to the next office's transformers. The `Feeder` column of
+`01_dtc_master_roster.csv` is now the only thing that decides which feeder a transformer sits
+on, resolved against `05_feeder_master.csv`.
 
-| DTC ID | Canonical feeder | Canonical feeder ID |
-|---|---|---|
-| SCD-5 | MRS F-1 OLDTOWN | F-01 |
-| SCD-12 | Mandli F-22 GANDHIBAZAAR | F-03 |
-| SCD-107 | Mandli F-22 GANDHIBAZAAR | F-03 |
-| SCD-108 | Mandli F-22 GANDHIBAZAAR | F-03 |
-| SCD-109 | MRS F-1 OLDTOWN | F-01 |
-| SCD-110 | MRS F-1 OLDTOWN | F-01 |
-
-Keep the supplied feeder string unchanged. The override sets the canonical feeder separately. Every assignment above now names the feeder the roster itself supplies, because the owner settled on 2026-11-19 that the imported file is what the office goes by: an agreeing file reassigns nothing, and a contradicting one is announced during review before the batch is accepted.
+- A name the feeder master carries becomes the canonical feeder on acceptance.
+- A name the master does not carry, and a blank cell, leaves the transformer with no canonical
+  feeder. It is reported as a warning on the row and counted on the readiness screen, not
+  corrected and not silently dropped.
+- The supplied feeder string is always kept unchanged beside the accepted record, so what the
+  office wrote remains inspectable after the fact.
 
 ## 4. Karnataka General Holidays 2025–2026
 
@@ -157,13 +159,13 @@ The proposed examples are a starting point for review only. Rewrite/approve them
 
 Headers: `Area ID`, `Kannada Name` (required), `English Name`, `Aliases` (semicolon-separated), `Weight`, `Monthly Min`, `Monthly Max`, `Revisit Gap`.
 
-Prefilled values (weight 1.0, minimum 0, maximum 3, revisit gap 7 calendar days) are the repository's current seeded settings. Maximum 3 is a cap, not an obligation. No policy requires all 16 areas to be visited monthly. DTC-to-area mapping remains deferred; do not invent one.
+Prefilled values (weight 1.0, minimum 0, maximum 3, revisit gap 7 calendar days) are the defaults a new area arrives with. Maximum 3 is a cap, not an obligation. No policy requires all 16 areas to be visited monthly. DTC-to-area mapping remains deferred; do not invent one.
 
-## 7. Feeder master and DTC override reference
+## 7. Feeder master
 
-### Files
-- `05_feeder_master.csv` — current four seeded feeder identities in importer shape.
-- `05_dtc_feeder_overrides_reference.csv` — six owner-confirmed mappings; reference only, not an importer dataset.
+### File
+- `05_feeder_master.csv` — the feeder identities in importer shape. Nothing is seeded: an
+  office's feeders arrive from this file and nowhere else.
 
 | Feeder ID | Seeded canonical feeder |
 |---|---|
@@ -172,9 +174,9 @@ Prefilled values (weight 1.0, minimum 0, maximum 3, revisit gap 7 calendar days)
 | F-03 | Mandli F-22 GANDHIBAZAAR |
 | F-04 | Mandli F-3 NT ROAD |
 
-Seeded settings: manual multiplier 1.0, monthly minimum 0, maximum 3, revisit gap 7 calendar days. The maximum is a cap, not an obligation; full-roster monthly feeder coverage is not approved.
+Defaults a new feeder arrives with: manual multiplier 1.0, monthly minimum 0, maximum 3, revisit gap 7 calendar days. The maximum is a cap, not an obligation; full-roster monthly feeder coverage is not approved.
 
-Feeder weight is derived from the sum of installed kVA of active DEPT DTCs assigned to that feeder, multiplied by the manual adjustment multiplier. SELF_DTC is excluded. Do not enter a fabricated aggregate feeder weight. The application applies the six DTC overrides during DTC acceptance; do not upload the override reference as a feeder import.
+Feeder weight is derived from the sum of installed kVA of active DEPT DTCs assigned to that feeder, multiplied by the manual adjustment multiplier. SELF_DTC is excluded. Do not enter a fabricated aggregate feeder weight. The transformer's own roster row is what assigns it; there is no override sheet to upload, and no second list the application applies.
 
 ## 8. DTC class mapping and weighting
 

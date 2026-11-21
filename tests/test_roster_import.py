@@ -36,7 +36,6 @@ from dailyworkreg.infrastructure.sqlite.imports import (
     reject_batch,
     stage_bytes,
 )
-from dailyworkreg.infrastructure.sqlite.seed import APPROVED_FEEDER_OVERRIDES
 from master_fixtures import seed_office_masters
 
 HEADER = "DTC ID,DTC Name,Class,Feeder,kVA,Station\n"
@@ -52,8 +51,8 @@ MRS = "MRS F-1 OLDTOWN"
 MANDLI_13 = "Mandli F-13 MANDLI BYEPASS"
 MANDLI_22 = "Mandli F-22 GANDHIBAZAAR"
 
-#: Rows this fixture supplies a feeder that contradicts the confirmed assignment,
-#: so the review notice is tested. The office file itself contradicts none of them.
+#: Rows this fixture gives a feeder its own number would not have chosen, so a file whose
+#: text drifts from the row's station is exercised. Nothing in the application prefers one.
 CONFLICTING_SOURCE = {"SCD-109": MANDLI_22, "SCD-110": MANDLI_22}
 NT_ROAD = "Mandli F-3 NT ROAD"
 
@@ -81,14 +80,13 @@ def _roster_rows() -> list[tuple[str, str, str, str, str, str]]:
     rows.append(("SCF-140", "SECTION FEEDER 140", "SCF", NT_ROAD, "100", "110/11KV MRS"))
     rows.append(("SCE-3", "SECTION CONSUMER 3", "SCE", NT_ROAD, "100", "110/11KV MRS"))
 
-    # Every one of the six owner-confirmed assignments agrees with the supplied
-    # feeder text, which is the shape of the office file as it stands. Two rows are
-    # deliberately made to disagree anyway, so the notice that reports a disagreement
-    # before acceptance is exercised instead of quietly becoming dead code.
-    for dtc_id, feeder_name in APPROVED_FEEDER_OVERRIDES.items():
+    # Two rows are deliberately given a feeder the master carries under a different name,
+    # so the warning that names an unmatched feeder is exercised rather than quietly dead.
+    # The feeder each row names is otherwise the one its own number assigned above: there is
+    # no assignment table in the application any more, only the file and the master.
+    for dtc_id, supplied in CONFLICTING_SOURCE.items():
         index = int(dtc_id.split("-")[1]) - 1
         dtc_id, name, source_class, _, capacity, station = rows[index]
-        supplied = CONFLICTING_SOURCE.get(dtc_id, feeder_name)
         rows[index] = (dtc_id, name, source_class, supplied, capacity, station)
     return rows
 
@@ -140,14 +138,12 @@ def test_the_whole_roster_reconciles_to_the_settled_counts(db: sqlite3.Connectio
     assert {o.raw["Class"] for o in excluded} == {"SCF", "SCE"}
     assert all("not imported" in " ".join(o.messages) for o in excluded)
 
-    # Every row whose canonical feeder differs from what the supplied text resolves
-    # to says so before acceptance, so the override is visible during review.
-    notices = {
-        outcome.payload["dtc_id"]: outcome.messages
-        for outcome in included
-        if any("owner-confirmed assignment" in m for m in outcome.messages)
-    }
-    assert set(notices) == set(CONFLICTING_SOURCE)
+    # No row is reported against an assignment table, because the application has none: the
+    # canonical feeder is the master's record of the name the row supplies, and only an
+    # unmatched name is worth a word before acceptance.
+    assert not any(
+        "owner-confirmed assignment" in " ".join(outcome.messages) for outcome in included
+    )
 
 
 def test_staging_the_roster_changes_no_canonical_row(db: sqlite3.Connection) -> None:
@@ -211,67 +207,57 @@ def test_the_batch_names_the_file_it_came_from(db: sqlite3.Connection) -> None:
     assert len(stored.source_sha256) == 64
 
 
-# --- the owner-confirmed feeder assignments -------------------------------
+# --- the file decides which feeder a transformer sits on ------------------
 
 
-def test_the_six_settled_assignments_win_over_conflicting_source_text(
+def test_the_file_decides_and_nothing_second_guesses_it(
     db: sqlite3.Connection,
 ) -> None:
-    """A row whose supplied text contradicts its assignment keeps both facts.
+    """Every transformer keeps the canonical feeder its own row named.
 
-    The import must keep the supplied text and set the canonical feeder apart from
-    it, so neither is overwritten by the other.
+    The application carried six owner-confirmed assignments and applied them on acceptance
+    until 2026-11-21, when the owner withdrew the mechanism: the roster is the office's own
+    record, and a second list beside it applies one office's judgement to the next office's
+    transformers. So a row naming the master's `MRS F-1 OLDTOWN` lands on F-01 and a row
+    naming `Mandli F-22 GANDHIBAZAAR` lands on F-03, with the supplied text kept beside it.
+    """
+
+    batch, verdict = _stage_roster(db)
+    result = accept_batch(db, batch.batch_id)
+
+    stored = {row.dtc_id: row for row in masters.list_dtcs(db)}
+    for dtc_id, feeder_name in CONFLICTING_SOURCE.items():
+        wanted = masters.find_feeder_by_name(db, feeder_name)
+        assert stored[dtc_id].canonical_feeder_id == wanted.feeder_id, dtc_id
+        kept = db.execute(
+            "SELECT raw_feeder FROM dtc_source_record WHERE batch_id = ? AND dtc_id = ?",
+            (batch.batch_id, dtc_id),
+        ).fetchone()
+        assert kept[0] == feeder_name
+
+    # The rows the fixture left alone keep the feeder their own number assigned.
+    for number in (1, 2, 3, 4, 5, 6, 7):
+        assert stored[f"SCD-{number}"].canonical_feeder_id is not None
+
+    # No row is reported as reassigned, because nothing reassigns anything.
+    assert not any(
+        "owner-confirmed assignment" in " ".join(outcome.messages)
+        for outcome in verdict.outcomes
+    )
+    assert result.inserted == 113
+
+
+def test_an_application_has_no_assignment_count_to_report(db: sqlite3.Connection) -> None:
+    """The acceptance result no longer carries a count of overrides applied.
+
+    The count is not merely always zero: the field is gone, so a caller cannot read a number
+    that implies a second authority existed.
     """
 
     batch, _ = _stage_roster(db)
     result = accept_batch(db, batch.batch_id)
 
-    stored = {row.dtc_id: row for row in masters.list_dtcs(db)}
-    for dtc_id, feeder_name in APPROVED_FEEDER_OVERRIDES.items():
-        wanted = masters.find_feeder_by_name(db, feeder_name)
-        assert stored[dtc_id].canonical_feeder_id == wanted.feeder_id, dtc_id
-
-    for dtc_id in CONFLICTING_SOURCE:
-        kept = db.execute(
-            "SELECT raw_feeder FROM dtc_source_record WHERE batch_id = ? AND dtc_id = ?",
-            (batch.batch_id, dtc_id),
-        ).fetchone()
-        assert kept[0] == CONFLICTING_SOURCE[dtc_id]
-        assert stored[dtc_id].canonical_feeder_id == "F-01"
-    # Only the rows whose supplied text disagrees are rewritten.
-    assert result.feeder_overrides_applied == len(CONFLICTING_SOURCE)
-
-
-def test_a_roster_that_agrees_with_every_assignment_reports_no_reassignment(
-    db: sqlite3.Connection,
-) -> None:
-    """The office file names the same feeder as every confirmed assignment.
-
-    Nothing is overridden, so the operator reading the review sees no reassignment
-    notice at all - which is what the owner asked for when they said the imported
-    file is what the office goes by.
-    """
-
-    rows = _roster_rows()
-    for dtc_id, feeder_name in APPROVED_FEEDER_OVERRIDES.items():
-        index = int(dtc_id.split("-")[1]) - 1
-        dtc_id, name, source_class, _, capacity, station = rows[index]
-        rows[index] = (dtc_id, name, source_class, feeder_name, capacity, station)
-    batch, verdict = _stage_roster(db, rows)
-
-    notices = [
-        outcome.payload["dtc_id"]
-        for outcome in verdict.outcomes
-        if any("owner-confirmed assignment" in message for message in outcome.messages)
-    ]
-    assert notices == []
-
-    result = accept_batch(db, batch.batch_id)
-    assert result.feeder_overrides_applied == 0
-    stored = {row.dtc_id: row for row in masters.list_dtcs(db)}
-    # SCD-107 and SCD-108 are Mandli F-22 in the file the office maintains.
-    assert stored["SCD-107"].canonical_feeder_id == "F-03"
-    assert stored["SCD-108"].canonical_feeder_id == "F-03"
+    assert not hasattr(result, "feeder_overrides_applied")
 
 
 def test_an_unmapped_feeder_stays_a_warning_and_assigns_nothing(
@@ -290,7 +276,9 @@ def test_an_unmapped_feeder_stays_a_warning_and_assigns_nothing(
     assert batch.error_count == 0
     spoken = [outcome for outcome in verdict.outcomes if outcome.messages]
     assert batch.warning_count == len(spoken)
-    assert any(
+    # The warning names the value and says what it costs, and stops there: there is no second
+    # list that will assign this transformer's feeder on acceptance.
+    assert not any(
         "owner-confirmed assignment" in " ".join(o.messages) for o in verdict.outcomes
     )
 
@@ -303,28 +291,31 @@ def test_an_unmapped_feeder_stays_a_warning_and_assigns_nothing(
     assert kept[0] == "A FEEDER NOBODY HAS RECORDED"
 
 
-def test_a_roster_cannot_be_accepted_before_its_feeder_master(tmp_path: Path) -> None:
-    """Without the feeders, six assignments cannot be made, so acceptance is refused.
+def test_a_roster_staged_before_its_feeder_master_is_accepted_unassigned(
+    tmp_path: Path,
+) -> None:
+    """Nothing refuses the batch, and no transformer is given a feeder it does not name.
 
-    Accepting anyway would store 113 DTCs with no canonical feeder and leave every
-    feeder's capacity short, which is the failure the assignment exists to prevent.
+    A roster read before its feeder master used to be refused on the six owner-confirmed
+    assignments, which was the one thing that stopped it. With that table withdrawn the batch
+    is accepted, every row carrying a warning that names the feeder master's gap, and every
+    transformer holding no canonical feeder until the master arrives and the roster is read
+    again. The count is on the readiness screen rather than hidden.
     """
 
     connection = open_database(tmp_path / "bare.db")
     try:
         batch, verdict = _stage_roster(connection)
-        refused = [
-            outcome.payload["dtc_id"]
+        assert batch.error_count == 0
+        assert any(
+            "not in the feeder master" in " ".join(outcome.messages)
             for outcome in verdict.outcomes
-            if outcome.severity == "error"
-        ]
-        assert sorted(refused) == sorted(APPROVED_FEEDER_OVERRIDES)
-        assert batch.error_count == 6
+        )
 
-        with pytest.raises(Exception) as raised:
-            accept_batch(connection, batch.batch_id)
-        assert "cannot be imported" in str(raised.value)
-        assert connection.execute("SELECT COUNT(*) FROM dtc").fetchone()[0] == 0
+        result = accept_batch(connection, batch.batch_id)
+        assert result.inserted == 113
+        stored = masters.list_dtcs(connection)
+        assert all(row.canonical_feeder_id is None for row in stored)
     finally:
         connection.close()
 
@@ -444,17 +435,17 @@ def test_the_office_copy_reconciles_when_it_is_present(db: sqlite3.Connection) -
 
     result = accept_batch(db, batch.batch_id)
     assert result.inserted == 113
-    notices = [
-        outcome.payload["dtc_id"]
-        for outcome in included
-        if any("owner-confirmed assignment" in m for m in outcome.messages)
-    ]
-    assert notices == []
     stored = {row.dtc_id: row for row in masters.list_dtcs(db)}
-    for dtc_id, feeder_name in APPROVED_FEEDER_OVERRIDES.items():
-        wanted = masters.find_feeder_by_name(db, feeder_name)
-        assert stored[dtc_id].canonical_feeder_id == wanted.feeder_id, dtc_id
+    # Every transformer holds the feeder its own row names, resolved against the master.
     assert all(row.canonical_feeder_id for row in stored.values())
+    for outcome in included:
+        raw = outcome.payload.get("feeder")
+        if not raw:
+            continue
+        wanted = masters.find_feeder_by_name(db, raw)
+        assert stored[outcome.payload["dtc_id"]].canonical_feeder_id == (
+            wanted.feeder_id if wanted else None
+        )
     assert all(row.kva is not None for row in stored.values())
     # The office's own file names Mandli F-22 for these two, and the owner settled
     # that the file is what the office goes by.

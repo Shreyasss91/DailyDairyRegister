@@ -46,13 +46,13 @@ runtime importer or accepted in any database.
 
 - **DTC to feeder.** All 113 DTCs resolve to one of the four canonical feeders; none is
   unresolved. Distribution: F-01 64, F-02 16, F-03 29, F-04 4.
-- **Owner-confirmed overrides.** SCD-5, SCD-12, SCD-107, SCD-108, SCD-109 and SCD-110 resolve
-  to F-01, F-03, F-03, F-03, F-01 and F-01 respectively, matching
-  `data/templates/05_dtc_feeder_overrides_reference.csv` and the feeder this file supplies on
-  every one of those rows. SCD-107 and SCD-108 were recorded as F-01 in an earlier reading;
-  the owner settled on 2026-11-19 that the imported file is what the office goes by. Every
-  row's stored source feeder text is still exactly what the file said; no override rewrote a
-  source value.
+- **No override table.** SCD-5, SCD-12, SCD-107, SCD-108, SCD-109 and SCD-110 resolve to
+  F-01, F-03, F-03, F-03, F-01 and F-01 respectively, because each row's own `Feeder` text
+  resolves to that feeder in `05_feeder_master.csv` - not because a table beside the file
+  said so. The six owner-confirmed mappings and the code that applied them were withdrawn on
+  2026-11-21: the imported file is the office's record, and a second list would apply this
+  office's judgement to the next office's transformers. Every row's stored source feeder text
+  is exactly what the file said.
 - **Class mapping.** The roster supplies 68 DEPT, 42 MSB and 3 OWN; the canonical result is
   68 DEPT and 45 SELF_DTC. The reference file's five rows agree with the importer's own
   mapping, and the importer maps DEPT to DEPT, MSB and OWN to SELF_DTC, and excludes SCF and

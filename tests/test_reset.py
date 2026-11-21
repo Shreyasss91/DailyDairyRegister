@@ -678,7 +678,7 @@ def test_the_page_loads_a_client_that_knows_about_the_reset(client: TestClient) 
     page = client.get("/").text
     script = client.get("/static/app.js").text
 
-    assert "app.js?v=reset-1" in page
+    assert "app.js?v=" in page
     assert "'/api/reset/preview'" in script
     assert "'/api/reset'" in script
     assert "loadReset()" in script

@@ -104,6 +104,15 @@ These modules cover the export/document, PDF, bulk-finalisation and frontend con
   transformer the range could not cover at all being reported beside the draft, and the
   request snapshot keeping each roster date while a snapshot written before the field
   existed reads without one.
+- The roster file deciding what goes into the masters: a whole 119-row file staged and judged
+  with 113 rows included and 6 excluded by the class column, a stage that changes no canonical
+  row, acceptance storing the supplied fields verbatim beside the canonical record, a row whose
+  feeder name the master does not carry accepted with a warning and **no** canonical feeder
+  rather than refused, a batch staged before the feeder master accepted unassigned so the gap
+  is visible on the readiness screen, the supplied feeder text kept beside the accepted record
+  whichever way it resolves, re-uploading the same file updating rather than duplicating, and
+  the acceptance result carrying no count of overrides applied because no assignment table
+  exists any more.
 - Regular activities on working days: the configured count on every eligible day and none on a Sunday or a recorded holiday, the catalogue's monthly maximum, monthly minimum, repeat gap (across a month boundary) and weekday restriction as hard constraints, a weight unable to override a maximum, a catalogue that cannot fill a day or a month refused with the constraint and date named, determinism from the seed, the count and the catalogue surviving the request snapshot, a schema-1 snapshot still reading as the visits-only request it recorded, and the placed activities reaching the issued page and workbook with their Kannada text.
 
 - Handing the installation to a new office: the preview counting what a reset would remove

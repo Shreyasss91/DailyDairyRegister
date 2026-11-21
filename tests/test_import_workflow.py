@@ -289,19 +289,23 @@ def test_accepting_an_excluded_row_does_not_create_it(db):
     assert {d.dtc_id for d in masters.list_dtcs(db)} == {"SCD-1"}
 
 
-def test_the_approved_feeder_overrides_are_applied_on_acceptance(db):
+def test_the_roster_row_is_what_assigns_a_transformer_to_a_feeder(db):
     csv = (
         "DTC ID,DTC Name,Class,Feeder\n"
-        "SCD-5,Override Me,DEPT,\n"
-        "SCD-12,Override Me Too,DEPT,Mandli F-13 MANDLI BYEPASS\n"
+        "SCD-5,Blank Feeder,DEPT,\n"
+        "SCD-12,Names The Master,DEPT,Mandli F-13 MANDLI BYEPASS\n"
+        "SCD-13,Names Nobody,DEPT,A feeder the master has not got\n"
     )
-    batch, _ = stage_bytes(db, "dtc", "overrides.csv", csv.encode())
+    batch, _ = stage_bytes(db, "dtc", "feeders.csv", csv.encode())
     result = accept_batch(db, batch.batch_id)
     dtcs = {d.dtc_id: d for d in masters.list_dtcs(db)}
-    # The owner-confirmed assignment wins over a blank and over a different source value.
-    assert dtcs["SCD-5"].canonical_feeder_id == "F-01"
-    assert dtcs["SCD-12"].canonical_feeder_id == "F-03"
-    assert result.feeder_overrides_applied == 2
+    # Nothing is assigned to a blank cell or to a name the master does not carry, and no
+    # second list overrides the row that does name one.
+    assert dtcs["SCD-5"].canonical_feeder_id is None
+    assert dtcs["SCD-12"].canonical_feeder_id == "F-02"
+    assert dtcs["SCD-13"].canonical_feeder_id is None
+    assert result.inserted == 3
+    assert not hasattr(result, "feeder_overrides_applied")
 
 
 def test_an_area_without_an_id_is_matched_by_its_name(db):

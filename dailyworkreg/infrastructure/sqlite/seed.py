@@ -35,26 +35,6 @@ APPROVED_LEAVE_TYPES: tuple[tuple[str, str], ...] = (
     ("FPL", "Full Pay Leave"),
 )
 
-#: Owner-confirmed canonical feeder assignments from requirements §8. Applied when
-#: the DTC exists, so an import that supplies the records can then be reconciled
-#: against the approved overrides rather than the reverse.
-#:
-#: SCD-107 and SCD-108 were confirmed to MRS F-1 OLDTOWN, and on 2026-11-19 the owner
-#: corrected that to Mandli F-22 GANDHIBAZAAR - the feeder the roster itself names -
-#: with the instruction that the imported file is what the office goes by. They are
-#: therefore recorded as the file states them. All six now agree with the supplied
-#: text, so an ordinary roster import reassigns nothing; the table is kept because a
-#: later file that contradicts it must be reported before it is accepted, not
-#: discovered afterwards.
-APPROVED_FEEDER_OVERRIDES: dict[str, str] = {
-    "SCD-5": "MRS F-1 OLDTOWN",
-    "SCD-12": "Mandli F-22 GANDHIBAZAAR",
-    "SCD-107": "Mandli F-22 GANDHIBAZAAR",
-    "SCD-108": "Mandli F-22 GANDHIBAZAAR",
-    "SCD-109": "MRS F-1 OLDTOWN",
-    "SCD-110": "MRS F-1 OLDTOWN",
-}
-
 SEED_PROVENANCE = (
     "requirements baseline §5.1: the leave types the baseline names. No office's areas or "
     "feeders are seeded; those arrive with that office's own master files."
@@ -111,34 +91,3 @@ def seed_leave_types(connection: sqlite3.Connection, *, force: bool = False) -> 
             (SEED_SETTING_KEY, SEED_PROVENANCE, now),
         )
     return counts
-
-
-def apply_approved_feeder_overrides(connection: sqlite3.Connection) -> int:
-    """Set the owner-confirmed canonical feeders on the DTCs that exist.
-
-    Only the canonical column is written. The imported source feeder stays in
-    ``dtc_source_record`` untouched, so the override and the evidence for it remain
-    two separate facts. Returns how many assignments changed.
-    """
-
-    changed = 0
-    with transaction(connection):
-        version = bump_version(connection)
-        for dtc_id, feeder_name in APPROVED_FEEDER_OVERRIDES.items():
-            feeder = connection.execute(
-                "SELECT feeder_id FROM feeder WHERE name = ?", (feeder_name,)
-            ).fetchone()
-            if feeder is None:
-                continue
-            updated = connection.execute(
-                """
-                UPDATE dtc SET canonical_feeder_id = ?, revision = revision + 1,
-                               valid_from_version = ?, updated_at = ?
-                WHERE dtc_id = ? AND (canonical_feeder_id IS NULL
-                                      OR canonical_feeder_id <> ?)
-                """,
-                (feeder["feeder_id"], version, SEED_PROVENANCE, dtc_id,
-                 feeder["feeder_id"]),
-            )
-            changed += updated.rowcount or 0
-    return changed

@@ -227,24 +227,27 @@ The supplied DTC source contains 113 SCD records. Include the 113 SCD records; e
 - Retain imported source fields, including DTC name, feeder, feeder code, MDM code, kVA, station and original DEPT/MSB/OWN classification.
 - Retain the supplied **date of commissioning** (`Date of commision` in the office's own file) as a canonical date on the DTC record, with the supplied text kept beside it as source evidence. A blank or unreadable value is stored as no date, which the schedule reads as no restriction; it is never treated as "not yet commissioned", because that would make an untouched master unusable. The date bounds the dates the asset may be visited on, as §10.9 states.
 - Preserve blank and `#N/A` source values; do not silently discard records or fabricate missing values.
-- Preserve original imported values and store owner-confirmed feeder assignments as explicit canonical overrides. Do not overwrite source data or silently repair discrepancies.
+- Preserve original imported values and store the supplied feeder text beside the accepted record. Do not overwrite source data or silently repair discrepancies.
 - Source import must include a validation/reconciliation view so discrepancies and missing fields can be reviewed.
 
-Owner-confirmed canonical feeder assignments:
-- SCD-5 → MRS F-1 OLDTOWN
-- SCD-12 → Mandli F-22 GANDHIBAZAAR
-- SCD-107 and SCD-108 → Mandli F-22 GANDHIBAZAAR (settled 2026-11-19)
-- SCD-109 and SCD-110 → MRS F-1 OLDTOWN
+**The roster file is the only authority over a transformer's feeder.** An earlier build
+carried six owner-confirmed assignments (SCD-5, SCD-12, SCD-107 to SCD-110) and applied them
+when a DTC batch was accepted, so the canonical feeder could differ from the one the office's
+own row named. The owner settled on 2026-11-19 that the imported file is what the office goes
+by, and on 2026-11-21 withdrew the mechanism rather than leave a second list beside the
+office's record: one office's judgement must not be applied to the next office's
+transformers, and a table that agrees with the file is dead weight that a future file can
+still be bent against.
 
-The owner's own rule, settled 2026-11-19, governs where the two disagree: **the imported
-roster file is what the office goes by.** The confirmed assignments above are therefore
-the feeder the roster itself names, and an import that agrees with them reassigns
-nothing and reports nothing. The table is kept because a later file that contradicts
-these records must be announced before the batch is accepted rather than discovered
-afterwards, and the supplied text is stored beside the canonical feeder either way.
-SCD-107 and SCD-108 were previously recorded as MRS F-1 OLDTOWN; that is superseded,
-and `apply_approved_feeder_overrides` corrects those two rows on the next seed or
-acceptance, so a database imported under the old reading converges.
+Where the accepted feeder now comes from:
+- A `Feeder` name the feeder master carries becomes the canonical feeder on acceptance.
+- A name the master does not carry, and a blank cell, leave the transformer with no canonical
+  feeder. The row is accepted with a warning naming the value, and the count of transformers
+  holding no canonical feeder is shown on the readiness screen. Nothing is invented to fill it.
+- The supplied feeder text is always stored beside the accepted record, so what the office
+  wrote stays inspectable after the fact.
+- The override table, the function that applied it and the count of assignments it reported
+  are all removed; `05_dtc_feeder_overrides_reference.csv` is deleted.
 
 DTC priority and weight:
 - DEPT has higher priority.
@@ -547,7 +550,7 @@ Workflow states:
 The following points remain open and must not be silently converted into approved defaults:
 
 1. **Target allocator proof and validation:** The policy choices in §10 are recorded, but the exact joint allocation algorithm and its mathematical feasibility proof still require deterministic validation. Define every term and unit in any lower-bound equation; use the actual eligible dates and 7-calendar-day revisit interval; account for category overlap under the combined daily cap; validate per-asset caps and cross-cycle boundaries. The candidate bound and table supplied during analysis must not be treated as proven or hardcoded until these conditions are satisfied. **Status: partially satisfied.** A joint date-level allocator now exists (`dailyworkreg/domain/allocator.py`) and every result it reports as feasible has been validated against the full hard-constraint and obligation-aware checks. It is validated empirically, not proved: no mathematical proof of global optimality or of the completeness of the constructive search is claimed, and the allocator is explicitly not required to find a globally optimal weighted schedule. The necessary conditions in §10.6 remain necessary only. Unresolved cases return INDETERMINATE rather than being reported as impossible.
-3. **Initial data validation:** during implementation, re-import/validate the supplied DTC source against the 113-SCD inclusion rule, class counts, preserved source fields and explicit feeder overrides. Do not infer missing source rows from this requirements document.
+3. **Initial data validation:** during implementation, re-import/validate the supplied DTC source against the 113-SCD inclusion rule, the class counts and the preserved source fields, with each transformer's feeder resolved against the feeder master. Do not infer missing source rows from this requirements document.
 4. **Holiday data validation:** load and verify the Karnataka General Holiday baseline for 2025 and 2026 only. Restricted Holidays must remain excluded.
 5. **Activity catalogue content:** prepare the initial 40–60 activity records with English/Kannada text for owner review before treating the catalogue as operationally approved. **Status: open, and blocked on the owner.** A source search of this machine found no approved catalogue among the files it could read; the importer now refuses any row that omits its number, identifier or text rather than completing it (see §6.1). What is missing is source material and owner decisions — approved activity list, Kannada wording, weights, monthly limits, repeat gaps and any weekday restriction — not implementation.
 6. **Area and feeder coverage defaults:** The owner has not selected a monthly minimum or explicit coverage cycle for all areas or all feeders. Do not assume one visit per canonical area or feeder per month. Obtain the owner’s choice before making full-roster monthly coverage a required target.
