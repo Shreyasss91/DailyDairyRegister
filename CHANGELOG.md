@@ -152,7 +152,9 @@ The repository policy in `CLAUDE.md` requires every change, however small, to ha
   `tests/test_commissioned_on.py` gains the counterpart contract: an empty month that owes nothing is
   complete, and one that owes an explicit count still answers `no_eligible_working_date` with that
   count. The Draft tab shows a leave line without edit, remove or move controls, because it is
-  projected again on every generation and the Calendar tab is where a leave changes. Recorded in `documentation/PRODUCT_REQUIREMENTS_BASELINE.md` section 10.9, in the wiki's
+  projected again on every generation and the Calendar tab is where a leave changes. The
+  client's cache key moves to `app.js?v=leave-2` so a browser holding the previous script
+  picks the new rendering up on the next load. Recorded in `documentation/PRODUCT_REQUIREMENTS_BASELINE.md` section 10.9, in the wiki's
   leave section, its list of what a plan may not do and its generation message table, and in
   `documentation/REGRESSION_TESTING.md`. No schema change, no migration, no dependency and no route.
   Full suite 1472 passing.
