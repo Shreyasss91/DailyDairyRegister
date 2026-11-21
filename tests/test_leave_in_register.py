@@ -21,6 +21,7 @@ from dailyworkreg.application import (
     AssetDisplay,
     CalendarDay,
     CalendarDayKind,
+    DayEntry,
     DayEntryKind,
     DraftMode,
     DraftMonthStatus,
@@ -29,6 +30,7 @@ from dailyworkreg.application import (
     generate_draft,
     snapshot,
 )
+from dailyworkreg.application.draft_generation import DayEntryProvenance
 from dailyworkreg.domain import wording
 from dailyworkreg.domain.cycle import (
     CoverageCycle,
@@ -389,3 +391,59 @@ def test_the_activity_cell_reads_the_sentence_and_then_the_reason():
 
     assert day.activity_text == "I was on leave this day, Full Pay Leave (Leave)"
     assert day.activity_text.count("Full Pay Leave") == 1
+
+
+
+def test_a_projected_entry_on_a_leave_date_is_not_printed_there():
+    """A leave date is one thing: nothing the calendar projected appears on it.
+
+    The office's own report, on a Monday of October 2025: *"I was on leave this day, Conducted
+    safety meeting for employees, Full Pay Leave (Leave)"*. A Monday holiday keeps its meeting
+    by §4.2, and a Monday the office was on leave does not, because that date's entry is the
+    leave. A stored request that still carries such a line is not printed with it either.
+    """
+
+    start, _ = days_in_month(NOV)
+    monday = start
+    while monday.weekday() != 0:
+        monday += timedelta(days=1)
+    meeting = DayEntry(
+        entry_id=f"safety-{monday.isoformat()}",
+        day=monday,
+        kind=DayEntryKind.SAFETY_MEETING,
+        title_en="Conducted safety meeting for employees",
+        provenance=DayEntryProvenance.CALENDAR,
+    )
+    request = request_over((NOV,), calendar_days=leave_calendar(start, days_in_month(NOV)[1]))
+    request = dataclasses.replace(request, entries=request.entries + (meeting,))
+
+    draft = generate_draft(request)
+
+    row = next(r for r in draft.rows if r.day == monday)
+    assert row.kind is CalendarDayKind.LEAVE
+    assert [entry.title_en for entry in row.entries] == [wording.LEAVE_ENTRY_TEXT]
+
+
+def test_an_entry_a_person_wrote_on_a_leave_date_is_not_dropped():
+    """The rule silences the calendar's projection, not the operator's own statement.
+
+    An entry a person recorded is a claim about work actually done on that date. Dropping it
+    would be a silent loss rather than a wording rule, so it stays beside the leave line.
+    """
+
+    start, end = days_in_month(NOV)
+    request = request_over((NOV,), calendar_days=leave_calendar(start, end))
+    written = DayEntry(
+        entry_id="manual-1",
+        day=start,
+        kind=DayEntryKind.EVENT,
+        title_en="Attended an urgent fault on a leave day",
+        provenance=DayEntryProvenance.MANUAL,
+    )
+
+    draft = generate_draft(dataclasses.replace(request, entries=(written,)))
+
+    row = next(r for r in draft.rows if r.day == start)
+    titles = [entry.title_en for entry in row.entries]
+    assert "Attended an urgent fault on a leave day" in titles
+    assert wording.LEAVE_ENTRY_TEXT in titles

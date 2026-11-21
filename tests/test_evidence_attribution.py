@@ -321,7 +321,9 @@ def test_preflight_conversion_preserves_violation_attribution():
         period=DatePeriod(date(2026, 11, 2), date(2026, 11, 2)),
         calendar=Calendar(frozenset({date(2026, 11, 2)})),
         roster=tuple(_roster()),
-        config=FeasibilityConfig(combined_daily_cap=3),
+        # Only the stated whole-date total is exceeded, so the violation this test attributes
+        # is the combined one and not one of the per-kind ceilings under it.
+        config=FeasibilityConfig(combined_daily_cap=3, dtc_daily_cap=2, area_daily_cap=2),
         proposed=tuple(
             Visit(asset_id, date(2026, 11, 2))
             for asset_id in ("A-01", "A-02", "SCD-001", "SCD-002")

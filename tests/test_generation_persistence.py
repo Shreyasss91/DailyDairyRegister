@@ -81,6 +81,7 @@ def cycle_spec(
         cycle_start_month=MonthKey(start.year, start.month),
         cycle_duration_months=1,
         cycle_visits_per_asset=1,
+        dtc_daily_cap=2,
     )
 
 

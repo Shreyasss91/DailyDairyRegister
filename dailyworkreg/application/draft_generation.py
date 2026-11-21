@@ -176,6 +176,14 @@ class DayEntryProvenance(str, Enum):
     GENERATED = "generated"
 
 
+#: The provenances a leave date does not silence. Everything else that the calendar put on
+#: the date is left off it, because a leave date reads as one thing; anything a person wrote
+#: stays, because that is a statement about work and not a projection the tool may retract.
+HELD_ENTRY_PROVENANCE = frozenset(
+    {DayEntryProvenance.MANUAL, DayEntryProvenance.LOCKED}
+)
+
+
 class DayEntryKind(str, Enum):
     """A non-visit entry on a date row.
 
@@ -1267,8 +1275,26 @@ def generate_draft(
             DraftException.from_evidence(DraftExceptionKind.OVER_COVERED, evidence)
         )
 
+    leave_days = {
+        day for day, metadata in days.items() if metadata.kind is CalendarDayKind.LEAVE
+    }
+
     entries_by_date: dict[date, list[DayEntry]] = {}
     for entry in request.entries:
+        if (
+            entry.day in leave_days
+            and entry.kind != DayEntryKind.LEAVE
+            and entry.provenance not in HELD_ENTRY_PROVENANCE
+        ):
+            # A leave date reads as one thing. An entry the calendar projected onto it - a
+            # Monday safety meeting, a dated event carried in from a locked date - is not
+            # printed there, and the projection has already been told to stop producing them
+            # for a stored request. This is the guard for a request that carries one anyway.
+            #
+            # An entry a person wrote is exempt: the operator's own sentence about that date is
+            # a statement about work actually done, and dropping it here would be a silent loss
+            # rather than a wording rule.
+            continue
         entries_by_date.setdefault(entry.day, []).append(entry)
     if request.activities_per_day_max > 0:
         progress.stage(

@@ -569,7 +569,8 @@ def test_seed_cannot_override_constrained_first_ordering():
 
     roster = dtcs(8)
     period = DatePeriod(date(2026, 11, 1), date(2026, 11, 30))
-    # Only two eligible dates, so capacity, not seed, decides who fits.
+    # Only two eligible dates, so capacity, not seed, decides who fits. The ceiling is stated
+    # here because this test is about the ordering, not about how many visits a day allows.
     calendar = Calendar({date(2026, 11, 2), date(2026, 11, 3)})
     required = {asset.asset_id: 1 for asset in roster[:4]}
     for seed in range(5):
@@ -578,7 +579,7 @@ def test_seed_cannot_override_constrained_first_ordering():
                 period=period,
                 calendar=calendar,
                 roster=roster,
-                config=FeasibilityConfig(),
+                config=FeasibilityConfig(dtc_daily_cap=3),
                 required_visits=required,
                 seed=seed,
             )

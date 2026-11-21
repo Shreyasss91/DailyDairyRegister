@@ -74,10 +74,13 @@ def test_113_dtc_cycle_allocates_every_month_and_covers_each_dtc_once():
         + [Asset(f"FEEDER-{i:02d}", AssetType.FEEDER) for i in range(1, 5)]
     )
     calendar = quarter_calendar()
+    # 113 DTCs across three months is 38 a month against twenty-two working dates, so this
+    # cycle needs two a day. The office's own default of one a day is asserted where it
+    # belongs; a cycle this shape states the ceiling that makes it possible.
     result = run_cycle(
         roster,
         calendar,
-        FeasibilityConfig(),
+        FeasibilityConfig(dtc_daily_cap=2),
         CoverageCycle(MonthKey(2026, 11), 3, 1),
         seed=1,
     )

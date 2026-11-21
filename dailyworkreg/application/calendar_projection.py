@@ -229,9 +229,22 @@ def project_calendar(
             )
         )
 
-    entries = safety_meeting_entries(connection, start, end) + event_entries(
-        connection, start, end
-    )
+    leave_days = frozenset(leave_by_day)
+    events = event_entries(connection, start, end)
+    for entry in events:
+        if entry.day in leave_days:
+            # A dated event on a leave date is the office's own record, so it is not deleted.
+            # It is simply not printed on the date: the register reads a leave date as one
+            # thing (owner decision 2026-11-21), and the event stays on the record with this
+            # line saying where it went.
+            conflicts.append(
+                f"{entry.day.isoformat()}: an event is recorded on a leave date; the "
+                "register states the leave and keeps the event on the record"
+            )
+
+    entries = safety_meeting_entries(
+        connection, start, end, leave_days=leave_days
+    ) + tuple(entry for entry in events if entry.day not in leave_days)
 
     return CalendarProjection(
         days=tuple(days),
@@ -241,13 +254,21 @@ def project_calendar(
 
 
 def safety_meeting_entries(
-    connection: sqlite3.Connection, start: date, end: date
+    connection: sqlite3.Connection,
+    start: date,
+    end: date,
+    *,
+    leave_days: frozenset[date] = frozenset(),
 ) -> tuple[DayEntry, ...]:
-    """One safety meeting on every Monday, holidays and leave days included.
+    """One safety meeting on every Monday, holidays included and leave days excluded.
 
-    §4.2 is explicit that a Monday holiday does not suppress it, and that it consumes
-    no part of the regular activity quota. An operator entry of the same kind on a
-    date replaces the default rather than adding a second meeting.
+    §4.2 is explicit that a Monday holiday does not suppress it, and that it consumes no part
+    of the regular activity quota, so a holiday keeps its meeting. A leave date does not: the
+    register reads such a date as one thing, and the office asked for nothing but the leave to
+    appear on it, so no meeting is projected there. An operator entry of the same kind on a
+    date replaces the default rather than adding a second meeting, and an operator's own
+    meeting recorded on a leave date is treated like any other event - kept on the record, and
+    not printed on the date.
     """
 
     operator: dict[date, list[cal.EventRow]] = {}
@@ -259,6 +280,8 @@ def safety_meeting_entries(
     entries: list[DayEntry] = []
     for day in _dates(start, end):
         if day.weekday() != MONDAY:
+            continue
+        if day in leave_days:
             continue
         recorded = operator.get(day)
         if recorded:

@@ -296,9 +296,11 @@ def spec(**overrides) -> GenerationSpec:
         "cycle_start_month": MonthKey(2026, 11),
         "cycle_duration_months": 1,
         "cycle_visits_per_asset": 1,
-        # The fixture owes thirty feeder visits across twenty-two working dates, so
+        # The fixture owes thirty visits of each kind across twenty-two working dates, so
         # one a working day would refuse the month before the activity count is ever
-        # reached. The module is about the activity range, not the feeder ceiling.
+        # reached. The module is about the activity range, not the visit ceilings, and the
+        # office's own defaults of one a day are asserted where they belong.
+        "dtc_daily_cap": 2,
         "feeder_daily_cap": 2,
     }
     values.update(overrides)
@@ -422,9 +424,11 @@ def test_a_reversed_daily_range_is_refused_before_generation(db):
     assert caught.value.constraint == C_ACTIVITY_DAILY_RANGE_INVALID
 
 
-def test_the_form_defaults_are_a_minimum_of_three_and_a_ceiling_above_it():
-    assert DEFAULT_ACTIVITIES_PER_DAY == 3
-    assert DEFAULT_ACTIVITIES_PER_DAY_MAX > DEFAULT_ACTIVITIES_PER_DAY
+def test_the_form_defaults_are_one_activity_and_a_ceiling_above_it():
+    # The office's own numbers as of 2026-11-21: at least one activity a working day,
+    # never more than three. They are defaults, so the office can still choose wider ones.
+    assert DEFAULT_ACTIVITIES_PER_DAY == 1
+    assert DEFAULT_ACTIVITIES_PER_DAY_MAX == 3
 
 
 def test_a_generated_month_records_the_range_it_was_built_from(db):
@@ -639,12 +643,14 @@ def test_the_generate_form_offers_a_minimum_and_a_maximum():
     html = page()
     assert 'id="gen-activities-min"' in html
     assert 'id="gen-activities-max"' in html
-    assert 'value="3"' in html
-    # The ceiling starts above the floor, or the range would be a flat count again.
-    minimum = html.split('id="gen-activities-min"')[1].split(">")[0]
-    maximum = html.split('id="gen-activities-max"')[1].split(">")[0]
-    assert int(minimum.split('value="')[1].split('"')[0]) == 3
-    assert int(maximum.split('value="')[1].split('"')[0]) > 3
+    # The form starts at the office's own range: one activity a day, no more than three.
+    minimum = int(
+        html.split('id="gen-activities-min"')[1].split('value="')[1].split('"')[0]
+    )
+    maximum = int(
+        html.split('id="gen-activities-max"')[1].split('value="')[1].split('"')[0]
+    )
+    assert (minimum, maximum) == (1, 3)
 
 
 def test_the_generate_form_offers_a_ceiling_for_each_kind_of_visit():
@@ -682,3 +688,11 @@ def test_the_client_sends_the_range_and_the_ceilings_it_was_given():
 def test_the_client_names_the_range_in_the_outcome_it_reports():
     script = client_script()
     assert "a working day" in script
+
+
+def test_the_visit_ceiling_defaults_are_one_of_each_kind_a_working_day():
+    """The office's own numbers as of 2026-11-21, one a day for each kind of visit."""
+
+    assert DEFAULT_DTC_DAILY_CAP == 1
+    assert DEFAULT_AREA_DAILY_CAP == 1
+    assert DEFAULT_FEEDER_DAILY_CAP == 1

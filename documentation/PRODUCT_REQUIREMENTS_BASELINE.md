@@ -85,7 +85,10 @@ What is still open:
 
 ### 4.2 Monday safety meeting
 
-- Include the safety meeting every Monday, including a Monday that is a holiday or leave date.
+- Include the safety meeting every Monday, including a Monday that is a holiday.
+- Do **not** enter it on a Monday the office recorded as leave. A leave date states the
+  leave and nothing else (§5.1), so no meeting, event or other projected entry is written
+  on it. Changed 2026-11-21 on the office's own reading of a leave Monday in October 2025.
 - Default exact wording: `Conducted safety meeting for employees`.
 - Permit an individual-date editable exception.
 - This entry does not consume the regular weighted-activity quota.
@@ -99,7 +102,7 @@ What is still open:
 - No half-day leave in the initial scope.
 - Holidays and weekly offs are excluded from leave-day calculations.
 - Leave entries remain recorded when they overlap a holiday, weekly off, event or other special entry; show a conflict rather than silently removing data.
-- **Leave supersedes every other fact about its date.** Decided 2026-11-21 (owner instruction: *"when leave comes on holiday, weekly off or working day … it takes precedence and superseeds all … that day's entry should only be about leave"*). A date carrying a leave record is classified **leave** whatever else it is — a General Holiday, a weekly off, or an ordinary working day — is not a working day, and prints only the leave type names. The holiday and the weekly off it falls on are not repeated beside the leave and their overlap is **not** reported as a calendar conflict, because nothing is in conflict: this rule replaces the earlier "show both reasons and a conflict" reading for leave overlaps. Superseding the date's classification does not delete the other records: the holiday keeps its entry in `general_holiday`, the weekly-off rule is unchanged, and the day is simply read as a leave date. One contradiction is still reported, because both facts are deliberate statements about the same date: an override that marks a leave date as worked is not applied, and a conflict line says the leave stands. Events, safety meetings and other dated entries on a leave date are unaffected — leave supersedes the calendar's classification of the day, not the office's other records about it.
+- **Leave supersedes every other fact about its date.** Decided 2026-11-21 (owner instruction: *"when leave comes on holiday, weekly off or working day … it takes precedence and superseeds all … that day's entry should only be about leave"*). A date carrying a leave record is classified **leave** whatever else it is — a General Holiday, a weekly off, or an ordinary working day — is not a working day, and prints only the leave type names. The holiday and the weekly off it falls on are not repeated beside the leave and their overlap is **not** reported as a calendar conflict, because nothing is in conflict: this rule replaces the earlier "show both reasons and a conflict" reading for leave overlaps. Superseding the date's classification does not delete the other records: the holiday keeps its entry in `general_holiday`, the weekly-off rule is unchanged, and the day is simply read as a leave date. One contradiction is still reported, because both facts are deliberate statements about the same date: an override that marks a leave date as worked is not applied, and a conflict line says the leave stands. Nothing the calendar projects onto a leave date is written on it either: the Monday safety meeting is not entered there (§4.2), and neither is a dated event. Those records are kept — the event is not deleted — but the date prints the leave alone, and a conflict line says where the event went, so it disappears from the register without disappearing from the record.
 
 Leave is entered two ways: one record at a time on the Calendar tab, and from the office's own monthly sheet as an import dataset (`leave`), which is `08_monthly_leave_records.csv`. The import is built to these rules:
 
@@ -1251,8 +1254,8 @@ reads no clock.
 - **The count is the operator's, and it is a range with two hard ends.** The generation
   request carries `activities_per_day_min` and `activities_per_day_max` (an earlier caller's
   single `activities_per_day` is the range whose two ends are equal, and still produces the
-  flat month it used to). The generate form starts at a minimum of 3 - the office's own "at
-  least three activities a day" - and a maximum of 5. No eligible working day falls below
+  flat month it used to). The generate form starts at a minimum of 1 and a maximum of 3, set
+  by the office on 2026-11-21. No eligible working day falls below
   the minimum, none rises above the maximum, and each day's own count is drawn between them,
   so a month varies instead of repeating one number. `0` for both leaves every day to field
   visits, and a request that does not mention the field at all records no activities - it
@@ -1419,7 +1422,7 @@ The office asked for the meeting held every Monday to stay out of every daily co
 does, at each layer that counts anything.
 
 - **It is an entry, not a visit.** `safety_meeting_entries` projects one `DayEntry` of kind
-  `safety_meeting` onto every Monday, holidays and leave days included (§4.2). Visit ceilings
+  `safety_meeting` onto every Monday, holidays included and leave dates excluded (§4.2). Visit ceilings
   are evaluated over `Visit` objects only, so the meeting cannot be charged to them: a March
   Monday holds its transformer duty exactly as a Tuesday does, and a test asserts it on the
   month the office measured.

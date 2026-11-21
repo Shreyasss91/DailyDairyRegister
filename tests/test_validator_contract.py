@@ -284,7 +284,10 @@ def test_quarterly_cycle_allocates_38_38_37():
     result = assess_feasibility(
         obligation_context(
             roster=roster,
-            config=FeasibilityConfig(default_asset_limits=AssetLimits(monthly_max=1)),
+            # Thirty-eight visits in one month needs two a day on this calendar.
+            config=FeasibilityConfig(
+                dtc_daily_cap=2, default_asset_limits=AssetLimits(monthly_max=1)
+            ),
             cycle_obligations={a.asset_id: 1 for a in roster},
         )
     )

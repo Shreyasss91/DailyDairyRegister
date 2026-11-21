@@ -284,47 +284,59 @@ def test_previous_visit_day_before_period_rejected():
 
 
 def test_two_area_visits_one_date_allowed():
-    """Two area visits on one date are within the area limit of 2."""
+    """Two area visits on one date are within a stated area limit of 2."""
 
-    result = _validate([
-        Visit(AREA_ID, date(2026, 10, 1)),
-        Visit(AREA2_ID, date(2026, 10, 1)),
-    ])
+    result = _validate(
+        [
+            Visit(AREA_ID, date(2026, 10, 1)),
+            Visit(AREA2_ID, date(2026, 10, 1)),
+        ],
+        config=FeasibilityConfig(area_daily_cap=2),
+    )
     assert result.valid, result.violations
     assert result.days_used[date(2026, 10, 1)] == 2
 
 
 def test_three_area_visits_one_date_rejected():
-    """Three area visits on one date exceed the area limit of 2."""
+    """Three area visits on one date exceed a stated area limit of 2."""
 
-    result = _validate([
-        Visit(AREA_ID, date(2026, 10, 1)),
-        Visit(AREA2_ID, date(2026, 10, 1)),
-        Visit(AREA3_ID, date(2026, 10, 1)),
-    ])
+    result = _validate(
+        [
+            Visit(AREA_ID, date(2026, 10, 1)),
+            Visit(AREA2_ID, date(2026, 10, 1)),
+            Visit(AREA3_ID, date(2026, 10, 1)),
+        ],
+        config=FeasibilityConfig(area_daily_cap=2),
+    )
     assert not result.valid
     assert C_AREA_DAILY_CAP in result.violation_constraints
 
 
 def test_two_areas_plus_one_dtc_one_date_allowed():
-    """Two areas and one DTC total three, which the combined cap permits."""
+    """Two areas and one DTC each fit their own kind's ceiling on one date."""
 
-    result = _validate([
-        Visit(AREA_ID, date(2026, 10, 1)),
-        Visit(AREA2_ID, date(2026, 10, 1)),
-        Visit(DTC_ID, date(2026, 10, 1)),
-    ])
+    result = _validate(
+        [
+            Visit(AREA_ID, date(2026, 10, 1)),
+            Visit(AREA2_ID, date(2026, 10, 1)),
+            Visit(DTC_ID, date(2026, 10, 1)),
+        ],
+        config=FeasibilityConfig(area_daily_cap=2),
+    )
     assert result.valid, result.violations
 
 
 def test_two_areas_plus_one_feeder_one_date_allowed():
-    """Two areas and one feeder total three and share the date legally."""
+    """Two areas and one feeder share the date, each within its own ceiling."""
 
-    result = _validate([
-        Visit(AREA_ID, date(2026, 10, 1)),
-        Visit(AREA2_ID, date(2026, 10, 1)),
-        Visit(FEEDER_ID, date(2026, 10, 1)),
-    ])
+    result = _validate(
+        [
+            Visit(AREA_ID, date(2026, 10, 1)),
+            Visit(AREA2_ID, date(2026, 10, 1)),
+            Visit(FEEDER_ID, date(2026, 10, 1)),
+        ],
+        config=FeasibilityConfig(area_daily_cap=2),
+    )
     assert result.valid, result.violations
 
 
@@ -332,12 +344,15 @@ def test_two_areas_plus_dtc_plus_feeder_fit_because_each_kind_is_bounded_alone()
     """Two areas, one DTC and one feeder is four visits, and each kind is within
     its own ceiling: the area ceiling of 2 is not spent by the DTC or the feeder."""
 
-    result = _validate([
-        Visit(AREA_ID, date(2026, 10, 1)),
-        Visit(AREA2_ID, date(2026, 10, 1)),
-        Visit(DTC_ID, date(2026, 10, 1)),
-        Visit(FEEDER_ID, date(2026, 10, 1)),
-    ])
+    result = _validate(
+        [
+            Visit(AREA_ID, date(2026, 10, 1)),
+            Visit(AREA2_ID, date(2026, 10, 1)),
+            Visit(DTC_ID, date(2026, 10, 1)),
+            Visit(FEEDER_ID, date(2026, 10, 1)),
+        ],
+        config=FeasibilityConfig(area_daily_cap=2),
+    )
     assert result.valid
 
 
@@ -574,7 +589,7 @@ def test_area_capacity_infeasible_at_48_with_23_working_days():
 
 
 def test_area_capacity_boundary_at_46_passes_aggregate_only():
-    """A=46 equals the area bound; that passes the aggregate check and nothing more."""
+    """A=46 equals the aggregate area bound at two a day; the check passes and does no more."""
 
     eligible, period = _fixture_w23()
     assert 46 <= 2 * 23
@@ -589,7 +604,7 @@ def test_area_capacity_boundary_at_46_passes_aggregate_only():
         period=period,
         calendar=Calendar(eligible),
         roster=roster,
-        config=FeasibilityConfig(search_node_limit=20_000),
+        config=FeasibilityConfig(search_node_limit=20_000, area_daily_cap=2),
     )
     # The aggregate bounds are satisfied, so no aggregate rejection is reported.
     assert all(e.constraint != C_AGG_AREA_CAPACITY for e in result.evidence)
@@ -880,7 +895,7 @@ def test_large_roster_beyond_search_budget_is_indeterminate():
         period=period,
         calendar=Calendar(eligible),
         roster=roster,
-        config=FeasibilityConfig(search_node_limit=50_000),
+        config=FeasibilityConfig(search_node_limit=50_000, area_daily_cap=2),
     )
     # The aggregate bound passes but the joint packing is not settled, so the
     # answer must be INDETERMINATE rather than a guess in either direction.

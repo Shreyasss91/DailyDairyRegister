@@ -344,10 +344,10 @@ def test_area_commitments_still_consume_area_capacity():
     )
     day = date(2026, 11, 3)
     fixed = {NOV: (Visit("AREA-01", day), Visit("AREA-02", day))}
-    result = run_cycle(roster, quarter(), FeasibilityConfig(), cycle_of(1),
-                       fixed_by_month=fixed, seed=1)
+    result = run_cycle(roster, quarter(), FeasibilityConfig(area_daily_cap=2),
+                       cycle_of(1), fixed_by_month=fixed, seed=1)
 
-    # The area daily cap is 2, so the third area cannot be placed on that date.
+    # The area daily cap is 2 as stated here, so the third area cannot share that date.
     day_load = sum(1 for v in result.all_visits if v.visit_date == day)
     assert day_load <= 3
     assert result.over_covered == ()

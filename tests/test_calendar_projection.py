@@ -305,6 +305,49 @@ def test_an_operator_safety_meeting_replaces_the_default_rather_than_doubling(db
     assert projection.entries[0].title_en == "Safety meeting on depot safety"
 
 
+def test_a_safety_meeting_is_not_entered_on_a_monday_the_office_was_on_leave(db):
+    """A leave date is one thing, so the meeting is not projected onto it.
+
+    The office's own report: a Monday of October 2025 read *"I was on leave this day, Conducted
+    safety meeting for employees, Full Pay Leave (Leave)"*. A Monday holiday keeps its meeting
+    by §4.2; a Monday of leave does not, because that date's entry is the leave.
+    """
+
+    cal.upsert_leave_record(
+        db, leave_id="L-1", leave_date=date(2026, 11, 9), leave_type_id="CL"
+    )
+
+    projection = project_calendar(db, date(2026, 11, 1), date(2026, 11, 30))
+
+    mondays = sorted(
+        entry.day for entry in projection.entries if entry.kind is DayEntryKind.SAFETY_MEETING
+    )
+    assert mondays == [date(2026, 11, d) for d in (2, 16, 23, 30)]
+    assert date(2026, 11, 9) not in mondays
+
+
+def test_an_event_on_a_leave_date_is_kept_on_the_record_and_off_the_date(db):
+    """The event is the office's own record, so it is reported rather than deleted."""
+
+    cal.upsert_leave_record(
+        db, leave_id="L-1", leave_date=date(2026, 11, 10), leave_type_id="CL"
+    )
+    cal.upsert_event(
+        db,
+        event_id="E-1",
+        event_date=date(2026, 11, 10),
+        title_en="Inspection at the sub-division office",
+    )
+
+    projection = project_calendar(db, date(2026, 11, 10), date(2026, 11, 10))
+
+    assert projection.days[0].kind is CalendarDayKind.LEAVE
+    assert projection.entries == ()
+    assert any(
+        "an event is recorded on a leave date" in conflict for conflict in projection.conflicts
+    ), projection.conflicts
+
+
 def test_the_safety_meeting_consumes_no_working_day_capacity(db):
     projection = project_calendar(db, date(2026, 11, 2), date(2026, 11, 2))
     assert projection.days[0].is_working_day is True

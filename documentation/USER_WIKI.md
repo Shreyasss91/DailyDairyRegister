@@ -389,11 +389,15 @@ is published; pressing **Generate** creates a new revision of the draft.
 | **Mode** | **Coverage cycle** — you declare that every active DTC is visited once across a cycle of N months. **Capacity fallback** — no cycle is declared, so the DTC target is a capacity-weighted suggestion rather than a coverage promise. |
 | **Seed** | A number that makes the run repeatable. The same inputs and the same seed produce the same draft. A different seed is how you ask for a different draft of the same month. |
 | **Cycle start month / Cycle months / Visits per asset** | The declared cycle: where it begins, how long it is, and how many times each asset is visited within it. Typical: start `2026-07`, 4 months, 1 visit per asset. |
-| **Regular activities per working day — minimum / maximum** | The floor and the ceiling for ordinary activities on every working day. The day's own count is drawn between them. Set both to 0 to leave the days to field visits only. |
-| **DTC / Area / Feeder visits per working day — maximum** | **One ceiling per kind**, independent of the others: a day of transformer checks does not spend the area allowance. A date may hold up to each of them. |
+| **Regular activities per working day — minimum / maximum** | The floor and the ceiling for ordinary activities on every working day. The day's own count is drawn between them. The form starts at **1 and 3**. Set both to 0 to leave the days to field visits only. |
+| **DTC / Area / Feeder visits per working day — maximum** | **One ceiling per kind**, independent of the others: a day of transformer checks does not spend the area allowance. A date may hold up to each of them. The form starts at **1, 1 and 1**. |
 | **Entry language** | English, Kannada, or both, for the register's own sentences. Kannada falls back to English where no Kannada text is stored. |
 | **DTC target (fallback)** | Only read in capacity-fallback mode. |
 | **Generate** | Runs it. A progress bar reports which month it has reached, so a ten-month period does not look like a page that has stopped answering. |
+
+The form's own starting numbers, as the office asked for them: **1 activity** a working day at the
+least and **3** at the most, and **1 visit** of each kind (DTC, area, feeder) a working day at the
+most. They are defaults, not rules — widen any of them where a month needs it.
 
 A few consequences worth knowing before you press it:
 
@@ -632,7 +636,8 @@ planning.
 - **Only Karnataka General Holidays are operational holidays.** Restricted Holidays are ignored
   entirely, names and all.
 - **The Monday safety meeting is recorded automatically on every Monday,** including a Monday that
-  is a holiday or a leave date. An individual-date exception is supported.
+  is a holiday. It is **not** recorded on a Monday you have entered as leave: that date reads as the
+  leave and nothing else. An individual-date exception is supported.
 - **A leave takes precedence over the date it falls on.** It is classified as leave whatever else
   the date is, and the register names only the leave type on it. A leave on a Sunday or a General
   Holiday is not a conflict; the holiday and the weekly off stay in their own records.
@@ -642,7 +647,7 @@ planning.
 ### Activities
 
 - **The minimum is a floor and the maximum is a ceiling, per working day.** Both are the office's
-  numbers, entered on the Generate form; 3 and 5 are only the form's defaults.
+  numbers, entered on the Generate form; 1 and 3 are only the form's defaults.
 - **Events, meetings, the safety meeting and field visits are additional** and do not consume the
   activity quota.
 - Each activity can carry its own monthly minimum and maximum and its own repeat gap, and can be

@@ -87,6 +87,7 @@ def spec(*, seed: int = 7, visits: int = 1) -> GenerationSpec:
         cycle_start_month=MonthKey(2026, 11),
         cycle_duration_months=1,
         cycle_visits_per_asset=visits,
+        dtc_daily_cap=2,
     )
 
 

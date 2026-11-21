@@ -27,15 +27,16 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
 
-#: Default DTC visits permitted on a single working day. Each kind of visit has its
-#: own ceiling, so a day filled with transformer checks does not silently crowd out
-#: the areas and feeders the office also owes. Three is the allowance the settled
-#: total of three effectively gave transformers, which are the bulk of the demand.
-DEFAULT_DTC_DAILY_CAP = 3
+#: Default DTC visits permitted on a single working day. Each kind of visit has its own
+#: ceiling, so a day filled with transformer checks does not silently crowd out the areas and
+#: feeders the office also owes. One is the office's own allowance as of 2026-11-21 - a day
+#: carries one transformer visit - and it is a default rather than a rule, so a heavier day
+#: remains the operator's decision.
+DEFAULT_DTC_DAILY_CAP = 1
 
-#: Default area visits permitted on a single working day. This is the recorded initial
-#: allowance of 2, kept because it is the number the office already plans areas against.
-DEFAULT_AREA_DAILY_CAP = 2
+#: Default area visits permitted on a single working day. One, set by the office on
+#: 2026-11-21, replacing the earlier allowance of two.
+DEFAULT_AREA_DAILY_CAP = 1
 
 #: Default feeder visits permitted on a single working day.
 DEFAULT_FEEDER_DAILY_CAP = 1

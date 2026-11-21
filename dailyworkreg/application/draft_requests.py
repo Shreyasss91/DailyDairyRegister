@@ -47,15 +47,15 @@ C_LIMITS_INCONSISTENT = "generation_limits_inconsistent"
 C_ACTIVITIES_PER_DAY_INVALID = "activities_per_day_invalid"
 C_DAILY_VISIT_CAP_INVALID = "daily_visit_cap_invalid"
 
-#: What the operator's own form starts with: the office asked for at least three
-#: activities a working day. It is a form default rather than a silent platform rule,
+#: What the operator's own form starts with: at least one activity a working day, as the
+#: office asked for on 2026-11-21. It is a form default rather than a silent platform rule,
 #: because a register is a record of work, not a template applied behind a request.
-DEFAULT_ACTIVITIES_PER_DAY = 3
+DEFAULT_ACTIVITIES_PER_DAY = 1
 
-#: The form's own starting ceiling. Five is not a policy - the office chose "at least
-#: three, sometimes more", and a range needs an upper end to draw against - and it is
+#: The form's own starting ceiling: three activities a working day, set by the office on
+#: 2026-11-21. It is not a policy - a range needs an upper end to draw against - and it is
 #: editable, so a heavier day is the operator's decision rather than this constant's.
-DEFAULT_ACTIVITIES_PER_DAY_MAX = 5
+DEFAULT_ACTIVITIES_PER_DAY_MAX = 3
 
 
 class GenerationInputError(ValueError):

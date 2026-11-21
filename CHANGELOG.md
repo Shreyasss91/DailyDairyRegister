@@ -102,6 +102,48 @@ The repository policy in `CLAUDE.md` requires every change, however small, to ha
 - **2026-11-19 — One PDF for the press, straight from the month panel:** The office was printing by hand: download the PDF package, unpack it, run `dailyworkreg-print` over a folder of months, and file the result. The panel now offers `Single PDF with no metadata` beside the packages, and it answers with one document holding every issued month in month order, each month's issued-version identification page left out. `GET /api/registers/{register_id}/exports/print.pdf` renders the months through the same `render_documents` the package uses - one engine, one browser, nothing leaving the computer - then drops each month's last page and joins what remains. The file is named after the months it holds rather than after the register, so `daily-dairy-register-2026-11-to-2026-12.pdf` says what it is without being opened, and a single issued month is named as itself rather than as a range of one. **Nothing was reimplemented to do it.** The page arithmetic moved out of the command and into `infrastructure/rendering/pdf.py` as `identification_page_count`, `count_pages`, `without_identification_page` and `join_pdfs`, and `interfaces/print_pdfs.py` now calls those instead of its own `PdfReader`/`PdfWriter` loops, so the button and the command cannot drift about which page is the identification page or about what a month with no page besides it means. The rule is stated once, as one page, because `application/export.py` starts the identification on a fresh page after the final date row: position is the contract, and no caller reads the page's text to recognise it. A month whose only page is its identification page is refused here as it is refused there, so a month cannot reach the press as nothing. The archive is untouched: the single-month download and `exports/pdf.zip` still carry the identification page, because that page is how an issued register is proved after the fact, and `exports.zip` keeps its contract and its filenames. The panel's sentence was rewritten to say which download holds the identification page and which leaves it out, since four downloads now sit together and an operator choosing between them should not have to open each one. The script's cache key was bumped to `print-pdf-1`, because the client changed and a browser holding the previous file would not show the button. `tests/test_print_document.py` is new with 15 tests: every issued month reaching one PDF with its identification page left out - checked as a page count over months rendered at four and five pages, so dropping the wrong page or dropping from the wrong end fails rather than passing on a plausible total - the document named after the months, one month named as itself, the identification page still present in the single-month download, a register with nothing issued refused with `register_has_no_issued_months`, printing changing no stored record, and the four page operations themselves: the last page and not another one dropped, a month holding only its identification page refused, joining keeping every page in order, joining nothing refused rather than returning an empty file, the identification page stated as one page, and a missing `pypdf` answered as a setup step naming the install rather than as a crash. Two of the fifteen drive the real browser, because a stand-in cannot fail the way a real render does: the button writing a PDF that begins `%PDF-` and ends `%%EOF` and holds the months with one page each left out - measured against each month's own download rather than a guessed total, since December lays out to two register pages where November takes one - and the identification page being the last page rather than the first or the middle. `tests/test_print_pdfs.py`'s 7 tests still pass against the shared operations without change, which is what moving the arithmetic rather than copying it was for. `tests/test_generation_progress.py` moved its pinned cache key to the current one, and `tests/test_pdf_export.py`'s page test now pins the new button beside the two packages and the mixed one, so a later tidy cannot quietly drop it. `README.md` gained the button and the note that both routes leave out the identification page by one rule, and `documentation/REGRESSION_TESTING.md` gained the module and its contract list. No scheduling, allocation, review, finalisation, correction, calendar, proration or backup behaviour changed; the register itself, the workbook and the packages are unchanged. No schema change, no migration, no dependency and no route removed. The full suite is 1342 tests, all passing. Nothing was pushed.
 
 ### Fixed
+- **A leave date holds the leave and nothing else, and the form starts at the office's own
+  counts.** Two owner instructions, 2026-11-21. The first, on a leave Monday of October 2025 that
+  printed *"I was on leave this day, Conducted safety meeting for employees, Full Pay Leave
+  (Leave)"*: *"this should not come on leave day: Conducted safety meeting for employees … nothing
+  except leave should be in leave day's entry"*. The second set the numbers the generate form
+  starts at: regular activities **1 to 3** a working day, and **1** DTC, **1** area and **1**
+  feeder visit a working day.
+
+  **Nothing the calendar projects onto a leave date is written on it.** `safety_meeting_entries`
+  takes the range's leave dates and skips them, so the meeting that §4.2 keeps on a Monday holiday
+  is simply not entered on a Monday of leave. A dated event on such a date is also left off the
+  date, but it is **not deleted**: it stays on the record and a calendar conflict says where it
+  went, so it disappears from the register without disappearing from the data. `generate_draft`
+  drops a projected entry that a stored request still carries for a leave date, which is how a
+  locked date carried over from an earlier generation stops printing one. An entry a person wrote
+  is exempt - `HELD_ENTRY_PROVENANCE` names `manual` and `locked` - because that is a statement
+  about work actually done and retracting it would be a silent loss rather than a wording rule.
+
+  **The defaults.** `DEFAULT_DTC_DAILY_CAP` 3 -> 1, `DEFAULT_AREA_DAILY_CAP` 2 -> 1,
+  `DEFAULT_ACTIVITIES_PER_DAY` 3 -> 1 and `DEFAULT_ACTIVITIES_PER_DAY_MAX` 5 -> 3, with the
+  generate form's five boxes matching. They remain defaults rather than rules: a month that needs
+  wider ceilings still takes them, and every fixture that needs more than one visit of a kind a day
+  now states its own ceiling instead of inheriting one. `DEFAULT_FEEDER_DAILY_CAP` was already 1.
+
+  A consequence the office should know, because it changes what a cycle can promise: at one DTC
+  visit a day and about twenty-two working dates a month, a month holds about twenty-two
+  transformer visits. A **four-month cycle over 113 DTCs** (28 a month) no longer fits, and the
+  same cycle over 154 DTCs needs a longer declared cycle or a raised ceiling. The 19-month cycle
+  the office already uses is unaffected.
+
+  `tests/test_calendar_projection.py` gains two tests (the meeting left off a Monday of leave while
+  a Monday holiday keeps it; an event on a leave date kept on the record, off the date and
+  reported) and `tests/test_leave_in_register.py` two more (a projected entry dropped from a leave
+  date, a person's own entry kept). `tests/test_daily_counts.py` pins the new defaults and their
+  form values; `tests/test_feasibility_validator.py`, `tests/test_cycle_commitments.py`,
+  `tests/test_cycle_correctness.py`, `tests/test_evidence_attribution.py`,
+  `tests/test_generation_persistence.py`, `tests/test_register_edits.py`, `tests/test_targeting.py`
+  and `tests/test_validator_contract.py` now state the ceiling each of their months exercises.
+  Baseline §§4.2, 5.1 and 24.8, the wiki's calendar and generate sections and
+  `documentation/REGRESSION_TESTING.md` are updated to match. No schema change, no migration and no
+  dependency. Full suite 1471 passing; verified on a copy of the live database, where October
+  2025's four Mondays now carry no meeting and all 31 dates read only *"I was on leave this day"*.
 - **The leave line no longer names the leave type twice.** The office's note on the register as it
   read: *"presently i am seeing 'I was on leave this day (Full Pay Leave), Full Pay Leave (Leave)' …
   i just want 'I was on leave this day, Full Pay Leave (Leave)'"*. The leave date's Activity cell now
