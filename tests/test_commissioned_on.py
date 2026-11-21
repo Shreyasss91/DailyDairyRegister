@@ -205,9 +205,9 @@ def test_the_date_survives_a_reimport_and_an_upsert(db):
 # --- the schema ------------------------------------------------------------
 
 
-def test_the_schema_is_at_seven_with_the_commissioning_column(tmp_path: Path):
-    assert SCHEMA_VERSION == 7
-    assert MIGRATIONS[-1].version == 7
+def test_the_schema_is_at_eight_with_the_commissioning_column(tmp_path: Path):
+    assert SCHEMA_VERSION == 8
+    assert MIGRATIONS[-1].version == 8
     connection = open_database(tmp_path / "schema.db")
     try:
         columns = {

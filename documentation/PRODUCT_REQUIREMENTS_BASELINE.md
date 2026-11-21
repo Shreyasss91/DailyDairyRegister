@@ -1510,6 +1510,27 @@ correct database it rewrites the triggers to identical text and changes nothing.
 4 is untouched, so a fresh installation replays 4 and then 5 and reaches the same shape as
 an upgraded one. `SCHEMA_VERSION` is 5.
 
+**Migration 6 dropped three guards and restored none; migration 8 puts them back.**
+Migration 6 rebuilt `generation_entry` to widen its provenance check, and dropping a table
+drops the triggers that live on it. The step written to reinstall them filtered the trigger
+statements for that one table with the substring `" ON generation_entry "`, and the text is
+`BEFORE UPDATE ON generation_entry` followed by a newline, so the filter matched none of the
+statements and installed nothing. Every database that upgraded across schema 5 therefore
+reached schema 7 without `trg_finalised_generation_entry_insert`, `_update` and `_delete`,
+and nothing reported it: the guards are only counted when a backup, a recovery copy or a
+restore is being prepared, so the first symptom an office saw was a backup refused with
+`backup_protections_are_missing`. Between those two points a direct write could append,
+change or delete a row of an issued month; the application layer still refused it, the
+database did not.
+
+Migration 8 is that repair: it drops every finalisation trigger by name, creates the
+complete set from `_finalised_content_triggers()` inside the migration transaction, then
+verifies that each expected name is present and refuses the whole migration if one is not,
+so a database cannot be left half-guarded and silent. It touches no row.
+`_apply_migration_6` now reinstalls the whole set after its own rebuild as well, so a
+database migrating from schema 5 does not depend on migration 8 to be correct.
+`SCHEMA_VERSION` is 8.
+
 ### 25.3 What is still not guarded
 
 - A row deleted and reinserted elsewhere inside one statement is beyond a trigger's reach;

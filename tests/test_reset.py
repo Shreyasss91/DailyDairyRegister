@@ -559,8 +559,6 @@ def test_the_whole_reset_runs_in_one_exclusive_barrier(
 def test_a_reset_while_a_restore_holds_the_barrier_is_refused(
     client: TestClient, office: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from dailyworkreg.interfaces.maintenance import MaintenanceBusy
-
     def busy(self, *args, **kwargs):
         raise MaintenanceBusy("a restore is in progress")
 

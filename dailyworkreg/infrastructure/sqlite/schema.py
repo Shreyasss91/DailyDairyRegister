@@ -25,7 +25,7 @@ from dataclasses import dataclass
 #: Bumped when the schema below changes. Migrations are applied in order and each
 #: one is idempotent, so re-running is safe and a fresh database simply replays the
 #: list.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 @dataclass(frozen=True)
@@ -925,11 +925,14 @@ def _apply_migration_6(connection: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_entry_run_date "
         "ON generation_entry (run_id, row_date)"
     )
-    # The rebuild dropped the triggers that live on this table; the rest of the
-    # content tables keep theirs.
-    for statement in _immutability_triggers():
-        if " ON generation_entry " in statement.split("WHEN", 1)[0]:
-            connection.execute(statement)
+    # The rebuild dropped the triggers that live on this table. They are reinstalled from
+    # the one place that defines the whole protection set rather than by filtering those
+    # statements for this table: the filter used to read `" ON generation_entry "`, and the
+    # statement text is `BEFORE UPDATE ON generation_entry` followed by a newline, so it
+    # matched nothing and the rebuild silently left the table unprotected. Every statement
+    # is `IF NOT EXISTS`, so reinstalling the set cannot duplicate another table's trigger.
+    for statement in _finalised_content_triggers():
+        connection.execute(statement)
     after = connection.execute("SELECT COUNT(*) AS n FROM generation_entry").fetchone()[0]
     if after != before:
         raise RuntimeError(
@@ -980,6 +983,50 @@ _MIGRATION_7 = Migration(
 )
 
 
+# --- migration 8: put back the protections a closed month lost ------------------
+#
+# Migration 6 rebuilt `generation_entry` to widen its provenance check, and dropping a table
+# drops the triggers that live on it. The step that was supposed to reinstall them filtered
+# the trigger statements for one table and matched none of them, so every database that
+# passed through schema 5 gained schema 6 without the three `generation_entry` protections -
+# and nothing said so until a backup refused with "the database is missing the protections
+# that keep a finalised month final". A database at schema 7 is therefore not a database
+# that can keep an issued month final, whatever its migration record says.
+#
+# The repair is the whole set, dropped by name and created again from the one definition, so
+# a trigger left behind by an earlier text is replaced rather than trusted. It touches no
+# row: it only puts back the guards the schema has always claimed.
+def _apply_migration_8(connection: sqlite3.Connection) -> None:
+    for name in _finalisation_trigger_names():
+        connection.execute(f"DROP TRIGGER IF EXISTS {name}")
+    for statement in _finalised_content_triggers():
+        connection.execute(statement)
+    present = {
+        row[0]
+        for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+    }
+    # Every content table refuses insertion, update and deletion; the finalisation record
+    # itself refuses only the latter two, because closing a month is an insert.
+    expected = {
+        f"trg_finalised_{table}_{operation}"
+        for table in _FINALISED_CONTENT_TABLES
+        for operation in ("insert", "update", "delete")
+    } | {"trg_finalisation_update", "trg_finalisation_delete"}
+    missing = sorted(expected - present)
+    if missing:
+        raise RuntimeError(
+            "the protections on a finalised month could not be restored: " + ", ".join(missing)
+        )
+
+
+_MIGRATION_8 = Migration(
+    version=8,
+    name="a closed month keeps the protections that make it final",
+    statements=(),
+    apply=_apply_migration_8,
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     _MIGRATION_1,
     _MIGRATION_2,
@@ -988,7 +1035,9 @@ MIGRATIONS: tuple[Migration, ...] = (
     _MIGRATION_5,
     _MIGRATION_6,
     _MIGRATION_7,
+    _MIGRATION_8,
 )
+
 
 
 def ensure_migration_table(connection: sqlite3.Connection) -> None:

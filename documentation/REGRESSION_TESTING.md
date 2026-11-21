@@ -34,7 +34,7 @@ A non-zero exit code means the validation gate failed. Inspect the failing test 
 Run the directly relevant export and UI tests first:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py tests/test_print_pdfs.py tests/test_print_document.py tests/test_reset.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py tests/test_print_pdfs.py tests/test_print_document.py tests/test_reset.py tests/test_protection_triggers.py
 ```
 
 These modules cover the export/document, PDF, bulk-finalisation and frontend contracts, including:
@@ -122,6 +122,14 @@ These modules cover the export/document, PDF, bulk-finalisation and frontend con
   written being left alone, and the page offering each scope as its own confirmation and its
   own button.
 
+- The guards that keep a closed month closed: a database that lost the three
+  `generation_entry` protections refused a backup by name and repaired when it opens, the
+  repair touching no row, recorded once, replacing a trigger left behind by older text
+  rather than trusting its name, the restored guard actually refusing an insertion, an
+  update and a deletion of a closed month while a date outside it stays writable, a
+  connection that never repaired still meeting the refusal, and migration 6 installing the
+  guards and keeping every row across its own table rebuild.
+
 The PDF module runs its packaging, refusal and read-only tests against a stand-in renderer, so they pass on a machine without Chromium. The two tests that assert a real `%PDF` file are skipped unless a local browser is installed; run `python -m playwright install chromium` before treating PDF rendering as verified.
 
 The focused tests use the application's test client and test database fixtures. They do not require a separately running application server.
@@ -132,7 +140,7 @@ From the repository root:
 
 ```powershell
 # 1. Focused API/document, PDF, bulk-finalisation and UI coverage.
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py tests/test_print_pdfs.py tests/test_reset.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py tests/test_print_pdfs.py tests/test_reset.py tests/test_protection_triggers.py
 
 # 2. Full regression suite.
 .\.venv\Scripts\python.exe -m pytest

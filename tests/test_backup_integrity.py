@@ -225,7 +225,7 @@ def test_an_older_payload_is_still_readable_before_its_migration(office, client,
 
     # Accepted, because it was migrated first and now carries every protection.
     assert staged.source_schema_version == 4
-    assert staged.migrations_applied == (5, 6, 7)
+    assert staged.migrations_applied == (5, 6, 7, 8)
     assert staged.facts.missing_triggers == frozenset()
     assert staged.facts.healthy is True
 
