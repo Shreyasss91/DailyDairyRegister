@@ -18,7 +18,7 @@ Read this page in order the first time. After that, use the table of contents.
 6. [A full walkthrough: a new office to a first issued month](#6-a-full-walkthrough-a-new-office-to-a-first-issued-month)
 7. [The rules the tool enforces](#7-the-rules-the-tool-enforces)
 8. [Exports and printing](#8-exports-and-printing)
-9. [Backup, restore and handing over to a new office](#9-backup-restore-and-handing-over-to-a-new-office)
+9. [Backup, restore and handing over](#9-backup-restore-and-handing-over)
 10. [Messages you will see, and what to do](#10-messages-you-will-see-and-what-to-do)
 11. [Troubleshooting](#11-troubleshooting)
 12. [The files in `data/templates`, and which ones the tool reads](#12-the-files-in-datatemplates-and-which-ones-the-tool-reads)

@@ -7,6 +7,11 @@ The repository policy in `CLAUDE.md` requires every change, however small, to ha
 ## [Unreleased]
 
 ### Added
+- **The wiki's ninth table-of-contents link named a section that is not there.** The link said
+  "Backup, restore and handing over to a new office" while section 9 is titled "Backup, restore and
+  handing over", so the entries after it did not navigate. The link now matches the heading. A
+  documentation-only fix, found by checking every internal link in the file against the headings it
+  has. No application code changed.
 - **An operator's wiki, because the guides were written for whoever maintains the code.** The
   repository explained how to clone, install and test, and the requirement baseline explained what
   the tool must do, but nothing answered the question the person using it actually asks: what do I
