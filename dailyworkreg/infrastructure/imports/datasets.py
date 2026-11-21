@@ -22,8 +22,19 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 #: Auto-excluded source classes, from requirements §8: the 113 SCD records are
-#: included and the SCF and SCE records are not.
+#: included and the SCF and SCE records are not. The class the office states in its own
+#: `Class` column decides this, not the letters in front of an identifier: one office files
+#: its DTCs as `SCD-12` and includes them, another files them as `SCE142` and includes
+#: those too, and the tool reads nothing into a prefix.
 EXCLUDED_SOURCE_CLASSES = ("SCF", "SCE")
+
+#: A DTC identifier is the office's own code: a short letter prefix and a number, with the
+#: prefix and the number optionally separated by a hyphen, an underscore, a slash or a
+#: space. Which letters an office prefixes its transformers with is its filing convention
+#: (`SCD-12` in the office this tool was built for, `SCE142` in the next one) and the tool
+#: has no business dictating it. What is still refused is a cell that is not a code at all:
+#: a bare number, a placeholder such as `#N/A`, or a name dragged into the wrong column.
+_DTC_ID_PATTERN = re.compile(r"[A-Za-z]{1,10}[-_/ ]?\d{1,10}")
 
 INCLUDE = "include"
 EXCLUDE = "exclude"
@@ -324,22 +335,26 @@ def judge_dtc(row: dict[str, str], mapping: dict[str, str], row_number: int) -> 
         return RowOutcome(
             row_number, dict(row), None, SEVERITY_ERROR, ("no DTC id was supplied",)
         )
-    if not re.fullmatch(r"(SCD|SCF|SCE)-\d+", dtc_id, flags=re.IGNORECASE):
+    if not _DTC_ID_PATTERN.fullmatch(dtc_id):
         return RowOutcome(
             row_number, dict(row), None, SEVERITY_ERROR,
-            (f"DTC id '{dtc_id}' is not of the form SCD-<number>",),
+            (
+                f"DTC id '{dtc_id}' is not a code: an identifier is this office's own prefix "
+                "and a number, such as SCD-12 or SCE142",
+            ),
         )
 
-    prefix = dtc_id.split("-", 1)[0].upper()
+    # The office's `Class` column decides what is excluded, and the letters in the
+    # identifier are never read as a class: an office that files its transformers as
+    # `SCE<number>` is naming its own code, not declaring the SCE class §8 excludes.
     upper_class = (raw_class or "").upper()
-    if prefix in EXCLUDED_SOURCE_CLASSES or upper_class in EXCLUDED_SOURCE_CLASSES:
+    if upper_class in EXCLUDED_SOURCE_CLASSES:
         return RowOutcome(
             row_number, dict(row), None, SEVERITY_WARNING,
             (
                 (
-                    f"{dtc_id} is a {prefix if prefix in EXCLUDED_SOURCE_CLASSES else upper_class} "
-                    "record; requirements §8 includes the SCD records and excludes these, so "
-                    "the row is kept for review and not imported"
+                    f"{dtc_id} has source class {upper_class}; requirements §8 includes the SCD "
+                    "records and excludes these, so the row is kept for review and not imported"
                 ),
             ),
             decision=EXCLUDE,

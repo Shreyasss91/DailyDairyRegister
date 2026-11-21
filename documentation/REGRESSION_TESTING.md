@@ -34,7 +34,7 @@ A non-zero exit code means the validation gate failed. Inspect the failing test 
 Run the directly relevant export and UI tests first:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py tests/test_print_pdfs.py tests/test_print_document.py tests/test_reset.py tests/test_protection_triggers.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py tests/test_print_pdfs.py tests/test_print_document.py tests/test_reset.py tests/test_protection_triggers.py tests/test_dtc_identifier.py
 ```
 
 These modules cover the export/document, PDF, bulk-finalisation and frontend contracts, including:
@@ -122,6 +122,10 @@ These modules cover the export/document, PDF, bulk-finalisation and frontend con
   written being left alone, and the page offering each scope as its own confirmation and its
   own button.
 
+- A DTC identifier is the office's own code: any letter prefix and number accepted,
+  including `SCE142` and a hyphenated series; a placeholder, a bare number or a name in the
+  identifier column refused and named; and the file's own `Class` column - never the letters
+  of a prefix - deciding which records requirements §8 excludes.
 - The guards that keep a closed month closed: a database that lost the three
   `generation_entry` protections refused a backup by name and repaired when it opens, the
   repair touching no row, recorded once, replacing a trigger left behind by older text
@@ -140,7 +144,7 @@ From the repository root:
 
 ```powershell
 # 1. Focused API/document, PDF, bulk-finalisation and UI coverage.
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py tests/test_print_pdfs.py tests/test_reset.py tests/test_protection_triggers.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py tests/test_print_pdfs.py tests/test_reset.py tests/test_protection_triggers.py tests/test_dtc_identifier.py
 
 # 2. Full regression suite.
 .\.venv\Scripts\python.exe -m pytest

@@ -210,9 +210,13 @@ Area master fields: stable canonical ID, Kannada name, editable English translit
 
 ## 8. DTC master, source data and scheduling
 
-The supplied DTC source contains 113 SCD records. Include the 113 SCD records; exclude five SCF and one SCE records. The 113 SCD records comprise 68 DEPT and 45 SELF_DTC records (42 MSB + 3 OWN). MSB and OWN are one scheduling class, `SELF_DTC`.
+The supplied DTC source contains 113 SCD records. Include the 113 SCD records; exclude five SCF and one SCE records. What is excluded is decided by the source class the file states in its own `Class` column, not by the letters in front of an identifier: the letters are the office's filing code, and a prefix such as `SCE` in a later office's roster is that office's identifier series rather than the excluded class. The 113 SCD records comprise 68 DEPT and 45 SELF_DTC records (42 MSB + 3 OWN). MSB and OWN are one scheduling class, `SELF_DTC`.
 
-- DTC identifier: SCD-xx.
+- DTC identifier: the office's own code — a short letter prefix and a number, such as
+  `SCD-12` in the office this tool was built for or `SCE142` in the next one. The prefix
+  is a filing convention, so the tool neither dictates it nor reads meaning into it; a
+  cell that is not a code at all (a placeholder, a bare number, a name in the wrong
+  column) is refused and named rather than imported.
 - Display name: source `DTC_Name`.
 - Retain imported source fields, including DTC name, feeder, feeder code, MDM code, kVA, station and original DEPT/MSB/OWN classification.
 - Retain the supplied **date of commissioning** (`Date of commision` in the office's own file) as a canonical date on the DTC record, with the supplied text kept beside it as source evidence. A blank or unreadable value is stored as no date, which the schedule reads as no restriction; it is never treated as "not yet commissioned", because that would make an untouched master unusable. The date bounds the dates the asset may be visited on, as §10.9 states.

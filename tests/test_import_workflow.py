@@ -108,13 +108,16 @@ def test_column_headings_are_matched_leniently():
 
 
 def test_the_scf_and_sce_records_are_excluded_with_a_reason():
+    # Which rows are excluded is decided by the Class column the office supplies, not by the
+    # letters in front of an identifier: the original source carried no class column at all,
+    # and a prefix is one office's filing convention rather than a class. The identifier rule
+    # itself is covered by tests/test_dtc_identifier.py.
     csv = (
         "DTC ID,DTC Name,Class\n"
         "SCD-1,Alpha,DEPT\n"
-        "SCF-2,Beta,MSB\n"
-        "SCE-3,Gamma,MSB\n"
+        "SCF-2,Beta,SCF\n"
+        "SCE-3,Gamma,SCE\n"
     )
-    verdict = judge_dataset("dtc", *read_source_bytes("d.csv", csv.encode())) if False else None
     source = read_source_bytes("d.csv", csv.encode())
     verdict = judge_dataset("dtc", source.headers, source.rows)
     by_id = {o.payload["dtc_id"] if o.payload else o.raw["DTC ID"]: o for o in verdict.outcomes}
@@ -279,7 +282,7 @@ def test_reimporting_the_same_file_updates_rather_than_duplicating(db):
 
 
 def test_accepting_an_excluded_row_does_not_create_it(db):
-    csv = "DTC ID,DTC Name,Class\nSCD-1,Alpha,DEPT\nSCF-2,Beta,MSB\n"
+    csv = "DTC ID,DTC Name,Class\nSCD-1,Alpha,DEPT\nSCF-2,Beta,SCF\n"
     batch, _ = stage_bytes(db, "dtc", "excl.csv", csv.encode())
     result = accept_batch(db, batch.batch_id)
     assert result.excluded == 1

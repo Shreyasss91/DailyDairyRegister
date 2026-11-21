@@ -46,6 +46,7 @@ Blank header:
 
 - Keep every source row from the original source extract, including SCF/SCE rows. Let the import judge explicitly exclude them; do not pre-filter them.
 - The expected reconciliation is **113 SCD**: 68 DEPT and 45 SELF_DTC (42 MSB + 3 OWN). Expected excluded source records: five SCF and one SCE. These are checks against the source, not target numbers to force by editing.
+- `DTC ID` is the office's own code: a short letter prefix and a number, such as `SCD-12` or `SCE142`. Any prefix is accepted and the tool reads no meaning into it - which records §8 excludes is decided by the `Class` column, so a roster numbered `SCE142` throughout imports in full. A cell that is not a code (a placeholder, a bare number, a name in the wrong column) is refused with that row named.
 - Accepted source classes are DEPT, MSB and OWN. DEPT maps to canonical class DEPT; MSB/OWN map to SELF_DTC while retaining source subgroup. SCF/SCE are excluded. Unknown classes are errors, not guesses.
 - Preserve source DTC name, feeder text, feeder code, MDM code, kVA, station and original source class. The `Feeder` column is source feeder text, not a canonical feeder ID.
 - Blank or `#N/A` kVA must not be treated as zero. It leaves the weight incomplete and should be reviewed.
