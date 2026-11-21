@@ -100,6 +100,17 @@ What is still open:
 - Holidays and weekly offs are excluded from leave-day calculations.
 - Leave entries remain recorded when they overlap a holiday, weekly off, event or other special entry; show a conflict rather than silently removing data.
 
+Leave is entered two ways: one record at a time on the Calendar tab, and from the office's own monthly sheet as an import dataset (`leave`), which is `08_monthly_leave_records.csv`. The import is built to these rules:
+
+- **One file row covers a range; the calendar holds one record per date.** A row from `05-11-2026` to `07-11-2026` writes three records, and acceptance reports records written rather than file rows read.
+- **The leave type must already exist.** A row is matched to a stored type by its identifier (`CL`) or its name (`Casual Leave`), case and surrounding space aside. A type the office has not configured is a row error naming it and listing the stored types; it is never created by an import.
+- **A refused leave writes nothing.** A row whose approval status reads as rejected, refused, declined, cancelled or withdrawn is excluded with that reason recorded, because a leave the office did not grant is not a day it was closed.
+- **A half day is kept as leave and the office is told.** The calendar has no half day, so `Full Day = N` is written as a full day's leave with a warning saying so, rather than dropping the row or leaving the date working.
+- **A missing end date is a single day.** A range that ends before it begins is refused, and an impossible date is refused naming the day (the same reading the other datasets use).
+- **The sheet replaces the dates it names, and only those.** Re-reading a corrected sheet updates the dates it covers and leaves every other stored date alone.
+- **Employee columns are evidence, not records.** The calendar carries no employee, because what scheduling needs is whether the office worked; the employee identifier and name are kept beside the record so the sheet stays traceable.
+- **A stored leave record can be deleted** from the Calendar tab, which is the whole correction: one date and one type, with nothing else on the date to preserve.
+
 ### 5.2 Dated events and meetings
 
 - Users enter event dates individually; recurring event rules are not required initially.

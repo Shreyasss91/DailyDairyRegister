@@ -64,6 +64,7 @@
             <option value="feeder">Feeders</option>
             <option value="activity">Activity catalogue</option>
             <option value="general_holiday">General Holidays</option>
+            <option value="leave">Monthly leave records</option>
           </select>
         </label>
         <input type="file" id="import-file" accept=".csv,.tsv,.xlsx,.xlsm" />
@@ -128,6 +129,13 @@
         <button id="holiday-save" class="button">Save holiday</button>
       </div>
       <div id="holiday-table"></div>
+      <h3>Leave records</h3>
+      <p class="muted">
+        A leave record is one date and one leave type. Reading a monthly leave sheet writes one
+        record per date in each row's range, and replaces what was stored on the dates the sheet
+        names. A leave the sheet records as rejected, cancelled or withdrawn is left out.
+      </p>
+      <div id="leave-table"></div>
       <h3>Dated events</h3>
       <div class="row">
         <input type="date" id="event-date" />
@@ -329,6 +337,6 @@
 
   </main>
 
-  <script src="/static/app.js?v=feeders-1"></script>
+  <script src="/static/app.js?v=leave-1"></script>
 </body>
 </html>

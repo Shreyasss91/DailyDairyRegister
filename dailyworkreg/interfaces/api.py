@@ -539,6 +539,22 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             for item in cal.list_leave_records(db)
         ]
 
+    @app.delete("/api/calendar/leave-records/{leave_id}")
+    def remove_leave_record(
+        leave_id: str, db: sqlite3.Connection = Depends(get_db)
+    ) -> dict[str, Any]:
+        # A leave record is one date and one type, so removing it is the whole correction:
+        # there is nothing else on the date to keep. Removing one that is not stored says so
+        # rather than reporting a success the calendar would contradict.
+        known = {item.leave_id for item in cal.list_leave_records(db)}
+        if leave_id not in known:
+            raise SurfaceError(
+                "leave_record_unknown",
+                f"no leave is recorded as {leave_id}, so there is nothing to remove",
+            )
+        cal.delete_leave_record(db, leave_id)
+        return {"deleted": True, "leave_id": leave_id}
+
     @app.put("/api/calendar/leave-records")
     def write_leave_record(
         payload: dict[str, Any], db: sqlite3.Connection = Depends(get_db)

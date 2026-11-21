@@ -183,6 +183,30 @@ def _reconcile(
         if payload.get("kva") is None:
             messages.append("no capacity was read, so the weight cannot be derived yet")
 
+    if dataset == "leave":
+        # The leave type is the calendar's own vocabulary. A file that names one the office has
+        # not configured is refused rather than quietly creating it, because a type is a
+        # decision about what the office grants, not a word on a sheet.
+        wanted = str(payload.get("leave_type") or "").strip()
+        stored = cal.list_leave_types(connection)
+        match = next(
+            (
+                item
+                for item in stored
+                if wanted.casefold() in (item.leave_type_id.casefold(), item.name.casefold())
+            ),
+            None,
+        )
+        if match is None:
+            known = ", ".join(f"{item.leave_type_id} ({item.name})" for item in stored)
+            error = True
+            messages.append(
+                f"leave type '{wanted}' is not one of the stored leave types "
+                f"({known or 'none is stored'}); add it on the Calendar tab first"
+            )
+        else:
+            payload = dict(payload) | {"leave_type_id": match.leave_type_id}
+
     if dataset == "area" and not payload.get("area_id"):
         existing = next(
             (
@@ -646,6 +670,30 @@ def accept_batch(
                 inserted += 0 if existed else 1
                 updated += 1 if existed else 0
 
+            elif batch.dataset == "leave":
+                # One file row covers a range, and the calendar holds one record per date, so
+                # the range is written out date by date. A re-uploaded sheet replaces the
+                # dates it names and leaves every other date alone, so a corrected file
+                # cannot duplicate a day and an untouched month keeps what it had.
+                leave_type_id = str(payload["leave_type_id"])
+                existing_records = list(cal.list_leave_records(connection))
+                for ordinal in payload["dates"]:
+                    day = date.fromordinal(int(ordinal))
+                    leave_id = f"L-{day.isoformat()}"
+                    for other in existing_records:
+                        if other.leave_date == day and other.leave_id != leave_id:
+                            cal.delete_leave_record(connection, other.leave_id)
+                    existed = any(other.leave_id == leave_id for other in existing_records)
+                    cal.upsert_leave_record(
+                        connection,
+                        leave_id=leave_id,
+                        leave_date=day,
+                        leave_type_id=leave_type_id,
+                        note=_leave_note(payload),
+                    )
+                    inserted += 0 if existed else 1
+                    updated += 1 if existed else 0
+
         connection.execute(
             "UPDATE import_batch SET status = 'accepted', accepted_at = ?, decision_note = ? "
             "WHERE batch_id = ?",
@@ -659,6 +707,21 @@ def accept_batch(
         updated=updated,
         excluded=excluded,
     )
+
+
+def _leave_note(payload: dict) -> str | None:
+    """What the sheet says about the person whose leave this is, kept as evidence."""
+
+    parts = [
+        str(payload.get(field))
+        for field in ("employee_id", "employee_name")
+        if payload.get(field)
+    ]
+    who = " ".join(parts) or None
+    note = payload.get("note")
+    if who and note:
+        return f"{who}: {note}"
+    return who or note
 
 
 def _write_source_record(

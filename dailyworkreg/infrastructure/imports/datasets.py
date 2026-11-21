@@ -186,9 +186,39 @@ GENERAL_HOLIDAY_SPEC = DatasetSpec(
     ),
 )
 
+#: Leave reaches the calendar the way holidays do: from the office's own sheet. A leave record
+#: is one date and one leave type - the schema carries no employee, because what the calendar
+#: needs is whether the office worked, and a name is not a scheduling fact. The employee columns
+#: are read and kept as source evidence so the sheet stays traceable to whoever wrote it.
+LEAVE_SPEC = DatasetSpec(
+    name="leave",
+    label="Monthly leave records",
+    fields=(
+        FieldSpec("leave_type", ("leave type", "type of leave", "leave"), True),
+        FieldSpec("from_date", ("from date", "from", "start date", "date from"), True),
+        FieldSpec("to_date", ("to date", "to", "end date", "date to"), False),
+        FieldSpec(
+            "full_day", ("full day", "full day (y/n)", "fulldayn", "full day y n"), False
+        ),
+        FieldSpec("approval_status", ("approval status", "status", "approval"), False),
+        FieldSpec(
+            "employee_id", ("employee id", "emp id", "staff id", "employee code"), False
+        ),
+        FieldSpec("employee_name", ("employee name", "emp name", "staff name"), False),
+        FieldSpec("note", ("notes", "note", "remarks", "reason"), False),
+    ),
+)
+
 DATASETS: dict[str, DatasetSpec] = {
     spec.name: spec
-    for spec in (DTC_SPEC, AREA_SPEC, FEEDER_SPEC, ACTIVITY_SPEC, GENERAL_HOLIDAY_SPEC)
+    for spec in (
+        DTC_SPEC,
+        AREA_SPEC,
+        FEEDER_SPEC,
+        ACTIVITY_SPEC,
+        GENERAL_HOLIDAY_SPEC,
+        LEAVE_SPEC,
+    )
 }
 
 
@@ -850,14 +880,136 @@ def judge_general_holiday(
     return RowOutcome(row_number, dict(row), payload, SEVERITY_OK, ())
 
 
+#: Words an office writes in an `Approval Status` cell. A leave the office refused is not a
+#: day the office was closed, so the row is excluded with its reason rather than written.
+APPROVAL_APPROVED = ("approved", "sanctioned", "granted", "yes", "y")
+APPROVAL_REFUSED = (
+    "rejected",
+    "refused",
+    "declined",
+    "cancelled",
+    "canceled",
+    "withdrawn",
+    "not approved",
+    "no",
+    "n",
+)
+
+#: Words an office writes in a `Full Day (Y/N)` cell. A half day is not modelled by the
+#: calendar - a date is either worked or not - so the day is taken as leave and the office is
+#: told that is what happened, rather than the row being dropped or the day left working.
+FULL_DAY_FALSE = ("n", "no", "false", "0", "half", "half day", "halfday", "part")
+
+
+def judge_leave(
+    row: dict[str, str], mapping: dict[str, str], row_number: int
+) -> RowOutcome:
+    """Judge one row of a monthly leave sheet.
+
+    The sheet is written by the office and one row can cover several dates, so a row becomes
+    one record per date in its range. The leave type must already exist: it is the calendar's
+    own vocabulary, and a file that invents one would put a name on the register that no leave
+    type holds.
+    """
+
+    def get(field_name: str) -> str | None:
+        column = mapping.get(field_name)
+        return row.get(column) if column else None
+
+    leave_type = _text(get("leave_type"))
+    if leave_type is None:
+        return RowOutcome(
+            row_number, dict(row), None, SEVERITY_ERROR, ("no leave type was supplied",)
+        )
+
+    from_date, from_messages = coerce_date(get("from_date"), field_name="from date")
+    if from_date is None:
+        return RowOutcome(
+            row_number,
+            dict(row),
+            None,
+            SEVERITY_ERROR,
+            tuple(from_messages) or ("no leave date was supplied",),
+        )
+
+    raw_to = _text(get("to_date"))
+    if raw_to is None:
+        to_date = from_date
+    else:
+        to_date, to_messages = coerce_date(raw_to, field_name="to date")
+        if to_date is None:
+            return RowOutcome(
+                row_number, dict(row), None, SEVERITY_ERROR, tuple(to_messages)
+            )
+    if to_date < from_date:
+        return RowOutcome(
+            row_number,
+            dict(row),
+            None,
+            SEVERITY_ERROR,
+            (
+                f"the leave ends on {to_date.isoformat()} and begins on "
+                f"{from_date.isoformat()}, so the range is empty",
+            ),
+        )
+
+    warnings: list[str] = []
+    status = (_text(get("approval_status")) or "").casefold()
+    excluded = any(word in status for word in APPROVAL_REFUSED)
+    if excluded:
+        message = (
+            f"the office recorded this leave as '{_text(get('approval_status'))}', so the "
+            "date is not a leave day and nothing is written"
+        )
+        return RowOutcome(
+            row_number,
+            dict(row),
+            None,
+            SEVERITY_OK,
+            (message,),
+            EXCLUDE,
+        )
+    if not status:
+        warnings.append(
+            "no approval status is recorded, so this leave is taken as granted because the "
+            "office put it on its own sheet"
+        )
+
+    full_day = (_text(get("full_day")) or "").casefold()
+    if full_day and full_day in FULL_DAY_FALSE:
+        warnings.append(
+            "this leave is recorded as less than a full day; the calendar has no half day, so "
+            "the whole date is taken as leave"
+        )
+
+    days = (to_date - from_date).days + 1
+    payload = {
+        "leave_type": leave_type,
+        "from_date": from_date.isoformat(),
+        "to_date": to_date.isoformat(),
+        "dates": [
+            (from_date.toordinal() + offset) for offset in range(days)
+        ],
+        "full_day": _text(get("full_day")),
+        "approval_status": _text(get("approval_status")),
+        "employee_id": _text(get("employee_id")),
+        "employee_name": _text(get("employee_name")),
+        "note": _text(get("note")),
+    }
+    # The dates travel as ordinals because JSON keeps them as numbers; acceptance turns each
+    # back into the date it names.
+    severity = SEVERITY_WARNING if warnings else SEVERITY_OK
+    return RowOutcome(row_number, dict(row), payload, severity, tuple(warnings))
+
+
 JUDGES = {
     "dtc": judge_dtc,
     "area": judge_area,
     "feeder": judge_feeder,
     "activity": judge_activity,
     "general_holiday": judge_general_holiday,
+    "leave": judge_leave,
 }
-
 
 @dataclass(frozen=True)
 class DatasetVerdict:

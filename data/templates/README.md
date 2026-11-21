@@ -206,7 +206,9 @@ The individual adjustment is a multiplier, not a replacement weight. Use 1.00 on
 
 ## 9. Monthly operational input capture
 
-The files below are useful source/capture sheets, but the current tabular importer does **not** register datasets for leave, special events, meetings, fixed visits or date overrides. Keep these as working evidence; enter the actual records through the supported application UI when available. A future import requires a separately authorised implementation.
+The files below are useful source/capture sheets. The tabular importer registers a dataset for **leave only** (`08_monthly_leave_records.csv`, dataset name `leave`); it does **not** register datasets for special events, meetings, fixed visits or date overrides. Keep those as working evidence and enter the actual records through the supported application UI when available. A future import requires a separately authorised implementation.
+
+The leave file is read as follows: one row covers the inclusive range `From Date` to `To Date` and writes one leave record per date in it; the leave type must already be configured on the Calendar tab and is matched by code (`CL`) or name (`Casual Leave`); a row whose `Approval Status` reads as rejected, cancelled or withdrawn is left out with its reason; `Full Day = N` is written as a full day's leave with a warning, because the calendar has no half day; re-reading a sheet replaces the dates it names and no others. The employee columns are kept as evidence beside the record.
 
 | File | One row represents | Required evidence / notes |
 |---|---|---|

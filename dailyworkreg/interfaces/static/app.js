@@ -380,6 +380,7 @@ async function loadCalendar() {
   }
   await previewCalendar();
   await loadHolidays();
+  await loadLeave();
   await loadEvents();
 }
 
@@ -483,6 +484,36 @@ document.getElementById('holiday-save').addEventListener('click', async () => {
   await loadHolidays();
   await previewCalendar();
 });
+
+async function loadLeave() {
+  const records = await api('/api/calendar/leave-records');
+  const target = document.getElementById('leave-table');
+  target.textContent = '';
+  if (!records.length) {
+    target.append(el('p', {
+      class: 'muted',
+      text: 'No leave is recorded. Read a monthly leave sheet from the Imports tab, or the calendar keeps only weekly offs and General Holidays.',
+    }));
+    return;
+  }
+  target.append(table(
+    ['Date', 'Leave type', 'Note', ''],
+    records.map((record) => el('tr', {}, [
+      el('td', { class: 'day-line', text: record.leave_date }),
+      el('td', { text: record.leave_type_name }),
+      el('td', { text: record.note || '' }),
+      el('td', {}, [el('button', {
+        class: 'button',
+        text: 'Delete',
+        onclick: async () => {
+          await api(`/api/calendar/leave-records/${record.leave_id}`, { method: 'DELETE' });
+          await loadLeave();
+          await previewCalendar();
+        },
+      })]),
+    ])),
+  ));
+}
 
 async function loadEvents() {
   const events = await api('/api/calendar/events');
