@@ -1,0 +1,6 @@
+﻿Source Class,Canonical DTC Class,Source Subgroup,Include in Active DTC Roster,Default Class Multiplier,Import Treatment,Authority / Basis
+DEPT,DEPT,DEPT,YES,1,INCLUDE,Product requirements baseline §8; datasets.py mapping
+MSB,SELF_DTC,MSB,YES,0.2,INCLUDE,Product requirements baseline §8; datasets.py mapping
+OWN,SELF_DTC,OWN,YES,0.2,INCLUDE,Product requirements baseline §8; datasets.py mapping
+SCF,,,NO,,EXCLUDE,Product requirements baseline §8; datasets.py EXCLUDED_SOURCE_CLASSES
+SCE,,,NO,,EXCLUDE,Product requirements baseline §8; datasets.py EXCLUDED_SOURCE_CLASSES
