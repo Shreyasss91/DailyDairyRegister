@@ -429,5 +429,5 @@ def test_the_form_says_the_meeting_is_not_counted():
 
 
 def test_the_activity_defaults_still_bound_only_the_activity_lines():
-    assert DEFAULT_ACTIVITIES_PER_DAY == 3
-    assert DEFAULT_ACTIVITIES_PER_DAY_MAX > DEFAULT_ACTIVITIES_PER_DAY
+    assert DEFAULT_ACTIVITIES_PER_DAY == 1
+    assert DEFAULT_ACTIVITIES_PER_DAY_MAX == 3

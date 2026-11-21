@@ -6,3 +6,8 @@ build/
 dist/
 *.egg-info/
 temp/
+
+# Office data that names a person: the monthly leave sheet holds an employee's name, the
+# leave type and the approved dates. It is operational data, not reference data, so it stays
+# on the machine that imported it rather than in the repository.
+data/Unit-5/08_monthly_leave_records.csv
