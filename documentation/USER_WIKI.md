@@ -806,12 +806,16 @@ stable identifier the tool uses and is worth writing down when you report a prob
 
 ### A month of leave in the register
 
-A date the calendar records as leave carries one line in its Activity cell: *"I was on leave this
-day (Full Pay Leave)"*. The leave type is the one the calendar holds, so the register says which
-kind of absence it was rather than only that the section was short a person. If a date carries more
-than one leave record, every type is named. A date that is also a Sunday or a General Holiday keeps
-that classification and prints the leave type beside its reasons, because the holiday closed the
-section and the leave is a separate fact about the person.
+A date the calendar records as leave carries one line in its Activity cell:
+
+```
+I was on leave this day, Full Pay Leave (Leave)
+```
+
+The sentence is the office's own and names no leave type, because the date's stored reason prints
+beside it in the calendar's vocabulary — `Full Pay Leave (Leave)` — and naming the type in both
+places would read as two facts where there is one. A date that carries more than one leave record
+prints each type in its reasons.
 
 **A month on leave from end to end generates like any other month.** It holds no visits, so its
 page is a list of dates each stating the leave — which is what the office files for a month nobody

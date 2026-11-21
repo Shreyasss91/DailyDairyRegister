@@ -11,8 +11,6 @@ Nothing in this module decides anything about work. It names the choices.
 
 from __future__ import annotations
 
-from typing import Sequence
-
 #: Which language a date's items are written in.
 LANGUAGE_ENGLISH = "en"
 LANGUAGE_KANNADA = "kn"
@@ -83,24 +81,10 @@ STAFF_ALLOCATION_NOTE = (
 
 #: What a leave date carries in its Activity cell, so the register says on the date itself
 #: that the section was short a person rather than leaving the cell to read as an omission.
-#: The office's own sentence, and the leave type is named in brackets because that is how the
-#: office writes it: the calendar already knows the type, and a register that said only "on
-#: leave" would not say which kind of absence it was.
+#: The leave type is deliberately not repeated here: the date's stored reason prints beside
+#: this sentence as "Full Pay Leave (Leave)", and naming it twice reads as two facts where
+#: there is one. The sentence is therefore fixed, and the calendar supplies the type.
 LEAVE_ENTRY_TEXT = "I was on leave this day"
-
-
-def leave_entry_title(leave_types: Sequence[str]) -> str:
-    """The sentence a leave date prints, naming every leave type recorded on it.
-
-    A day can carry more than one leave record - a leave type corrected without the first
-    being removed is one way - and naming only the first would misreport the day. A date
-    whose records carry no type name prints the sentence alone rather than an empty bracket.
-    """
-
-    names = [str(name).strip() for name in leave_types if str(name or "").strip()]
-    if not names:
-        return LEAVE_ENTRY_TEXT
-    return f"{LEAVE_ENTRY_TEXT} ({', '.join(names)})"
 
 
 def normalise_language(value: str | None) -> str:

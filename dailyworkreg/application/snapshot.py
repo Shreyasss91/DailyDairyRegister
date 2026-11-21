@@ -147,7 +147,6 @@ def encode_request(request: DraftRequest) -> dict[str, Any]:
                 "is_working_day": c.is_working_day,
                 "reasons_en": list(c.reasons_en),
                 "reasons_kn": list(c.reasons_kn),
-                "leave_types": list(c.leave_types),
             }
             for c in request.calendar_days
         ],
@@ -332,10 +331,6 @@ def decode_request(payload: dict[str, Any]) -> DraftRequest:
                     is_working_day=bool(item["is_working_day"]),
                     reasons_en=tuple(item["reasons_en"]),
                     reasons_kn=tuple(item["reasons_kn"]),
-                    # A snapshot written before leave types were carried holds none, and
-                    # regenerating it writes the leave sentence without the type rather
-                    # than refusing a request it used to accept.
-                    leave_types=tuple(item.get("leave_types", ())),
                 )
                 for item in payload["calendar_days"]
             ),

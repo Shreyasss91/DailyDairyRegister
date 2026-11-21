@@ -258,11 +258,6 @@ class CalendarDay:
     is_working_day: bool
     reasons_en: tuple[str, ...] = ()
     reasons_kn: tuple[str, ...] = ()
-    #: The leave type names recorded on this date, in the calendar's own words, so a
-    #: leave date can carry the sentence the office files rather than a generic absence.
-    #: Kept apart from ``reasons_en`` because a leave can fall on a Sunday or a General
-    #: Holiday, and naming every reason would read as if the Sunday were a leave type.
-    leave_types: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         weekly_off = {
@@ -1189,7 +1184,7 @@ def _leave_entries(days: Mapping[date, CalendarDay]) -> tuple[DayEntry, ...]:
                 entry_id=f"LEAVE-{day.isoformat()}",
                 day=day,
                 kind=DayEntryKind.LEAVE,
-                title_en=wording.leave_entry_title(metadata.leave_types),
+                title_en=wording.LEAVE_ENTRY_TEXT,
                 provenance=DayEntryProvenance.CALENDAR,
             )
         )
