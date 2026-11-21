@@ -33,9 +33,9 @@ from typing import Callable, Iterable, Mapping, Sequence
 from .prorating import resolve_period_config
 from .validator import (
     C_AGG_COMBINED_CAPACITY,
+    C_ASSET_MONTHLY_MAX,
     KIND_AGGREGATE_CONSTRAINT,
     KIND_LABEL,
-    C_ASSET_MONTHLY_MAX,
     Asset,
     AssetLimits,
     AssetType,
@@ -607,7 +607,14 @@ def allocate_month(request: AllocationRequest) -> AllocationResult:
     # 4. The assessment may hold a witness that construction failed to reach. A
     #    valid witness is a valid answer; refusing it because a heuristic found
     #    nothing better would reject a proven schedule.
-    if assessment.status is FeasibilityStatus.FEASIBLE and assessment.witness:
+    # A month with no working date owes nothing and carries nothing, so its witness is the
+    # empty schedule rather than a schedule of visits. Accepting that here is what makes such a
+    # month a month the register can be issued for, instead of an unresolved month whose only
+    # fault is that no date in it is a working day.
+    nothing_owed = not request.required_visits and not request.cycle_obligations
+    if assessment.status is FeasibilityStatus.FEASIBLE and (
+        assessment.witness or nothing_owed
+    ):
         validated = validate_schedule(
             ProposalContext(
                 period=request.period,

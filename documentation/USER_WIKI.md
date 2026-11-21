@@ -659,8 +659,13 @@ planning.
   responsible.
 - It may not plan a partial month. A period that begins or ends mid-month is refused, because the
   monthly minimums would be prorated against days that do not exist in the plan.
-- It may not plan a month that holds no working day at all. Such a month is reported as
-  `no_eligible_working_date`, naming its dates, rather than blamed on an asset's commissioning date.
+- It may not place a visit in a month that holds no working day at all, and it does not refuse the
+  month for that reason either. A month the office did not work — leave from end to end, or a month
+  the calendar closes — owes no monthly minimum, because a minimum is a limit on a month of work.
+  Such a month is generated with nothing in it but the leave stated on each date, and the visits it
+  would have carried are dealt to the months that can hold them. Only a requirement the operator
+  stated explicitly — a cycle share or a required count — is still reported as
+  `no_eligible_working_date` in such a month.
 - It may not overwrite a locked date, a reviewed date, or a closed month.
 - It may not decide that a month is closed without a person having reviewed its dates.
 
@@ -789,12 +794,27 @@ stable identifier the tool uses and is worth writing down when you report a prob
 | *"this batch has no row that would change the master"* | Every row was excluded (all `SCF`/`SCE`, or every leave row refused). | Nothing to accept. Reject the batch; it changed nothing. |
 | *"leave type 'X' is not one of the stored leave types (CL (Casual Leave), …); add it on the Calendar tab first"* | A leave sheet names a leave type the office has not configured. | Add the leave type, or correct the sheet. An import never invents a type. |
 
+### A month of leave in the register
+
+A date the calendar records as leave carries one line in its Activity cell: *"I was on leave this
+day (Full Pay Leave)"*. The leave type is the one the calendar holds, so the register says which
+kind of absence it was rather than only that the section was short a person. If a date carries more
+than one leave record, every type is named. A date that is also a Sunday or a General Holiday keeps
+that classification and prints the leave type beside its reasons, because the holiday closed the
+section and the leave is a separate fact about the person.
+
+**A month on leave from end to end generates like any other month.** It holds no visits, so its
+page is a list of dates each stating the leave — which is what the office files for a month nobody
+worked. The visits that month would have carried are dealt to the other months of the coverage
+cycle rather than being owed where no date exists. Only if you asked for a specific number of visits
+in that month yourself does generation report `no_eligible_working_date`.
+
 ### At generation time
 
 | Message, in substance | What it means | What to do |
 | --- | --- | --- |
 | *infeasible*, with the constraints responsible (`revisit_gap_violated`, `asset_monthly_max_exceeded`, `dtc_daily_cap_exceeded`, `activity_placement_cannot_fill_a_day`, `search_node_limit_reached`, …) | No plan satisfies every constraint at once. | Read which constraint was hit. The usual fixes: widen `Monthly max` / `Repeat gap` in a master, lower a daily ceiling, lower the activity minimum, lengthen the period, or declare a cycle the period can satisfy. |
-| `no_eligible_working_date` — *"no date from 2025-10-01 to 2025-10-31 is a working day … nothing can be scheduled in this month. Clear the leave or the override that covers it, or leave the month out of the range"* | **Every** date of that month is a weekly off, a General Holiday, a leave date or an override. | Not a roster problem and not something a ceiling or a cycle can fix. Look at the Calendar tab for that month: usually one leave record covering the whole month, or an override set across it. Delete the record, re-read a corrected leave sheet, or generate a range that skips the month. |
+| `no_eligible_working_date` — *"no date from 2025-10-01 to 2025-10-31 is a working day … nothing can be scheduled in this month. Clear the leave or the override that covers it, or leave the month out of the range"* | **Every** date of that month is a weekly off, a General Holiday, a leave date or an override, and the month still owes visits the operator asked for explicitly — a cycle share or a required count. | This is not a roster problem and not something a ceiling can fix. If the month really was not worked, either generate a range that skips it or let the cycle cover it elsewhere: a month owing nothing is generated, with the leave stated on each date. Otherwise look at the Calendar tab for that month — usually one leave record covering the whole month, or an override set across it. |
 | `period_not_single_calendar_month` / a refusal for a partial month | The requested range begins or ends mid-month. | Generate whole months. Partial-month planning is deliberately not implemented. |
 | `draft_range_outside_coverage_cycle` | The period is not inside the declared cycle. | Either widen the cycle, change its start, or generate a period the cycle covers. |
 | `period_date_not_working` / a period with no working day | Every date in the range is a weekly off, holiday or leave. | Check the calendar. |

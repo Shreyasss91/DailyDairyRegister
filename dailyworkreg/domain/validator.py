@@ -446,6 +446,8 @@ def resolve_obligations(
     config: FeasibilityConfig,
     required_visits: Mapping[str, int] | None = None,
     cycle_obligations: Mapping[str, int] | None = None,
+    *,
+    monthly_minimum_applies: bool = True,
 ) -> ObligationSpec:
     """Validate caller obligations and resolve them into one specification.
 
@@ -459,6 +461,12 @@ def resolve_obligations(
         required_visits: Explicit required visit counts for this month.
         cycle_obligations: Cycle obligations already resolved by the caller into
             the portion owed in this month.
+        monthly_minimum_applies: Whether the configured monthly minimum is owed at
+            all. A minimum is a limit on a month of work, and §23 prorates a month's
+            limits by its eligible working days with no answer for a month holding
+            none, so a month with no working date owes no minimum. An explicit count
+            and a cycle share are obligations rather than limits and are unaffected,
+            which is what keeps a genuinely impossible month impossible.
 
     Returns:
         An :class:`ObligationSpec` describing what this month owes.
@@ -534,7 +542,8 @@ def resolve_obligations(
                 )
             continue
 
-        owed = max(limits.monthly_min, required, cycle)
+        minimum = limits.monthly_min if monthly_minimum_applies else 0
+        owed = max(minimum, required, cycle)
         if owed > 0:
             per_asset[asset_id] = owed
 
@@ -582,13 +591,19 @@ class ProposalContext:
         return _index_roster(self.roster)
 
     def obligations(self) -> ObligationSpec:
-        """Resolve the obligation specification, validating the inputs."""
+        """Resolve the obligation specification, validating the inputs.
+
+        Whether the month holds a working date at all decides whether its configured
+        monthly minimum is owed, so the calendar is consulted here rather than by each
+        caller. Both assessment and validation read this one answer.
+        """
 
         return resolve_obligations(
             self.roster,
             self.config,
             self.required_visits,
             self.cycle_obligations,
+            monthly_minimum_applies=bool(_eligible_dates(self.period, self.calendar)),
         )
 
 
@@ -622,13 +637,19 @@ class ObligationContext:
         return _index_roster(self.roster)
 
     def obligations(self) -> ObligationSpec:
-        """Resolve the obligation specification, validating the inputs."""
+        """Resolve the obligation specification, validating the inputs.
+
+        Whether the month holds a working date at all decides whether its configured
+        monthly minimum is owed, so the calendar is consulted here rather than by each
+        caller. Both assessment and validation read this one answer.
+        """
 
         return resolve_obligations(
             self.roster,
             self.config,
             self.required_visits,
             self.cycle_obligations,
+            monthly_minimum_applies=bool(_eligible_dates(self.period, self.calendar)),
         )
 
     def obligation_for(self, asset_id: str) -> int:
@@ -1626,6 +1647,7 @@ def _candidate_dates(
     return candidates
 
 
+
 def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
     """Assess whether the declared obligations admit at least one valid schedule.
 
@@ -1714,10 +1736,32 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
 
     total_required = sum(required.values())
 
+    if not required:
+        # Nothing remains to place, so the month is complete as it stands. A month holding no
+        # working date arrives here whenever it owes nothing explicit: its configured monthly
+        # minimum is not owed, because §23 prorates a month's limits by its eligible working
+        # days and a month with none has no limits to apply. That is what makes a month the
+        # office did not work - leave from end to end - a month the register can be issued for,
+        # with the leave stated on every date, rather than a month that stops the range.
+        #
+        # The preflight above has already established that the committed visits form a valid
+        # schedule, so the witness is the complete month and passes independent validation.
+        return FeasibilityResult(
+            status=FeasibilityStatus.FEASIBLE,
+            evidence=(),
+            witness=tuple(
+                sorted(
+                    (v for v in context.fixed if context.period.contains(v.visit_date)),
+                    key=lambda v: (v.visit_date, v.asset_id),
+                )
+            ),
+        )
+
     if not eligible:
-        # No date in the month is a working day, so no schedule exists and no roster change
-        # can create one. Reported before the commissioning check, which would otherwise
-        # blame whichever transformer it happened to reach first.
+        # Work is explicitly owed and no date in the month is a working day, so no schedule
+        # exists and no roster change can create one. Reported before the commissioning check,
+        # which would otherwise blame whichever transformer it happened to reach first for a
+        # month its dates never entered.
         return FeasibilityResult(
             status=FeasibilityStatus.INFEASIBLE,
             evidence=(
@@ -1735,22 +1779,6 @@ def assess_feasibility(context: ObligationContext) -> FeasibilityResult:
                 ),
             ),
         )
-
-    if not required:
-        # Nothing remains to place. The preflight above has already established
-        # that the committed visits form a valid schedule, so the witness is the
-        # complete month and passes independent validation.
-        return FeasibilityResult(
-            status=FeasibilityStatus.FEASIBLE,
-            evidence=(),
-            witness=tuple(
-                sorted(
-                    (v for v in context.fixed if context.period.contains(v.visit_date)),
-                    key=lambda v: (v.visit_date, v.asset_id),
-                )
-            ),
-        )
-
 
     evidence: list[Evidence] = []
 

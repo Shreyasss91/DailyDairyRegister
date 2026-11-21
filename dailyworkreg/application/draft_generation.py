@@ -258,6 +258,11 @@ class CalendarDay:
     is_working_day: bool
     reasons_en: tuple[str, ...] = ()
     reasons_kn: tuple[str, ...] = ()
+    #: The leave type names recorded on this date, in the calendar's own words, so a
+    #: leave date can carry the sentence the office files rather than a generic absence.
+    #: Kept apart from ``reasons_en`` because a leave can fall on a Sunday or a General
+    #: Holiday, and naming every reason would read as if the Sunday were a leave type.
+    leave_types: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         weekly_off = {
@@ -1161,6 +1166,36 @@ def _activity_entries(
     return tuple(entries)
 
 
+def _leave_entries(days: Mapping[date, CalendarDay]) -> tuple[DayEntry, ...]:
+    """The sentence every leave date carries, in the office's own words.
+
+    A date the calendar classifies as leave holds no visit and no activity, so without this
+    its Activity cell would read as nothing recorded - and a month that is leave from end to
+    end would be a page of em dashes. The register instead says, on each such date, that the
+    operator was on leave and which leave type the calendar holds, which is also what makes
+    a fully-leave month a register the office can file rather than a month with nothing in it.
+
+    The entry is derived from the calendar, so it is projected again on every generation and
+    is never mistaken for something a person wrote.
+    """
+
+    entries: list[DayEntry] = []
+    for day in sorted(days):
+        metadata = days[day]
+        if metadata.kind is not CalendarDayKind.LEAVE:
+            continue
+        entries.append(
+            DayEntry(
+                entry_id=f"LEAVE-{day.isoformat()}",
+                day=day,
+                kind=DayEntryKind.LEAVE,
+                title_en=wording.leave_entry_title(metadata.leave_types),
+                provenance=DayEntryProvenance.CALENDAR,
+            )
+        )
+    return tuple(entries)
+
+
 def generate_draft(
     request: DraftRequest, progress: ProgressReporter = SILENT
 ) -> DraftRegister:
@@ -1246,6 +1281,8 @@ def generate_draft(
             "Placing the approved activities on the working days of the range.",
         )
     for entry in _activity_entries(request, days):
+        entries_by_date.setdefault(entry.day, []).append(entry)
+    for entry in _leave_entries(days):
         entries_by_date.setdefault(entry.day, []).append(entry)
 
     rows = _build_rows(

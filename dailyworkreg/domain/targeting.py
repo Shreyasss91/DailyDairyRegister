@@ -637,6 +637,7 @@ def run_cycle(
         weights=weights,
         prior_visits=prior_visits,
         rotation_offset=rotation_offset,
+        calendar=calendar,
     )
 
     # A stored or freshly built plan is only trusted once its structure is

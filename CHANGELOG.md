@@ -102,6 +102,60 @@ The repository policy in `CLAUDE.md` requires every change, however small, to ha
 - **2026-11-19 — One PDF for the press, straight from the month panel:** The office was printing by hand: download the PDF package, unpack it, run `dailyworkreg-print` over a folder of months, and file the result. The panel now offers `Single PDF with no metadata` beside the packages, and it answers with one document holding every issued month in month order, each month's issued-version identification page left out. `GET /api/registers/{register_id}/exports/print.pdf` renders the months through the same `render_documents` the package uses - one engine, one browser, nothing leaving the computer - then drops each month's last page and joins what remains. The file is named after the months it holds rather than after the register, so `daily-dairy-register-2026-11-to-2026-12.pdf` says what it is without being opened, and a single issued month is named as itself rather than as a range of one. **Nothing was reimplemented to do it.** The page arithmetic moved out of the command and into `infrastructure/rendering/pdf.py` as `identification_page_count`, `count_pages`, `without_identification_page` and `join_pdfs`, and `interfaces/print_pdfs.py` now calls those instead of its own `PdfReader`/`PdfWriter` loops, so the button and the command cannot drift about which page is the identification page or about what a month with no page besides it means. The rule is stated once, as one page, because `application/export.py` starts the identification on a fresh page after the final date row: position is the contract, and no caller reads the page's text to recognise it. A month whose only page is its identification page is refused here as it is refused there, so a month cannot reach the press as nothing. The archive is untouched: the single-month download and `exports/pdf.zip` still carry the identification page, because that page is how an issued register is proved after the fact, and `exports.zip` keeps its contract and its filenames. The panel's sentence was rewritten to say which download holds the identification page and which leaves it out, since four downloads now sit together and an operator choosing between them should not have to open each one. The script's cache key was bumped to `print-pdf-1`, because the client changed and a browser holding the previous file would not show the button. `tests/test_print_document.py` is new with 15 tests: every issued month reaching one PDF with its identification page left out - checked as a page count over months rendered at four and five pages, so dropping the wrong page or dropping from the wrong end fails rather than passing on a plausible total - the document named after the months, one month named as itself, the identification page still present in the single-month download, a register with nothing issued refused with `register_has_no_issued_months`, printing changing no stored record, and the four page operations themselves: the last page and not another one dropped, a month holding only its identification page refused, joining keeping every page in order, joining nothing refused rather than returning an empty file, the identification page stated as one page, and a missing `pypdf` answered as a setup step naming the install rather than as a crash. Two of the fifteen drive the real browser, because a stand-in cannot fail the way a real render does: the button writing a PDF that begins `%PDF-` and ends `%%EOF` and holds the months with one page each left out - measured against each month's own download rather than a guessed total, since December lays out to two register pages where November takes one - and the identification page being the last page rather than the first or the middle. `tests/test_print_pdfs.py`'s 7 tests still pass against the shared operations without change, which is what moving the arithmetic rather than copying it was for. `tests/test_generation_progress.py` moved its pinned cache key to the current one, and `tests/test_pdf_export.py`'s page test now pins the new button beside the two packages and the mixed one, so a later tidy cannot quietly drop it. `README.md` gained the button and the note that both routes leave out the identification page by one rule, and `documentation/REGRESSION_TESTING.md` gained the module and its contract list. No scheduling, allocation, review, finalisation, correction, calendar, proration or backup behaviour changed; the register itself, the workbook and the packages are unchanged. No schema change, no migration, no dependency and no route removed. The full suite is 1342 tests, all passing. Nothing was pushed.
 
 ### Fixed
+- **A month the office did not work is generated with the leave on every date, instead of stopping
+  the register.** The office's own answer to a register that refused a month they were on leave for:
+  *"let code only handle this if there is leave then enter 'i was on leave this day (leave-type)'"*.
+  Both halves are now the tool's behaviour.
+
+  **The register says it.** A date the calendar records as leave carries one line in its Activity
+  cell - `I was on leave this day (Full Pay Leave)` - naming every leave type recorded on that date,
+  because a leave day holds no visit and no activity and the cell would otherwise read as an
+  omission on a page the office files. The sentence is derived from the calendar and carries
+  `calendar` provenance, so it is projected again on every generation and is never mistaken for
+  something a person typed. A date that is also a Sunday or a General Holiday keeps that
+  classification and prints the leave type among its reasons, because the holiday closed the section
+  and the leave is a separate fact about the person. The leave type names travel with the request
+  snapshot; a snapshot written before they were carried regenerates with the sentence and no bracket
+  rather than being refused.
+
+  **The month is not refused.** The root of the refusal was not the leave but the per-transformer
+  monthly minimum: every active DTC's configured minimum made a month of leave owe visits it had no
+  date to place, so the month came back infeasible and the whole range with it. A minimum is a limit
+  on a month of work, and section 23 prorates a month's limits by its eligible working days with no
+  answer for a month that holds none - so a month with no working date owes no minimum and is
+  complete as it stands. That decision lives in `resolve_obligations(..., monthly_minimum_applies=...)`,
+  which both feasibility assessment and schedule validation read, so the two cannot disagree. An
+  explicit count or a cycle share is an obligation rather than a limit: it is still owed and still
+  reported as `no_eligible_working_date`, naming the month's dates, so a genuinely impossible month
+  still says so.
+
+  **The cycle moves the share rather than losing it.** `resolve_cycle` now takes the cycle's calendar
+  and deals no share to a month holding no working date, recording those months on the resolution as
+  closed months so a stored plan is verified against the facts it was built from. A cycle whose every
+  month is closed keeps the plain distribution, because it cannot discharge its obligation anywhere
+  and must not quietly report a cycle it never made. The allocator completes such a month with the
+  empty schedule instead of leaving it unresolved.
+
+  Verified against a copy of the live database over the operator's own range,
+  `2025-04-01..2026-10-31` with a 19-month cycle: the run now reports `allocation_complete` for all
+  19 months, October 2025 with 0 visits and 26 of its 31 dates stating the leave (the other five are
+  Sundays and General Holidays and print the leave type beside their reasons), and the 39 visits the
+  other months carry are unchanged in total.
+
+  `tests/test_leave_in_register.py` is new with 24 tests: the sentence naming every type, a date with
+  no type name still reading as a sentence, a working date and a holiday carrying none, every date of
+  a leave month carrying one, a fully-leave month generated with no visits while its share moves on,
+  a closed month carrying no cycle share and recorded on the resolution, a closed month that owes
+  visits failing verification, a cycle closed in every month keeping its obligation, the monthly
+  minimum not owed in a month with no working date, an explicit count still refused there, the
+  allocator completing such a month, and the leave types surviving the request snapshot.
+  `tests/test_commissioned_on.py` gains the counterpart contract: an empty month that owes nothing is
+  complete, and one that owes an explicit count still answers `no_eligible_working_date` with that
+  count. The Draft tab shows a leave line without edit, remove or move controls, because it is
+  projected again on every generation and the Calendar tab is where a leave changes. Recorded in `documentation/PRODUCT_REQUIREMENTS_BASELINE.md` section 10.9, in the wiki's
+  leave section, its list of what a plan may not do and its generation message table, and in
+  `documentation/REGRESSION_TESTING.md`. No schema change, no migration, no dependency and no route.
+  Full suite 1472 passing.
 - **A month covered entirely by leave is now reported as an empty month, not blamed on a
   transformer.** A register generated over `2025-04-01..2026-10-31` came back infeasible for
   `2025-10` alone, with `asset_not_yet_commissioned` against `SCE124`: *"SCE124 was commissioned on

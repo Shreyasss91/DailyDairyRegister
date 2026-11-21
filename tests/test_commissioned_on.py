@@ -407,9 +407,16 @@ def test_the_empty_month_names_its_dates_and_what_to_clear():
     assert "leave the month out of the range" in detail
 
 
-def test_an_empty_month_is_reported_even_when_it_owes_nothing():
-    # The commissioning check is not the only path that could have answered this, and a
-    # month with no eligible date is worth saying out loud however few visits it owes.
+def test_a_month_that_owes_nothing_is_complete_however_empty_it_is():
+    """An empty month is only impossible when work is owed in it.
+
+    A month on leave from end to end owes no visit once the cycle's share has moved to a
+    month that can hold work, and a month first reported as impossible because it is empty
+    must then be a month the register can be issued for - it carries the leave sentence on
+    every date rather than a schedule. Refusing it would make an absence the reason a
+    register cannot be filed.
+    """
+
     result = assess_feasibility(
         ObligationContext(
             period=MONTH,
@@ -419,8 +426,27 @@ def test_an_empty_month_is_reported_even_when_it_owes_nothing():
         )
     )
 
+    assert result.status is FeasibilityStatus.FEASIBLE
+    assert result.evidence == ()
+    assert result.witness == ()
+
+
+def test_an_empty_month_still_answers_with_the_work_it_cannot_discharge():
+    # The refusal survives for the case that is genuinely impossible: an empty month that
+    # owes visits still cannot hold them, and the evidence carries how many it owes.
+    result = assess_feasibility(
+        ObligationContext(
+            period=MONTH,
+            calendar=Calendar(frozenset()),
+            roster=(Asset("SCD-1", AssetType.DTC, commissioned_on=date(2022, 1, 1)),),
+            config=FeasibilityConfig(),
+            required_visits={"SCD-1": 2},
+        )
+    )
+
     assert result.status is FeasibilityStatus.INFEASIBLE
     assert result.evidence[0].constraint == C_NO_ELIGIBLE_WORKING_DATE
+    assert result.evidence[0].actual == 2
 
 
 def test_a_month_the_asset_is_commissioned_during_is_still_feasible():

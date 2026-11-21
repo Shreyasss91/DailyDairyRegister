@@ -215,6 +215,7 @@ def project_calendar(
                 is_working_day=is_working_day,
                 reasons_en=tuple(reasons_en),
                 reasons_kn=tuple(reasons_kn),
+                leave_types=tuple(record.leave_type_name for record in leaves),
             )
         )
 

@@ -1086,7 +1086,9 @@ function draftRow(row, day) {
     el('td', {}, row.entries.map((entry) => el('div', {}, [
       el('span', { text: entry.title_kn ? `${entry.title_en} / ${entry.title_kn}` : entry.title_en }),
       el('span', { class: 'muted', text: ` (${entry.kind}${entry.provenance && entry.provenance !== 'calendar' ? ', ' + entry.provenance : ''})` }),
-      entryControls(row, entry),
+      // A leave line belongs to the calendar, not to this page: it is projected again on
+      // every generation, and the way to change it is the Calendar tab's leave records.
+      entry.kind === 'leave' ? null : entryControls(row, entry),
     ]))),
     el('td', { text: row.warnings.join('; ') }),
     el('td', {}, [

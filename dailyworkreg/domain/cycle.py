@@ -24,7 +24,7 @@ from datetime import date, timedelta
 from enum import Enum
 from typing import Iterable, Mapping, Sequence
 
-from .validator import Asset, AssetType, InputError, Visit
+from .validator import Asset, AssetType, Calendar, InputError, Visit
 
 #: Stable identifiers for cycle-configuration errors. Prefixed ``CYCLE_`` so a
 #: caller can tell a malformed cycle from a malformed obligation set.
@@ -270,6 +270,10 @@ class CycleResolution:
     #: asset does not exist in the months that still had room. Zero for a cycle whose
     #: assets carry no commissioning dates, where the distribution is exactly even.
     availability_forced: int = 0
+    #: Months holding no working date at all, which no visit can exist in. They are
+    #: recorded on the resolution rather than looked up again, so a stored plan is
+    #: verified against the same facts it was built from and owes nothing in them.
+    closed_months: tuple[MonthKey, ...] = ()
 
     def plan_for(self, month: MonthKey) -> CycleMonthPlan | None:
         for plan in self.plans:
@@ -371,6 +375,7 @@ def resolve_cycle(
     weights: DtcWeights | None = None,
     prior_visits: Iterable[Visit] = (),
     rotation_offset: int = 0,
+    calendar: Calendar | None = None,
 ) -> CycleResolution:
     """Resolve ``cycle`` into a stable per-month obligation plan.
 
@@ -391,6 +396,13 @@ def resolve_cycle(
         weights: Weight model used only to order priority.
         prior_visits: Visits before the cycle, used for fairness rotation.
         rotation_offset: Deterministic rotation state carried between cycles.
+        calendar: The working dates of the whole cycle, when the caller has them. A
+            month holding no working date at all cannot carry a visit for anybody -
+            an office that was on leave from end to end did no field work in it - so
+            that month's share is dealt to the months that can hold work instead of
+            being left as an obligation no schedule could ever discharge. Left out,
+            every month of the cycle is assumed able to hold work, which is what a
+            caller that has not projected a calendar is entitled to assume.
 
     Returns:
         A :class:`CycleResolution` covering every month of the cycle.
@@ -402,6 +414,12 @@ def resolve_cycle(
 
     weight_model = weights or DtcWeights()
     months = cycle.months()
+    can_hold_work = _months_that_can_hold_work(months, calendar)
+    serving = tuple(index for index, ok in enumerate(can_hold_work) if ok)
+    # A cycle whose every month is closed cannot discharge its obligation anywhere, and
+    # quietly redistributing it to nothing would report a cycle it never made. Such a cycle
+    # keeps the plain distribution, so its month comes back as an empty month with the reason.
+    placeable_capacity = can_hold_work if serving else tuple(True for _ in months)
 
     # An asset commissioned after a month has no usable date in it, so the cycle
     # cannot serve it there. An asset commissioned after the whole cycle cannot be
@@ -473,7 +491,18 @@ def resolve_cycle(
     # turn: this is what makes a small roster spread across the cycle instead of
     # stacking into its first months. With no commissioning dates the shares and the
     # order are exactly what a plain round-robin produces.
-    shares = [base + (1 if index < remainder else 0) for index in range(len(months))]
+    # A month nobody can be visited in takes no share: dealing to it would create an
+    # obligation no schedule could discharge, which is how a fully-leave month used to
+    # come back infeasible instead of coming back with the leave sentence on every date.
+    # A cycle whose every month is closed is left on the plain division, so the month is
+    # reported as an empty month rather than the cycle quietly owing nothing anywhere.
+    shares = [0] * len(months)
+    if serving:
+        share_base, share_remainder = divmod(total_obligation, len(serving))
+        for position, index in enumerate(serving):
+            shares[index] = share_base + (1 if position < share_remainder else 0)
+    else:
+        shares = [base + (1 if index < remainder else 0) for index in range(len(months))]
     pointer = 0
     forced = 0
     for unit in remaining_units:
@@ -493,7 +522,7 @@ def resolve_cycle(
             # where it can exist.
             for step in range(len(months)):
                 candidate = (pointer + step) % len(months)
-                if usable_months[unit][candidate]:
+                if usable_months[unit][candidate] and placeable_capacity[candidate]:
                     placed_at = candidate
                     break
             if placed_at is None:
@@ -536,7 +565,36 @@ def resolve_cycle(
         prior_last=prior_last,
         excluded=excluded,
         availability_forced=forced,
+        closed_months=tuple(
+            month
+            for index, month in enumerate(months)
+            if not placeable_capacity[index]
+        ),
     )
+
+
+def _months_that_can_hold_work(
+    months: Sequence[MonthKey], calendar: Calendar | None
+) -> tuple[bool, ...]:
+    """Which of the cycle's months hold at least one working date.
+
+    A month with no working date is a month the office did not work: every date is a weekly
+    off, a General Holiday, a leave date or an override. No visit can exist in it, so the
+    cycle cannot owe one there. Without a calendar every month is assumed to hold work, which
+    keeps the plain distribution for a caller that has not projected one.
+    """
+
+    if calendar is None:
+        return tuple(True for _ in months)
+    working = calendar.working_days
+    return tuple(_month_bounds_hold_work(month, working) for month in months)
+
+
+def _month_bounds_hold_work(month: MonthKey, working: frozenset[date]) -> bool:
+    for day in working:
+        if (day.year, day.month) == (month.year, month.month):
+            return True
+    return False
 
 
 def verify_cycle(resolution: CycleResolution) -> tuple[str, ...]:
@@ -682,7 +740,14 @@ def verify_cycle(resolution: CycleResolution) -> tuple[str, ...]:
     #    commissioned part-way through the cycle cannot use the months before it
     #    existed, so a unit forced out of its month widens the spread by exactly one;
     #    the count travels with the resolution rather than being assumed away.
-    totals = sorted(plan.total for plan in resolution.plans)
+    closed = set(resolution.closed_months)
+    for plan in resolution.plans:
+        if plan.month in closed and plan.total:
+            problems.append(
+                f"{plan.month.label()} holds no working date, yet owes "
+                f"{plan.total} visit(s)"
+            )
+    totals = sorted(plan.total for plan in resolution.plans if plan.month not in closed)
     allowed_spread = 1 + resolution.availability_forced
     if totals and totals[-1] - totals[0] > allowed_spread:
         problems.append(f"monthly totals are uneven by more than one: {totals}")
