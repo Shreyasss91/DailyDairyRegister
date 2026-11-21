@@ -1956,3 +1956,47 @@ carries a credential; signing would need key management, which is a decision not
   accepts a filesystem path instead of an upload.
 - No audit trail of restores beyond the recovery copy's name in the answer and the server
   log; there is no restore history table.
+
+### 27.9 Starting a new office in the same installation (as built)
+
+One installation holds one office. Handing the computer to a different office means
+removing every record the present office entered, and it happens as one act rather than by
+deleting table by table.
+
+**Two scopes, each its own action.** *Clear everything* leaves the tool exactly as it was on
+its first start. *Clear everything, but keep the calendar* keeps the General Holiday list
+(`general_holiday`), the leave types (`leave_type`) and the three weekly-off settings
+(`calendar.sundays_off`, `calendar.second_saturday_off`, `calendar.fourth_saturday_off`),
+because those are the state's facts rather than the office's and any office in Karnataka
+works from the same ones. Everything else goes in both scopes, including the office's own
+leave records, dated events, date overrides, staged imports, masters, drafts, reviews,
+locks, closed months and every version issued from them.
+
+**The mechanism is the restore path, not a second one.** `application/reset.py` builds a
+new database from this build's own schema at a staging path beside the live file, copies the
+kept rows into it by column, and hands it to `backup_restore.restore` - so a reset inherits
+the digest check, the verified recovery copy, the same-volume rename, the post-swap
+verification and the database-in-use refusal that a restore already has. An interrupted
+reset therefore leaves either the old database or the new one, never a mixture.
+
+**What it refuses and what it states.** `POST /api/reset` requires the confirmation word
+`RESET` (matched case-insensitively, whitespace trimmed) and one of the two scope names, and
+refuses with `reset_refused` and a sentence otherwise; nothing is removed on a refusal.
+`GET /api/reset/preview` counts what the selected scope would remove before the decision.
+The reset runs inside `MaintenanceGate.exclusive()`, so a request holding the database open
+makes it wait and a running replacement makes it refuse. A backup of the database as it
+stood is taken first and held for download (until the process ends), and the replacement
+keeps its own recovery copy beside the live file, named in the answer. Export files already
+written to disk are left alone: they are the previous office's issued documents, and
+removing them is a third decision the operator did not make.
+
+**The next start does not put the old office back.** Approved areas, feeders and leave types
+are seeded on a fresh install, keyed by `seed.approved_identities`. The reset writes that key
+with `CLEARED_SEED_VALUE`, so the next start leaves the new office's masters empty instead of
+re-inserting the previous office's sixteen areas and four feeders. `SEED_SETTING_KEY` is the
+only setting either scope writes; clearing the key is what would let the seed run again.
+
+**Also forgotten with the data.** A finished generation's in-memory record is dropped
+(`GenerationJobs.forget_finished`), because it names a draft no table holds any more, and a
+pending restore staged against the previous database is discarded.
+

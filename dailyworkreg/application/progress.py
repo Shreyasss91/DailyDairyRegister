@@ -274,6 +274,18 @@ class GenerationJobs:
                 raise UnknownJob(job_id)
             return _snapshot(job)
 
+    def forget_finished(self) -> None:
+        """Drop every record of a finished run, leaving a run in progress alone.
+
+        Used when the database underneath the tool is replaced or emptied: a finished
+        run's result describes a register that no longer exists, and answering a late
+        poll with it would point at a draft the operator cannot open.
+        """
+
+        with self._lock:
+            for job_id in [key for key in self._jobs if key != self._running]:
+                self._jobs.pop(job_id, None)
+
     def running(self) -> str | None:
         """The id of the run in progress, or ``None`` when the desk is idle."""
 

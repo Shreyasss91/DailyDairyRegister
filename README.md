@@ -41,6 +41,24 @@ The first launch creates the default SQLite database when needed and applies pen
 - [Change history](CHANGELOG.md)
 - [Repository implementation contract](CLAUDE.md)
 
+## Starting a new office
+
+One installation holds one office. Handing the computer to a different office is done from
+the **Backup** tab, under `Start a new office`, and there are two scopes:
+
+- **Clear everything** leaves the tool exactly as it was on its first start.
+- **Clear everything, but keep the calendar** keeps the Karnataka General Holiday list, the
+  leave types and the weekly-off rules, because any office in the state works from the same
+  ones, and removes every other record.
+
+Each scope has its own button and its own confirmation: type `RESET` in the box beside the
+one you mean. Before anything is removed, the page counts what the selected scope would take
+and a backup of the database as it stood is taken and offered for download; after the reset a
+recovery copy of the previous database is also left beside the live one, and its name is
+shown. Export files already written to disk are not touched. The next start does not put the
+previous office's seeded areas, feeders and leave types back - only the records you import
+for the new office appear.
+
 ## Dependency management
 
 `pyproject.toml` is the canonical Python dependency and packaging manifest. Runtime dependencies are installed by `pip install -e .`; the optional `test` extra adds pytest and HTTPX for regression testing. Do not maintain a second manually edited dependency list.

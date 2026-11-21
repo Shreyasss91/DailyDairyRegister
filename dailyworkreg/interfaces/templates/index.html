@@ -277,10 +277,54 @@
         </div>
         <div id="restore-result" class="detail" hidden></div>
       </div>
+
+      <div class="detail" id="reset-panel">
+        <h3>Start a new office</h3>
+        <p class="muted">
+          One installation holds one office. Handing this one to a different office means
+          removing every record the present office entered: the masters, the staged
+          imports, every draft, every review and lock, every closed month and every version
+          issued from it. Nothing is removed until you type the word below, a backup of
+          everything is taken first, and a copy of the database as it stands is kept beside
+          it afterwards.
+        </p>
+        <div id="reset-counts" class="muted"></div>
+
+        <div class="detail">
+          <h4>Clear everything, including the calendar</h4>
+          <p class="muted">
+            Everything goes, including the General Holiday list and the weekly-off rules.
+            The tool then behaves exactly as it did on its first start.
+          </p>
+          <label for="reset-word-everything">
+            Type <strong>RESET</strong> to confirm that every record may be removed
+          </label>
+          <input id="reset-word-everything" type="text" autocomplete="off" />
+          <button id="reset-everything" class="button button-danger">Clear everything</button>
+        </div>
+
+        <div class="detail">
+          <h4>Clear everything, but keep the calendar</h4>
+          <p class="muted">
+            The General Holiday list, the leave types and the weekly-off rules stay, because
+            they are the same for any office in the state; every other record goes.
+          </p>
+          <label for="reset-word-calendar">
+            Type <strong>RESET</strong> to confirm that every other record may be removed
+          </label>
+          <input id="reset-word-calendar" type="text" autocomplete="off" />
+          <button id="reset-keep-calendar" class="button button-danger">
+            Clear data, keep the calendar
+          </button>
+        </div>
+
+        <div id="reset-banner" class="banner" hidden></div>
+        <div id="reset-result" class="detail" hidden></div>
+      </div>
     </section>
 
   </main>
 
-  <script src="/static/app.js?v=print-pdf-1"></script>
+  <script src="/static/app.js?v=reset-1"></script>
 </body>
 </html>

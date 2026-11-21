@@ -1965,8 +1965,11 @@ function factsTable(pairs) {
 
 async function loadBackup() {
   // Nothing is fetched on arrival: a backup is an action, and a restore must start from
-  // the operator choosing a file rather than from whatever the tool remembers.
+  // the operator choosing a file rather than from whatever the tool remembers. The reset
+  // section does read the counts, because the decision in front of it is a decision about
+  // specific records.
   document.getElementById('backup-status').textContent = '';
+  loadReset();
 }
 
 async function createBackup() {
@@ -2138,9 +2141,118 @@ async function runRestore() {
   }
 }
 
+// --- emptying the database for the next office -----------------------------
+
+const resetState = { counts: null, labels: {} };
+
+// The server names each count in the words the office uses; the page prints those words
+// rather than turning a table name into a sentence of its own.
+function resetCountsText(counts, labels) {
+  return Object.entries(counts)
+    .filter(([, value]) => value)
+    .map(([table, value]) => `${value} ${(labels || {})[table] || table.replace(/_/g, ' ')}`)
+    .join(', ');
+}
+
+async function loadReset() {
+  // The numbers are read before the decision, because "everything" is a very different
+  // sentence when it says 113 transformers and four issued months than when it says none.
+  const counts = document.getElementById('reset-counts');
+  counts.textContent = 'Counting what this database holds…';
+  try {
+    const preview = await api('/api/reset/preview');
+    resetState.counts = preview.counts;
+    resetState.labels = preview.labels || {};
+    const held = resetCountsText(preview.counts, resetState.labels);
+    counts.textContent = held
+      ? `This database holds ${held}. Clearing everything removes all of it; keeping the `
+        + 'calendar keeps the holiday list, the leave types and the weekly-off rules.'
+      : 'This database holds no records yet, so a reset has nothing to remove.';
+  } catch (error) {
+    counts.textContent = 'What this database holds could not be read just now.';
+  }
+}
+
+async function runReset(scope) {
+  const wordNode = document.getElementById(
+    scope === 'keep_calendar' ? 'reset-word-calendar' : 'reset-word-everything',
+  );
+  const button = document.getElementById(
+    scope === 'keep_calendar' ? 'reset-keep-calendar' : 'reset-everything',
+  );
+  const banner = document.getElementById('reset-banner');
+  const result = document.getElementById('reset-result');
+  const status = document.getElementById('reset-counts');
+  hide(banner);
+  hide(result);
+  const before = status.textContent;
+  button.disabled = true;
+  status.textContent = 'Emptying the database. Leave this page open…';
+  try {
+    const answer = await api('/api/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope, confirmation: wordNode.value.trim() }),
+    });
+    wordNode.value = '';
+    showBanner(banner, 'ok', 'The database is empty and ready for a new office.');
+    result.hidden = false;
+    const cleared = resetCountsText(answer.cleared || {}, resetState.labels);
+    const kept = resetCountsText(answer.kept || {}, resetState.labels);
+    result.append(
+      el('h4', { text: 'What was removed' }),
+      el('p', { text: cleared || 'Nothing was held, so nothing was removed.' }),
+      el('h4', { text: 'What was kept' }),
+      el('p', {
+        text: kept || 'Nothing: the calendar was cleared with everything else.',
+      }),
+      el('h4', { text: 'Your copy of what was removed' }),
+      el('p', {
+        class: 'muted',
+        text: 'Download it now, and keep it somewhere other than this computer. A copy is '
+          + 'held only until this application is closed.',
+      }),
+      el('p', {}, [
+        el('a', {
+          class: 'button button-primary',
+          href: answer.backup.download,
+          download: answer.backup.filename,
+          text: `Download ${answer.backup.filename}`,
+        }),
+      ]),
+      el('p', {
+        class: 'muted',
+        text: 'The database as it stood before the reset was also kept beside it:',
+      }),
+      el('p', { text: answer.recovery_copy }),
+      el('p', {
+        class: 'muted',
+        text: 'Reload the page to begin with the new office. Delete that copy once you are '
+          + 'satisfied that nothing is needed from it, and import the files for the new '
+          + 'office from the Imports tab.',
+      }),
+      el('button', { class: 'button', text: 'Reload', onclick: () => window.location.reload() }),
+    );
+    status.textContent = before;
+  } catch (error) {
+    status.textContent = before;
+    showBanner(banner, 'error', 'Nothing was removed.', [error.message]);
+    if (error.constraint === 'restore_in_progress') {
+      banner.append(el('p', {
+        class: 'muted',
+        text: 'The tool is busy replacing its database. Wait for that to finish, then try again.',
+      }));
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
 document.getElementById('backup-create').addEventListener('click', createBackup);
 document.getElementById('restore-validate').addEventListener('click', validateRestore);
 document.getElementById('restore-run').addEventListener('click', runRestore);
+document.getElementById('reset-everything').addEventListener('click', () => runReset('everything'));
+document.getElementById('reset-keep-calendar').addEventListener('click', () => runReset('keep_calendar'));
 // --- start -----------------------------------------------------------------
 
 activate('home');

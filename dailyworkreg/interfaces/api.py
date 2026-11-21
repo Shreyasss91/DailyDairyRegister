@@ -30,6 +30,7 @@ from starlette.templating import Jinja2Templates
 
 from ..application import backup_restore
 from ..application import export as documents_source
+from ..application import reset as reset_application
 from ..application.calendar_projection import (
     WeeklyOffRules,
     load_weekly_off_rules,
@@ -1697,6 +1698,50 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 if key in {"format", "format_version", "created_at", "schema_version"}
             },
         }
+
+    # --- emptying the database for the next office ------------------------
+
+    @app.get("/api/reset/preview")
+    def read_reset_preview(db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+        """What a reset would remove, counted. Reads only."""
+
+        return reset_application.preview(db).as_payload()
+
+    @app.post("/api/reset")
+    def perform_reset(payload: dict[str, Any]) -> dict[str, Any]:
+        """Replace the database with an empty one, keeping the calendar if asked.
+
+        Refused without the confirmation word, because it removes every record the office
+        has entered. A backup of what is about to go is taken first and held for download,
+        and the replacement itself makes a recovery copy on disk as a restore does.
+        """
+
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        if confirmation != reset_application.CONFIRMATION_WORD:
+            raise SurfaceError(
+                reset_application.C_RESET_REFUSED,
+                "emptying the database removes every record this office has entered, "
+                "including issued months. Type "
+                f"{reset_application.CONFIRMATION_WORD} to confirm, or close this and keep "
+                "working.",
+            )
+        scope = str(payload.get("scope") or reset_application.SCOPE_EVERYTHING)
+        if scope not in reset_application.SCOPES:
+            raise SurfaceError(
+                reset_application.C_RESET_REFUSED,
+                "that is not a kind of reset this tool offers; choose whether the calendar "
+                "stays or everything goes",
+            )
+        with gate.exclusive():
+            result = reset_application.reset(target_db, scope=scope)
+            # A finished generation describes a draft that no longer exists, and a staged
+            # restore was validated against the database that has just been replaced.
+            jobs.forget_finished()
+            desk.clear()
+        held = desk.remember(result.backup, f"BK-{uuid.uuid4().hex[:12]}")
+        answer = result.as_payload(download=held.as_payload()["download"])
+        answer["backup"]["backup_id"] = held.backup_id
+        return answer
 
     @app.post("/api/finalisations/{finalisation_id}/corrections")
     def start_correction(

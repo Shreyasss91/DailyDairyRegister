@@ -29,12 +29,12 @@ The repository's `pytest.ini` identifies `tests/` as the test directory and adds
 
 A non-zero exit code means the validation gate failed. Inspect the failing test and its fixture/evidence; do not weaken, skip or delete a contract test solely to obtain a green run.
 
-## 3. Focused tests for monthly and bulk exports
+## 3. Focused tests for monthly and bulk exports, and for handing the tool to a new office
 
 Run the directly relevant export and UI tests first:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py tests/test_print_pdfs.py tests/test_print_document.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py tests/test_print_pdfs.py tests/test_print_document.py tests/test_reset.py
 ```
 
 These modules cover the export/document, PDF, bulk-finalisation and frontend contracts, including:
@@ -106,6 +106,22 @@ These modules cover the export/document, PDF, bulk-finalisation and frontend con
   existed reads without one.
 - Regular activities on working days: the configured count on every eligible day and none on a Sunday or a recorded holiday, the catalogue's monthly maximum, monthly minimum, repeat gap (across a month boundary) and weekday restriction as hard constraints, a weight unable to override a maximum, a catalogue that cannot fill a day or a month refused with the constraint and date named, determinism from the seed, the count and the catalogue surviving the request snapshot, a schema-1 snapshot still reading as the visits-only request it recorded, and the placed activities reaching the issued page and workbook with their Kannada text.
 
+- Handing the installation to a new office: the preview counting what a reset would remove
+  and changing nothing itself, a fresh installation already holding the seeded identities it
+  would clear, a wrong or missing confirmation word refused with the database and the folder
+  untouched, the word accepted in any case and with spaces, an unknown scope refused by name,
+  the full scope emptying every data table including the calendar and the weekly-off rules,
+  the calendar scope keeping the holiday rows and the leave types whole while still removing
+  the office's own leave records, dated events and overrides, a changed weekly-off rule
+  surviving that scope, the seeded identities staying out after the next start because the
+  seed marker records the operator's decision, a backup of what was removed that still holds
+  the previous office when re-validated, a recovery copy of the database as it stood, no
+  staging file or sidecar left behind, the replacement verified for integrity and references,
+  the exclusive barrier actually entered and a reset refused while a replacement holds it, a
+  poll arriving afterwards not answered with a draft no table holds, the export files already
+  written being left alone, and the page offering each scope as its own confirmation and its
+  own button.
+
 The PDF module runs its packaging, refusal and read-only tests against a stand-in renderer, so they pass on a machine without Chromium. The two tests that assert a real `%PDF` file are skipped unless a local browser is installed; run `python -m playwright install chromium` before treating PDF rendering as verified.
 
 The focused tests use the application's test client and test database fixtures. They do not require a separately running application server.
@@ -116,7 +132,7 @@ From the repository root:
 
 ```powershell
 # 1. Focused API/document, PDF, bulk-finalisation and UI coverage.
-.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py tests/test_print_pdfs.py
+.\.venv\Scripts\python.exe -m pytest tests/test_export.py tests/test_pdf_export.py tests/test_register_ui.py tests/test_bulk_finalisation.py tests/test_activity_allocation.py tests/test_register_wording.py tests/test_daily_counts.py tests/test_allocation_performance.py tests/test_generation_progress.py tests/test_generation_browser.py tests/test_per_kind_caps.py tests/test_commissioned_on.py tests/test_print_pdfs.py tests/test_reset.py
 
 # 2. Full regression suite.
 .\.venv\Scripts\python.exe -m pytest
