@@ -29,7 +29,7 @@ from dailyworkreg.infrastructure.sqlite.imports import (
     stage_source,
     staging_rows,
 )
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 
 DTC_CSV = (
     "DTC ID,DTC Name,Class,Feeder,Feeder Code,MDM Code,kVA,Station\n"
@@ -42,7 +42,7 @@ DTC_CSV = (
 @pytest.fixture()
 def db(tmp_path: Path) -> sqlite3.Connection:
     connection = open_database(tmp_path / "import.db")
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     yield connection
     connection.close()
 

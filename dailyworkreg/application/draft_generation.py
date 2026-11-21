@@ -1334,6 +1334,6 @@ def generate_draft(
 #: office's own approved sheet and the generator now places it.
 MISSING_CONTENT: tuple[str, ...] = (
     "Monday safety-meeting schedule and other dated calendar events",
-    "official Karnataka General Holiday baseline for 2025 and 2026",
-    "source 113-SCD roster and asset master data",
+    "official Karnataka General Holiday baseline for the years being scheduled",
+    "this office's DTC roster and asset master data",
 )

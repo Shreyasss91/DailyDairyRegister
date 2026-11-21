@@ -35,7 +35,7 @@ from dailyworkreg.infrastructure.sqlite.schema import (
     SCHEMA_VERSION,
     applied_versions,
 )
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 
 
 @pytest.fixture()
@@ -48,7 +48,7 @@ def db(tmp_path: Path) -> sqlite3.Connection:
     """
 
     connection = open_database(tmp_path / "finalisation.db")
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     for index in range(1, 7):
         masters.upsert_dtc(
             connection,
@@ -406,7 +406,7 @@ def test_a_missing_dtc_roster_blocks_finalisation(db):
         item for item in check.blockers if item.code == finalise.C_OPERATIONAL_MASTERS_MISSING
     )
     assert blocker.label == "DTC master"
-    assert "113-SCD" in blocker.detail
+    assert "this office's DTC roster" in blocker.detail
     assert check.is_operational_diary is False
 
 

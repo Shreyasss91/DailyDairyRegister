@@ -59,7 +59,7 @@ from dailyworkreg.infrastructure.sqlite.schema import (
     SCHEMA_VERSION,
     apply_migrations,
 )
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 
 DTC_HEADER = "DTC ID,DTC Name,Class,Feeder,kVA,Station,Date of commision\n"
 
@@ -76,7 +76,7 @@ def judged(*rows: str):
 @pytest.fixture()
 def db(tmp_path: Path) -> sqlite3.Connection:
     connection = open_database(tmp_path / "commissioned.db")
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     yield connection
     connection.close()
 

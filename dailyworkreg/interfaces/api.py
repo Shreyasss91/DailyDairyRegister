@@ -201,16 +201,18 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return open_database(db_path)
 
     def prepare() -> None:
-        """Seed the approved identities once, at startup, idempotently.
+        """Seed the leave types once, at startup, idempotently.
 
-        They are confirmed policy rather than user data, so they must exist before any
-        screen is opened; the seed records that it ran, which is what makes a restart
-        leave an edited master alone.
+        They are confirmed policy rather than user data, so they exist before any screen
+        is opened; the seed records that it ran, which is what makes a restart leave an
+        edited master alone. Areas and feeders are deliberately **not** seeded: they are
+        each office's own records and arrive from its own master files, so a starting
+        database holds no place it borrowed from another office.
         """
 
         existing = connection()
         try:
-            seed.seed_approved_identities(existing)
+            seed.seed_leave_types(existing)
         finally:
             existing.close()
 

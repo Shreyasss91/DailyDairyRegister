@@ -208,6 +208,12 @@ Area master fields: stable canonical ID, Kannada name, editable English translit
 - DTC inspection is independent and does not count as an area visit.
 - DTC-to-area mapping is explicitly deferred from the initial scope.
 
+**These sixteen areas are not seeded by the software.** They are the original office's own
+record, and the application seeds no place at all: an office's areas arrive from its own
+`04_area_master.csv` through the import workflow, which is the only authority over them. A
+starting database therefore holds no area borrowed from another office, and the same is true
+of the feeders in §9.
+
 ## 8. DTC master, source data and scheduling
 
 The supplied DTC source contains 113 SCD records. Include the 113 SCD records; exclude five SCF and one SCE records. What is excluded is decided by the source class the file states in its own `Class` column, not by the letters in front of an identifier: the letters are the office's filing code, and a prefix such as `SCE` in a later office's roster is that office's identifier series rather than the excluded class. The 113 SCD records comprise 68 DEPT and 45 SELF_DTC records (42 MSB + 3 OWN). MSB and OWN are one scheduling class, `SELF_DTC`.
@@ -2015,10 +2021,13 @@ keeps its own recovery copy beside the live file, named in the answer. Export fi
 written to disk are left alone: they are the previous office's issued documents, and
 removing them is a third decision the operator did not make.
 
-**The next start does not put the old office back.** Approved areas, feeders and leave types
-are seeded on a fresh install, keyed by `seed.approved_identities`. The reset writes that key
-with `CLEARED_SEED_VALUE`, so the next start leaves the new office's masters empty instead of
-re-inserting the previous office's sixteen areas and four feeders. `SEED_SETTING_KEY` is the
+**The next start does not put the old office back.** The application seeds the two leave
+types and **no place at all** — not one area, not one feeder — because a place is the office's
+own record and arrives from its own master files. So a starting database cannot hand the new
+office sixteen areas belonging to the previous one; that failure is removed at the source
+rather than papered over by the reset. The seed is keyed by `seed.approved_identities` and the
+reset still writes that key with `CLEARED_SEED_VALUE`, so the next start does not even
+re-insert the leave types an operator may have deleted on purpose. `SEED_SETTING_KEY` is the
 only setting either scope writes; clearing the key is what would let the seed run again.
 
 **Also forgotten with the data.** A finished generation's in-memory record is dropped

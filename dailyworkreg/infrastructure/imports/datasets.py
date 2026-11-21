@@ -21,8 +21,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-#: Auto-excluded source classes, from requirements §8: the 113 SCD records are
-#: included and the SCF and SCE records are not. The class the office states in its own
+#: Auto-excluded source classes, from requirements §8: the original source's SCD records
+#: are included and its SCF and SCE records are not. The class the office states in its own
 #: `Class` column decides this, not the letters in front of an identifier: one office files
 #: its DTCs as `SCD-12` and includes them, another files them as `SCE142` and includes
 #: those too, and the tool reads nothing into a prefix.

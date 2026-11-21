@@ -40,10 +40,8 @@ from dailyworkreg.infrastructure.sqlite import imports as staged_imports
 from dailyworkreg.infrastructure.sqlite import masters
 from dailyworkreg.infrastructure.sqlite import schema as schema_module
 from dailyworkreg.infrastructure.sqlite.database import open_database
-from dailyworkreg.infrastructure.sqlite.seed import (
-    SEED_SETTING_KEY,
-    seed_approved_identities,
-)
+from dailyworkreg.infrastructure.sqlite.seed import SEED_SETTING_KEY, seed_leave_types
+from master_fixtures import seed_office_masters
 from dailyworkreg.interfaces.api import create_app
 from dailyworkreg.interfaces.maintenance import MaintenanceBusy
 from fastapi.testclient import TestClient
@@ -112,7 +110,10 @@ def office(tmp_path: Path) -> dict:
     path.parent.mkdir(parents=True)
     connection = open_database(path)
     try:
-        seed_approved_identities(connection)
+        # What a first start does: the leave types the application seeds, and the fixture's
+        # own places, because areas and feeders are no longer seeded by the application.
+        seed_leave_types(connection)
+        seed_office_masters(connection)
         for index in range(1, 5):
             masters.upsert_dtc(
                 connection,
@@ -244,20 +245,21 @@ def test_the_preview_reads_without_changing_anything(client: TestClient, office:
     assert sidecars(office["path"]) == []
 
 
-def test_a_fresh_installation_already_holds_the_identities_a_reset_would_clear(
+def test_a_fresh_installation_holds_leave_types_and_no_office_s_places(
     tmp_path: Path,
 ) -> None:
-    # A first start seeds the approved areas, feeders and leave types, so "nothing has been
-    # entered yet" is not the same state as "the database is empty", and the page must not
-    # claim a reset has nothing to do.
+    # A first start seeds the leave types and nothing else: an office's areas and feeders
+    # arrive from its own master files. So "nothing has been entered yet" is not the same
+    # state as "the database is empty", and the page must not claim a reset has nothing to do
+    # - while the places a reset would clear are exactly none.
     path = tmp_path / "fresh.db"
 
     preview = TestClient(create_app(path)).get("/api/reset/preview").json()
 
-    assert preview["counts"]["area"] == 16
-    assert preview["counts"]["feeder"] == 4
-    assert preview["counts"]["leave_type"] == 2
+    assert preview["counts"]["area"] == 0
+    assert preview["counts"]["feeder"] == 0
     assert preview["counts"]["dtc"] == 0
+    assert preview["counts"]["leave_type"] == 2
     assert preview["empty"] is False
 
 
@@ -418,19 +420,32 @@ def test_a_reset_with_no_calendar_to_keep_still_succeeds(client: TestClient, off
 def test_a_restart_does_not_put_the_previous_office_masters_back(
     client: TestClient, office: dict
 ) -> None:
-    # The approved areas, feeders and leave types are seeded on a fresh install. Without the
-    # marker the reset writes, the next start would put sixteen areas belonging to the
-    # previous office into the new one, and nobody would be told.
+    # The application seeds the leave types on a fresh install and no place at all, so what a
+    # restart could put back after a reset is the two leave types - and the marker the reset
+    # writes is what stops even that. Without the marker, the next start would hand the new
+    # office the previous one's places, and nobody would be told.
     client.post("/api/reset", json=reset_body("everything"))
     assert setting(office["path"], SEED_SETTING_KEY) == reset_application.CLEARED_SEED_VALUE
 
     connection = open_database(office["path"])
     try:
-        seeded = seed_approved_identities(connection)
+        seeded = seed_leave_types(connection)
     finally:
         connection.close()
 
-    assert seeded == {"areas": 0, "feeders": 0, "leave_types": 0}
+    # The marker is in place, so the seed does nothing at all - and even when it ran
+    # (`force=True`, exercised below) it could only write leave types, never a place.
+    assert seeded == {"leave_types": 0}
+    assert count(office["path"], "area") == 0
+    assert count(office["path"], "feeder") == 0
+
+    connection = open_database(office["path"])
+    try:
+        forced = seed_leave_types(connection, force=True)
+    finally:
+        connection.close()
+
+    assert forced == {"leave_types": 2}
     assert count(office["path"], "area") == 0
     assert count(office["path"], "feeder") == 0
 

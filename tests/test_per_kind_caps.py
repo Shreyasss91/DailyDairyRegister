@@ -56,7 +56,7 @@ from dailyworkreg.domain.validator import (
 from dailyworkreg.infrastructure.sqlite import calendar_records as cal
 from dailyworkreg.infrastructure.sqlite import masters
 from dailyworkreg.infrastructure.sqlite.database import open_database
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 
 #: November 2026, the month the office's own files were measured on.
 NOVEMBER = (date(2026, 11, 1), date(2026, 11, 30))
@@ -89,7 +89,7 @@ def db(tmp_path: Path) -> sqlite3.Connection:
     """An office owing one transformer visit on every working date of November."""
 
     connection = open_database(tmp_path / "per_kind.db")
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     for index in range(1, 27):
         masters.upsert_dtc(
             connection,

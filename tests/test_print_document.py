@@ -42,7 +42,7 @@ from dailyworkreg.infrastructure.rendering import pdf as pdf_module
 from dailyworkreg.infrastructure.sqlite import calendar_records as cal
 from dailyworkreg.infrastructure.sqlite import masters
 from dailyworkreg.infrastructure.sqlite.database import open_database
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 from dailyworkreg.interfaces.api import create_app
 from fastapi.testclient import TestClient
 
@@ -93,7 +93,7 @@ def database(tmp_path: Path) -> Path:
     path = tmp_path / "print.db"
     connection = open_database(path)
     try:
-        seed_approved_identities(connection)
+        seed_office_masters(connection)
         for index in range(1, 7):
             masters.upsert_dtc(
                 connection,

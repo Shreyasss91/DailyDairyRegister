@@ -37,7 +37,7 @@ from dailyworkreg.domain.cycle import MonthKey
 from dailyworkreg.infrastructure.sqlite import calendar_records as cal
 from dailyworkreg.infrastructure.sqlite import masters, revision_state
 from dailyworkreg.infrastructure.sqlite.database import open_database
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 from dailyworkreg.interfaces import documents
 from dailyworkreg.interfaces.api import create_app
 from dailyworkreg.interfaces.documents import XLSX_MEDIA_TYPE
@@ -57,7 +57,7 @@ def database(tmp_path: Path) -> Path:
     path = tmp_path / "export.db"
     connection = open_database(path)
     try:
-        seed_approved_identities(connection)  # the approved feeders the DTCs point at
+        seed_office_masters(connection)  # the approved feeders the DTCs point at
         for index in range(1, 7):
             masters.upsert_dtc(
                 connection,

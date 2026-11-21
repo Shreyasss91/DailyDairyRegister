@@ -23,11 +23,10 @@ from dailyworkreg.infrastructure.sqlite import calendar_records as cal
 from dailyworkreg.infrastructure.sqlite import masters
 from dailyworkreg.infrastructure.sqlite.database import DB_PATH_ENV
 from dailyworkreg.infrastructure.sqlite.seed import (
-    APPROVED_AREAS,
-    APPROVED_FEEDERS,
     APPROVED_LEAVE_TYPES,
-    seed_approved_identities,
+    seed_leave_types,
 )
+from master_fixtures import seed_office_masters
 
 
 @pytest.fixture()
@@ -214,39 +213,49 @@ def test_an_unknown_dtc_class_is_refused_by_the_schema(db):
 # --- seed -----------------------------------------------------------------
 
 
-def test_the_approved_identities_are_seeded_once(db):
-    first = seed_approved_identities(db)
-    assert first == {
-        "areas": len(APPROVED_AREAS),
-        "feeders": len(APPROVED_FEEDERS),
-        "leave_types": len(APPROVED_LEAVE_TYPES),
-    }
-    second = seed_approved_identities(db)
-    assert second == {"areas": 0, "feeders": 0, "leave_types": 0}
-    assert len(masters.list_areas(db)) == 16
-    assert len(masters.list_feeders(db)) == 4
+def test_the_leave_types_are_seeded_once(db):
+    first = seed_leave_types(db)
+    assert first == {"leave_types": len(APPROVED_LEAVE_TYPES)}
+    second = seed_leave_types(db)
+    assert second == {"leave_types": 0}
+    assert len(cal.list_leave_types(db)) == 2
+
+
+def test_no_office_place_is_seeded(db):
+    """An office's areas and feeders are its own records, never the tool's.
+
+    A database that invented sixteen areas and four feeders for whoever opened it handed one
+    office's names to the next one, which is what this replaced.
+    """
+
+    seed_leave_types(db, force=True)
+    assert masters.list_areas(db) == ()
+    assert masters.list_feeders(db) == ()
+    assert masters.list_dtcs(db) == ()
 
 
 def test_seeding_does_not_overwrite_an_operators_edit(db):
-    seed_approved_identities(db)
-    masters.upsert_area(db, area_id="A-01", name_kn="ಒಂದು", name_en="Gandhibazaar")
-    seed_approved_identities(db, force=True)
-    area = masters.get_area(db, "A-01")
-    assert area.name_kn == "ಒಂದು"
-    assert area.name_en == "Gandhibazaar"
-    assert area.revision == 2
+    seed_leave_types(db)
+    cal.upsert_leave_type(db, leave_type_id="CL", name="Casual Leave (edited)")
+    seed_leave_types(db, force=True)
+    names = {item.leave_type_id: item.name for item in cal.list_leave_types(db)}
+    assert names["CL"] == "Casual Leave (edited)"
 
 
 def test_no_activity_or_holiday_is_seeded(db):
     """No approved catalogue or official holiday list exists, so none is invented."""
 
-    seed_approved_identities(db)
+    seed_leave_types(db)
     assert masters.list_activities(db) == ()
     assert cal.list_holidays(db) == ()
 
 
-def test_seeded_areas_keep_their_approved_aliases(db):
-    seed_approved_identities(db)
+def test_the_test_fixture_is_what_provides_places(db):
+    """The masters the other test modules point at come from the fixture, not the app."""
+
+    seed_office_masters(db)
+    assert len(masters.list_areas(db)) == 16
+    assert len(masters.list_feeders(db)) == 4
     assert masters.get_area(db, "A-01").aliases == ("ಗಾಂಧಿ ಬಜಾರ್",)
     assert masters.get_area(db, "A-07").aliases == ("KR ಪುರಂ",)
 

@@ -41,6 +41,17 @@ def client(db_path: Path) -> TestClient:
 def stocked(client: TestClient) -> TestClient:
     """A client whose masters are good enough to generate a month."""
 
+    # The application seeds no place of its own, so a fixture that points a transformer at a
+    # feeder creates that feeder first, exactly as an office's import would.
+    client.put(
+        "/api/masters/area",
+        json={"area_id": "A-01", "name_kn": "ಪ್ರದೇಶ", "name_en": "Test Area"},
+    )
+    for index in range(1, 5):
+        client.put(
+            "/api/masters/feeder",
+            json={"feeder_id": f"F-0{index}", "name": f"Test Feeder {index}"},
+        )
     for index in range(1, 9):
         client.put(
             "/api/masters/dtc",
@@ -125,11 +136,16 @@ def test_a_dtc_can_be_entered_and_read_back(client):
     assert [item["dtc_id"] for item in listed] == ["SCD-77"]
 
 
-def test_the_approved_identities_are_seeded_at_startup(client):
-    areas = client.get("/api/masters/area").json()
-    feeders = client.get("/api/masters/feeder").json()
-    assert len(areas) == 16
-    assert len(feeders) == 4
+def test_a_first_start_seeds_leave_types_and_no_office_place(client):
+    # The application seeds the two leave types and nothing else: an office's areas and
+    # feeders arrive from its own master files, so a starting database holds no place that
+    # belongs to another office.
+    assert client.get("/api/masters/area").json() == []
+    assert client.get("/api/masters/feeder").json() == []
+    assert {item["leave_type_id"] for item in client.get("/api/calendar/leave-types").json()} == {
+        "CL",
+        "FPL",
+    }
 
 
 def test_a_duplicate_record_is_refused_with_a_stable_constraint(client):
@@ -147,7 +163,8 @@ def test_summary_counts_every_master(client):
     )
     body = client.get("/api/masters/summary").json()
     assert body["dtc"] == 1
-    assert body["area"] == 16
+    assert body["area"] == 0
+    assert body["feeder"] == 0
     assert isinstance(body["version"], int)
 
 
@@ -240,6 +257,12 @@ def dtc_csv() -> bytes:
 
 
 def test_an_upload_is_staged_and_judged_before_it_is_accepted(client):
+    # One feeder is stored, so exactly one of the two named feeders is unknown and exactly
+    # one warning comes from that. The application seeds none of them.
+    client.put(
+        "/api/masters/feeder",
+        json={"feeder_id": "F-01", "name": "MRS F-1 OLDTOWN"},
+    )
     answer = client.post(
         "/api/imports?dataset=dtc",
         files={"file": ("dtcs.csv", dtc_csv(), "text/csv")},

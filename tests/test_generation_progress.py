@@ -53,7 +53,7 @@ from dailyworkreg.domain.validator import Calendar, DatePeriod, FeasibilityConfi
 from dailyworkreg.infrastructure.sqlite import calendar_records as cal
 from dailyworkreg.infrastructure.sqlite import masters
 from dailyworkreg.infrastructure.sqlite.database import open_database
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 
 # --- a recorder -----------------------------------------------------------
 
@@ -86,7 +86,7 @@ class Recorder:
 @pytest.fixture()
 def db(tmp_path: Path) -> sqlite3.Connection:
     connection = open_database(tmp_path / "progress.db")
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     for index in range(1, 13):
         masters.upsert_dtc(
             connection,

@@ -25,7 +25,7 @@ import uvicorn
 from dailyworkreg.infrastructure.sqlite import calendar_records as cal
 from dailyworkreg.infrastructure.sqlite import masters
 from dailyworkreg.infrastructure.sqlite.database import open_database
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 from dailyworkreg.interfaces.server import create_app
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
@@ -74,7 +74,7 @@ class Office:
     def _seed(self) -> None:
         connection = open_database(self.path)
         try:
-            seed_approved_identities(connection)
+            seed_office_masters(connection)
             for index in range(1, 13):
                 masters.upsert_dtc(
                     connection,

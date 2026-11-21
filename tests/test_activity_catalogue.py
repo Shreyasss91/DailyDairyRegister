@@ -32,7 +32,7 @@ from dailyworkreg.infrastructure.sqlite.imports import (
     stage_bytes,
     staging_rows,
 )
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 
 HEADER = "Activity ID,Category,Description,Kannada,Weight,Monthly Min,Monthly Max,Repeat Gap,Weekdays\n"
 
@@ -79,7 +79,7 @@ def catalogue(count: int = 46) -> bytes:
 @pytest.fixture()
 def db(tmp_path: Path) -> sqlite3.Connection:
     connection = open_database(tmp_path / "catalogue.db")
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     yield connection
     connection.close()
 

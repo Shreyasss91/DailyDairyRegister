@@ -441,10 +441,10 @@ def store(tmp_path):
     from dailyworkreg.infrastructure.sqlite import calendar_records as cal
     from dailyworkreg.infrastructure.sqlite import masters
     from dailyworkreg.infrastructure.sqlite.database import open_database
-    from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+    from master_fixtures import seed_office_masters
 
     connection = open_database(tmp_path / "store.db")
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     for index in range(1, 25):
         masters.upsert_dtc(
             connection,
@@ -629,6 +629,17 @@ def client(tmp_path) -> TestClient:
 
 @pytest.fixture()
 def stocked(client: TestClient) -> TestClient:
+    # The application seeds no place of its own, so a fixture that points a transformer at a
+    # feeder creates that feeder first, exactly as an office's import would.
+    client.put(
+        "/api/masters/area",
+        json={"area_id": "A-01", "name_kn": "ಪ್ರದೇಶ", "name_en": "Test Area"},
+    )
+    for index in range(1, 5):
+        client.put(
+            "/api/masters/feeder",
+            json={"feeder_id": f"F-0{index}", "name": f"Test Feeder {index}"},
+        )
     for index in range(1, 9):
         client.put(
             "/api/masters/dtc",

@@ -30,7 +30,7 @@ from dailyworkreg.domain.cycle import MonthKey
 from dailyworkreg.infrastructure.sqlite import calendar_records as cal
 from dailyworkreg.infrastructure.sqlite import masters, revision_state
 from dailyworkreg.infrastructure.sqlite.database import open_database
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 from dailyworkreg.interfaces.server import create_app
 from fastapi.testclient import TestClient
 
@@ -50,7 +50,7 @@ def db(tmp_path: Path) -> sqlite3.Connection:
     """
 
     connection = open_database(tmp_path / "bulk.db")
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     for index in range(1, 7):
         masters.upsert_dtc(
             connection,
@@ -85,7 +85,7 @@ def db(tmp_path: Path) -> sqlite3.Connection:
 def database(tmp_path: Path) -> Path:
     path = tmp_path / "office.db"
     connection = open_database(path)
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     for index in range(1, 7):
         masters.upsert_dtc(
             connection,

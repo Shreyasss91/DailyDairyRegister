@@ -42,7 +42,7 @@ from dailyworkreg.infrastructure.sqlite.schema import (
     apply_migrations,
     ensure_migration_table,
 )
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 
 CONTENT_TABLES = (
     "generation_row",
@@ -58,7 +58,7 @@ def db(tmp_path: Path) -> sqlite3.Connection:
     """A database that can close a month: every master the gate measures is present."""
 
     connection = open_database(tmp_path / "immutability.db")
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     for index in range(1, 7):
         masters.upsert_dtc(
             connection,

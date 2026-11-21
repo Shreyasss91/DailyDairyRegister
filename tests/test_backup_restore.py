@@ -38,7 +38,7 @@ from dailyworkreg.infrastructure.sqlite import imports as staged_imports
 from dailyworkreg.infrastructure.sqlite import masters, revision_state
 from dailyworkreg.infrastructure.sqlite import schema as schema_module
 from dailyworkreg.infrastructure.sqlite.database import open_database
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 from dailyworkreg.infrastructure.sqlite.snapshot import inspect
 from dailyworkreg.interfaces.api import create_app
 from dailyworkreg.interfaces.maintenance import MaintenanceBusy, MaintenanceGate
@@ -106,7 +106,7 @@ def office(tmp_path: Path) -> dict:
     path.parent.mkdir(parents=True)
     connection = open_database(path)
     try:
-        seed_approved_identities(connection)
+        seed_office_masters(connection)
         for index in range(1, 7):
             masters.upsert_dtc(
                 connection,

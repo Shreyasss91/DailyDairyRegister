@@ -36,10 +36,8 @@ from dailyworkreg.infrastructure.sqlite.imports import (
     reject_batch,
     stage_bytes,
 )
-from dailyworkreg.infrastructure.sqlite.seed import (
-    APPROVED_FEEDER_OVERRIDES,
-    seed_approved_identities,
-)
+from dailyworkreg.infrastructure.sqlite.seed import APPROVED_FEEDER_OVERRIDES
+from master_fixtures import seed_office_masters
 
 HEADER = "DTC ID,DTC Name,Class,Feeder,kVA,Station\n"
 
@@ -103,7 +101,7 @@ def _csv(rows: list[tuple[str, str, str, str, str, str]]) -> bytes:
 @pytest.fixture()
 def db(tmp_path: Path) -> sqlite3.Connection:
     connection = open_database(tmp_path / "roster.db")
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     yield connection
     connection.close()
 

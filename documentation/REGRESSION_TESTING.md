@@ -113,8 +113,8 @@ These modules cover the export/document, PDF, bulk-finalisation and frontend con
   the full scope emptying every data table including the calendar and the weekly-off rules,
   the calendar scope keeping the holiday rows and the leave types whole while still removing
   the office's own leave records, dated events and overrides, a changed weekly-off rule
-  surviving that scope, the seeded identities staying out after the next start because the
-  seed marker records the operator's decision, a backup of what was removed that still holds
+  surviving that scope, the seed not running again after the next start because the marker
+  records the operator's decision, a forced seed still writing nothing but leave types, a backup of what was removed that still holds
   the previous office when re-validated, a recovery copy of the database as it stood, no
   staging file or sidecar left behind, the replacement verified for integrity and references,
   the exclusive barrier actually entered and a reset refused while a replacement holds it, a
@@ -137,6 +137,8 @@ These modules cover the export/document, PDF, bulk-finalisation and frontend con
 The PDF module runs its packaging, refusal and read-only tests against a stand-in renderer, so they pass on a machine without Chromium. The two tests that assert a real `%PDF` file are skipped unless a local browser is installed; run `python -m playwright install chromium` before treating PDF rendering as verified.
 
 The focused tests use the application's test client and test database fixtures. They do not require a separately running application server.
+
+The masters the tests point at come from `tests/master_fixtures.py`, not from the application: an office's areas and feeders are its own records and arrive from its own master files, so the application seeds none of them. `seed_office_masters()` writes the fixture's sixteen areas and four feeders (bringing up the application's own leave types with them, as a first start does), and it is idempotent so a test may call it twice. A test that needs a place must therefore create it, which is also what the import workflow makes an operator do.
 
 ## 4. Suggested validation sequence for an export change
 

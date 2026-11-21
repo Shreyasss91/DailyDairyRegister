@@ -35,7 +35,7 @@ from dailyworkreg.domain.cycle import MonthKey
 from dailyworkreg.infrastructure.sqlite import calendar_records as cal
 from dailyworkreg.infrastructure.sqlite import masters
 from dailyworkreg.infrastructure.sqlite.database import open_database
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 from dailyworkreg.interfaces.server import create_app
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
@@ -182,7 +182,7 @@ def build_office(path: Path, *, conflict: bool = False) -> str:
     """A two-month revision with every date read, ready to be closed."""
 
     connection = open_database(path)
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     for index in range(1, 7):
         masters.upsert_dtc(
             connection,

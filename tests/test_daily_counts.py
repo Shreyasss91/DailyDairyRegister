@@ -57,7 +57,7 @@ from dailyworkreg.domain.validator import (
 from dailyworkreg.infrastructure.sqlite import calendar_records as cal
 from dailyworkreg.infrastructure.sqlite import masters
 from dailyworkreg.infrastructure.sqlite.database import open_database
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 
 # --- helpers --------------------------------------------------------------
 
@@ -237,7 +237,7 @@ def db(tmp_path: Path) -> sqlite3.Connection:
     """An office whose November obligations need more visits than three a day."""
 
     connection = open_database(tmp_path / "counts.db")
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     for index in range(1, 31):
         masters.upsert_dtc(
             connection,

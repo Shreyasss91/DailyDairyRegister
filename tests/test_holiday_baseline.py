@@ -33,7 +33,7 @@ from dailyworkreg.infrastructure.sqlite.imports import (
     stage_source,
     staging_rows,
 )
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 
 REPO = Path(__file__).resolve().parents[1]
 BASELINE = REPO / "data" / "templates" / "02_karnataka_general_holidays_2025_2026.csv"
@@ -231,7 +231,7 @@ def test_the_muslim_observance_note_is_not_turned_into_a_second_row() -> None:
 @pytest.fixture()
 def db(tmp_path: Path) -> sqlite3.Connection:
     connection = open_database(tmp_path / "holidays.db")
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     yield connection
     connection.close()
 

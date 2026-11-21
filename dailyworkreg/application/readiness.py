@@ -89,8 +89,8 @@ def assess_readiness(
                 f"{len(dtcs)} active DTC(s) are stored"
                 if dtcs
                 else (
-                    "no DTC is stored, so there is nothing to inspect; import the "
-                    "113-SCD source file"
+                    "no DTC is stored, so there is nothing to inspect; import this office's "
+                    "DTC roster"
                 )
             ),
             blocks_draft=True,

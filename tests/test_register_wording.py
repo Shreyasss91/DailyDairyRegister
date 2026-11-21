@@ -49,7 +49,7 @@ from dailyworkreg.domain.wording import (
 from dailyworkreg.infrastructure.sqlite import calendar_records as cal
 from dailyworkreg.infrastructure.sqlite import generation_store, masters
 from dailyworkreg.infrastructure.sqlite.database import open_database
-from dailyworkreg.infrastructure.sqlite.seed import seed_approved_identities
+from master_fixtures import seed_office_masters
 from dailyworkreg.interfaces import documents
 from openpyxl import load_workbook
 
@@ -66,7 +66,7 @@ def db(database: Path) -> sqlite3.Connection:
     """An office with one area, one feeder, two DTCs and a recorded holiday."""
 
     connection = open_database(database)
-    seed_approved_identities(connection)
+    seed_office_masters(connection)
     masters.upsert_area(connection, area_id="A-01", name_kn="ಪ್ರದೇಶ", name_en="Area One")
     masters.upsert_feeder(connection, feeder_id="F-01", name="Feeder One")
     for index in range(1, 13):
