@@ -338,9 +338,18 @@ that differs is an override, not a rule change.
 
 **The day table.** *From* and *To*, then **Show calendar** lists each date with its classification
 (working day, weekly off, General Holiday, leave, override) and the reasons in words. Conflicts
-appear in a warning banner above the table: a leave recorded on a holiday, an event on a weekly
-off. **A conflict is shown and kept, never silently resolved** — the office decides, and the tool
-leaves both facts where they are.
+appear in a warning banner above the table: a General Holiday falling on a weekly off, an override
+that contradicts the calendar, an event on a closed day. **A conflict is shown and kept, never
+silently resolved** — the office decides, and the tool leaves both facts where they are.
+
+**A leave date is a leave date and nothing else.** Leave takes precedence over everything the
+calendar says about that date: a day with a leave record is classified as leave whether it is a
+working day, a Sunday or a General Holiday, it is not a working day, and the register names only
+the leave type on it. A leave falling on a Sunday or a holiday is therefore **not** reported as a
+conflict, because the two facts do not disagree — the person was away, and the day would not have
+been worked anyway. The Sunday and the holiday remain in their own records; they are simply not
+repeated beside the leave. The one contradiction still reported is an override that marks a leave
+date as worked: the leave stands and the banner says so.
 
 **General Holidays.** Date, name, optional printed wording, **Save holiday**. Each stored holiday
 has a **Delete** button. Only Karnataka **General** Holidays belong here. Restricted Holidays are
@@ -624,8 +633,9 @@ planning.
   entirely, names and all.
 - **The Monday safety meeting is recorded automatically on every Monday,** including a Monday that
   is a holiday or a leave date. An individual-date exception is supported.
-- **Overlapping reasons are preserved.** A leave on a holiday is a conflict to be shown, not data
-  to be deleted.
+- **A leave takes precedence over the date it falls on.** It is classified as leave whatever else
+  the date is, and the register names only the leave type on it. A leave on a Sunday or a General
+  Holiday is not a conflict; the holiday and the weekly off stay in their own records.
 - **An override never erases the fact underneath it.** The effective working-day decision and the
   source calendar fact both stay on the record.
 

@@ -148,34 +148,45 @@ def project_calendar(
         reasons_en: list[str] = []
         reasons_kn: list[str] = []
 
-        if holiday is not None:
-            reasons_en.append(holiday_wording(holiday.name, holiday.description))
-        if weekly_reason is not None:
-            reasons_en.append(weekly_reason)
-            reasons_kn.append("ವಾರದ ರಜೆ")
-        for record in leaves:
-            # The stored type name already reads as a statement ("Casual Leave"), so
-            # appending a second "leave" would print "Casual Leave leave".
-            reasons_en.append(record.leave_type_name)
-            reasons_kn.append("ರಜೆ")
+        if leaves:
+            # Leave supersedes every other fact about the date (owner decision 2026-11-21). The
+            # office reads a leave date as one thing - the person was not there - so the register
+            # says only that: the holiday, the weekly off or the working day it falls on is not
+            # repeated beside it, and its overlap with them is not reported as a conflict,
+            # because nothing is in conflict. The stored holiday and the standing weekly off are
+            # untouched in their own records; this decides what the date reads as.
+            for record in leaves:
+                # The stored type name already reads as a statement ("Casual Leave"), so
+                # appending a second "leave" would print "Casual Leave leave".
+                reasons_en.append(record.leave_type_name)
+                reasons_kn.append("ರಜೆ")
+        else:
+            if holiday is not None:
+                reasons_en.append(holiday_wording(holiday.name, holiday.description))
+            if weekly_reason is not None:
+                reasons_en.append(weekly_reason)
+                reasons_kn.append("ವಾರದ ರಜೆ")
+            # Overlap between a holiday and a weekly off is preserved, never discarded: §4.1 and
+            # §5.1 require a conflict to be surfaced rather than one fact silently winning.
+            if holiday is not None and weekly_reason is not None:
+                conflicts.append(
+                    f"{day.isoformat()}: {holiday.name} falls on a {weekly_reason}"
+                )
 
-        # Overlap is preserved, never discarded: §4.1 and §5.1 both require a
-        # conflict to be surfaced rather than one fact silently winning.
-        if holiday is not None and weekly_reason is not None:
-            conflicts.append(
-                f"{day.isoformat()}: {holiday.name} falls on a {weekly_reason}"
-            )
-        if leaves and (holiday is not None or weekly_reason is not None):
-            conflicts.append(
+        non_working = bool(leaves) or holiday is not None or weekly_reason is not None
 
-                    f"{day.isoformat()}: leave is recorded on a "
-                    f"{'holiday' if holiday is not None else 'weekly off'}; both are kept"
-
-            )
-
-        non_working = holiday is not None or weekly_reason is not None or bool(leaves)
-
-        if override is not None:
+        if leaves:
+            # A person's approved absence is not undone by a date-level override, so an override
+            # that marks the date as worked is reported rather than applied - it is a genuine
+            # contradiction between two records, and the office is told which one the register
+            # follows instead of one of them disappearing.
+            is_working_day = False
+            if override is not None and override.is_working_day:
+                conflicts.append(
+                    f"{day.isoformat()}: an override marks this day as a working day, "
+                    "but leave is recorded on it; the leave stands"
+                )
+        elif override is not None:
             is_working_day = override.is_working_day
             if override.reason_en:
                 reasons_en.append(override.reason_en)
@@ -193,10 +204,10 @@ def project_calendar(
 
         if is_working_day:
             kind = CalendarDayKind.WORKING
-        elif holiday is not None:
-            kind = CalendarDayKind.GENERAL_HOLIDAY
         elif leaves:
             kind = CalendarDayKind.LEAVE
+        elif holiday is not None:
+            kind = CalendarDayKind.GENERAL_HOLIDAY
         elif weekly_reason == "Sunday":
             kind = CalendarDayKind.SUNDAY
         elif weekly_reason == "Second Saturday":

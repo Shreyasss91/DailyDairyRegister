@@ -174,18 +174,61 @@ def test_leave_on_a_working_day_makes_it_non_working(db):
     assert day.reasons_en == ("Casual Leave",)
 
 
-def test_leave_on_a_sunday_keeps_both_reasons_and_reports_the_overlap(db):
+def test_leave_on_a_sunday_states_only_the_leave_and_reports_no_overlap(db):
+    # Leave supersedes every other fact about the date (owner decision 2026-11-21). The office
+    # reads a leave date as one thing - the person was not there - so a Sunday it falls on is
+    # not printed beside the leave and is not reported as a conflict, because nothing conflicts.
     cal.upsert_leave_record(
         db, leave_id="L-1", leave_date=date(2026, 11, 1), leave_type_id="CL"
     )
     projection = project_calendar(db, date(2026, 11, 1), date(2026, 11, 1))
     day = projection.days[0]
-    # A recorded leave is more specific than the standing weekly off, so it names the
-    # day; the weekly off is still shown, because the office needs to know the Sunday
-    # was not the reason the person was away.
     assert day.kind is CalendarDayKind.LEAVE
-    assert day.reasons_en == ("Sunday", "Casual Leave")
-    assert any("leave is recorded" in text for text in projection.conflicts)
+    assert day.reasons_en == ("Casual Leave",)
+    assert day.is_working_day is False
+    assert projection.conflicts == ()
+
+
+def test_leave_on_a_general_holiday_states_only_the_leave(db):
+    holiday(db, date(2026, 11, 10), "Deepavali")
+    cal.upsert_leave_record(
+        db, leave_id="L-1", leave_date=date(2026, 11, 10), leave_type_id="FPL"
+    )
+    projection = project_calendar(db, date(2026, 11, 10), date(2026, 11, 10))
+    day = projection.days[0]
+    assert day.kind is CalendarDayKind.LEAVE
+    assert day.reasons_en == ("Full Pay Leave",)
+    assert projection.conflicts == ()
+
+
+def test_two_leave_records_on_a_holiday_keep_both_and_nothing_else(db):
+    holiday(db, date(2026, 11, 10), "Deepavali")
+    cal.upsert_leave_record(db, leave_id="L-1", leave_date=date(2026, 11, 10), leave_type_id="CL")
+    cal.upsert_leave_record(db, leave_id="L-2", leave_date=date(2026, 11, 10), leave_type_id="FPL")
+    day = day_of(db, date(2026, 11, 10))
+    assert day.kind is CalendarDayKind.LEAVE
+    assert day.reasons_en == ("Casual Leave", "Full Pay Leave")
+
+
+def test_a_working_day_override_does_not_undo_a_recorded_leave(db):
+    # A person's approved absence is not undone by a date-level override. The override is not
+    # applied, and it is not dropped either: the office is told which record the register follows.
+    cal.upsert_leave_record(
+        db, leave_id="L-1", leave_date=date(2026, 11, 9), leave_type_id="CL"
+    )
+    cal.upsert_override(
+        db,
+        override_id="O-1",
+        override_date=date(2026, 11, 9),
+        is_working_day=True,
+        reason_en="Section worked that day",
+    )
+    projection = project_calendar(db, date(2026, 11, 9), date(2026, 11, 9))
+    day = projection.days[0]
+    assert day.kind is CalendarDayKind.LEAVE
+    assert day.is_working_day is False
+    assert day.reasons_en == ("Casual Leave",)
+    assert any("the leave stands" in text for text in projection.conflicts)
 
 
 def test_two_leave_records_on_one_day_are_both_kept(db):
