@@ -33,6 +33,12 @@ The application is designed for one operator on the local machine. The server bi
 
 The first launch creates the default SQLite database when needed and applies pending schema migrations. The database is stored outside the Git checkout.
 
+## Operator guide
+
+- [The DailyDairyRegister wiki](documentation/USER_WIKI.md) - installing it, starting it, what
+  every screen does, the order the work is done in, what each message means, and how to back the
+  records up.
+
 ## Developer and operator guides
 
 - [Local development, first-time setup, subsequent updates, application startup and database location](documentation/LOCAL_DEVELOPMENT.md)
@@ -56,8 +62,8 @@ one you mean. Before anything is removed, the page counts what the selected scop
 and a backup of the database as it stood is taken and offered for download; after the reset a
 recovery copy of the previous database is also left beside the live one, and its name is
 shown. Export files already written to disk are not touched. The next start does not put the
-previous office's seeded areas, feeders and leave types back - only the records you import
-for the new office appear.
+previous office's areas, feeders or transformers back: a fresh start holds no office-specific
+master data at all, and only the records you import for the new office appear.
 
 ## Dependency management
 
